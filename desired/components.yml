@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "deployment_enabled": false,
+  "components": {
+    "t3-steward": {
+      "state": "discovered",
+      "source": {
+        "canonical": "https://github.com/iryzhkov/t3-steward.git",
+        "allowed_mirrors": ["git@github.com:iryzhkov/t3-steward.git"]
+      },
+      "pin": {
+        "kind": "git",
+        "value": "81f1965d614db49891230e8b6c6e23db6c43f806",
+        "version": "0.10.1"
+      },
+      "architectures": ["aarch64", "x86_64"],
+      "minimum": {"python": "3.11", "systemd_user": true},
+      "paths": {
+        "install_root": ".local/lib/dev-fleet/t3-steward",
+        "config": ".config/t3-steward",
+        "state": ".local/state/t3-steward"
+      },
+      "service": "t3-steward.service",
+      "dependencies": [],
+      "activation_order": 10
+    },
+    "agent99": {
+      "state": "decision-required",
+      "source": {
+        "canonical": "https://github.com/iryzhkov/agent99.git",
+        "allowed_mirrors": ["git@github.com:iryzhkov/agent99.git"]
+      },
+      "pin": null,
+      "observed_pins": {
+        "laptop": "229ad181d0d59b5f6bd1f53c20ac9e820de243da",
+        "omarchy-pc": "f9a372e04a17628476e451f78e64a1480958d8a6",
+        "normandy": "f9a372e04a17628476e451f78e64a1480958d8a6",
+        "homelab": "f9a372e04a17628476e451f78e64a1480958d8a6"
+      },
+      "architectures": ["aarch64", "x86_64"],
+      "minimum": {"neovim": "0.11", "go": "1.27"},
+      "paths": {
+        "install_root": ".local/lib/dev-fleet/agent99",
+        "plugin_checkout": ".local/share/nvim/lazy/agent99",
+        "state": ".local/state/nvim/agent99"
+      },
+      "dependencies": ["nvim-configuration"],
+      "activation_order": 30
+    },
+    "nvim-configuration": {
+      "state": "decision-required",
+      "source": {
+        "canonical": "https://github.com/iryzhkov/nvim-configuration.git",
+        "allowed_mirrors": ["git@github.com:iryzhkov/nvim-configuration.git"]
+      },
+      "pin": null,
+      "observed_pins": {
+        "laptop": "824359e34e4ad132025ed590ebf579ea11f06be2",
+        "omarchy-pc": "2e94d7c343c79baa9ea9c9b75d6dc7ab5493c54c",
+        "normandy": "2e94d7c343c79baa9ea9c9b75d6dc7ab5493c54c",
+        "homelab": "2e94d7c343c79baa9ea9c9b75d6dc7ab5493c54c"
+      },
+      "architectures": ["aarch64", "x86_64"],
+      "minimum": {"neovim": "0.11"},
+      "paths": {
+        "install_root": ".local/lib/dev-fleet/nvim-configuration",
+        "config": ".config/nvim",
+        "state": ".local/state/nvim"
+      },
+      "dependencies": [],
+      "activation_order": 20
+    },
+    "homelab-cli": {
+      "state": "decision-required",
+      "source": {
+        "canonical": "https://github.com/iryzhkov/homelab-cli.git",
+        "allowed_mirrors": ["git@github.com:iryzhkov/homelab-cli.git"]
+      },
+      "pin": null,
+      "observed_pins": {"laptop": "2ebf13bbe101b145d8fdf4363baefd23eb1988b3"},
+      "architectures": ["aarch64", "x86_64"],
+      "minimum": {"bash": "5"},
+      "paths": {
+        "install_root": ".local/lib/dev-fleet/homelab-cli",
+        "config": ".config/feed",
+        "state": ".local/state/homelab-cli"
+      },
+      "dependencies": [],
+      "activation_order": 40
+    },
+    "agent-config": {
+      "state": "decision-required",
+      "source": {
+        "canonical": "https://github.com/iryzhkov/omarchy-setup.git",
+        "allowed_mirrors": ["git@github.com:iryzhkov/omarchy-setup.git"]
+      },
+      "pin": null,
+      "architectures": ["aarch64", "x86_64"],
+      "minimum": {"python": "3.11"},
+      "paths": {
+        "install_root": ".local/lib/dev-fleet/agent-config",
+        "config": ".config/agents",
+        "state": ".local/state/dev-fleet/agent-config"
+      },
+      "dependencies": ["homelab-cli"],
+      "activation_order": 50
+    }
+  }
+}

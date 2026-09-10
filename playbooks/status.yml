@@ -1,0 +1,23 @@
+---
+- name: Read-only local status probe
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read Python version
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - --version
+      register: fleet_python_version
+      changed_when: false
+      check_mode: false
+
+    - name: Inspect t3-steward state directory
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME | default(lookup('env', 'HOME')) }}/.local/state/t3-steward"
+      changed_when: false
+
+    - name: Report read-only probe result
+      ansible.builtin.debug:
+        msg: "{{ fleet_python_version.stdout }}"
+      changed_when: false

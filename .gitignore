@@ -1,0 +1,12 @@
+.venv/
+.venv311/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+.local-runs/
+*.retry
+.ansible/
+*.egg-info/

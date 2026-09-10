@@ -1,0 +1,41 @@
+---
+name: phase-1-gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Set up Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+      - name: Install locked environment
+        run: |
+          python -m pip install uv==0.12.12
+          uv sync --locked --all-extras
+      - name: Install pinned Ansible collections
+        run: uv run ansible-galaxy collection install -r requirements.yml
+      - name: Python lint
+        run: uv run ruff check src tests scripts
+      - name: YAML lint
+        run: uv run yamllint requirements.yml inventory desired playbooks tests/fixtures .forgejo .github
+      - name: Ansible lint
+        run: uv run python scripts/run-captured ansible-lint --offline playbooks
+      - name: Unit tests
+        run: uv run pytest
+      - name: Redaction gate
+        run: uv run pytest tests/test_redaction.py
+      - name: Ansible syntax
+        run: |
+          uv run ansible-playbook playbooks/status.yml --syntax-check >ansible-syntax.log 2>&1
+          sed -n '1,200p' ansible-syntax.log
+      - name: Read-only check mode
+        run: |
+          uv run ansible-playbook -i tests/fixtures/localhost_inventory.yml playbooks/status.yml --check >ansible-check.log 2>&1
+          sed -n '1,200p' ansible-check.log

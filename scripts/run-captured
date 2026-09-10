@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+# pyright: reportMissingImports=false
+"""Run selected Ansible gates with blocking file descriptors and redacted output."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from dev_fleet.redaction import redact_text  # noqa: E402
+
+ALLOWED = {"ansible-lint", "ansible-playbook"}
+MAX_OUTPUT_BYTES = 1_000_000
+
+
+def main(argv: list[str]) -> int:
+    if not argv or Path(argv[0]).name not in ALLOWED:
+        print("run-captured: command is not allowed", file=sys.stderr)
+        return 30
+    executable = shutil.which(argv[0])
+    if executable is None:
+        print(f"run-captured: command is unavailable: {argv[0]}", file=sys.stderr)
+        return 30
+
+    environment = dict(os.environ)
+    environment["ANSIBLE_NOCOLOR"] = "1"
+    with tempfile.TemporaryFile() as output:
+        try:
+            completed = subprocess.run(
+                [executable, *argv[1:]],
+                check=False,
+                env=environment,
+                stderr=subprocess.STDOUT,
+                stdout=output,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            print("run-captured: command timed out", file=sys.stderr)
+            return 30
+        output.seek(0)
+        captured = output.read(MAX_OUTPUT_BYTES).decode("utf-8", errors="replace")
+    sys.stdout.write(redact_text(captured))
+    if len(captured.encode("utf-8")) >= MAX_OUTPUT_BYTES:
+        print("\n<output truncated>")
+    return completed.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

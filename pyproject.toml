@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dev-fleet"
+version = "0.1.0"
+description = "Read-only discovery and future deployment tooling for Igor's developer fleet"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "ansible-core==2.19.13",
+  "ansible-lint==26.8.0",
+  "pytest==9.1.1",
+  "ruff==0.16.6",
+  "yamllint==1.38.0",
+]
+
+[project.scripts]
+fleet = "dev_fleet.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "S", "UP"]
+ignore = ["S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108"]
+"src/dev_fleet/probe.py" = ["E501"]
