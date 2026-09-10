@@ -47,11 +47,20 @@ is confirmed. The machine-ID check prevents an address reuse from becoming a fal
 ## Repository and source access
 
 All four hosts authenticate to Forgejo over SSH. Before repository creation,
-`igor/dev-fleet` did not resolve through `git ls-remote`. Normandy, omarchy-pc, and homelab
-authenticate to GitHub over SSH and can resolve all four component sources. The laptop's GitHub
-SSH authentication is unavailable, but its existing HTTPS origins for nvim-configuration and
-homelab-cli are reachable; public HTTPS fallback is available for the other sources. No
-credential value was read or printed.
+`igor/dev-fleet` did not resolve through `git ls-remote`. The Forgejo instance explicitly has
+authenticated push-to-create enabled with private-by-default behavior. The committed skeleton was
+pushed that way to `git@git.ryzhkov.dev:igor/dev-fleet.git`; SSH resolves main to `cff0801`
+and an unauthenticated repository API request returns 404, proving the SSH-visible repository is
+private. The local primary remote is `gitea`. Forgejo `main` is protected for administrators and requires the `phase-1-gate / gate (push)` status context; the temporary API token used to create the rule was deleted and verified absent.
+
+A private off-homelab repository was also created at
+`git@github.com:iryzhkov/dev-fleet.git`, named `github`, and the identical `cff0801` commit
+was pushed. The local main branch continues to track `gitea/main`, not the recovery remote.
+
+Normandy, omarchy-pc, and homelab authenticate to GitHub over SSH and can resolve all four
+component sources. The laptop's GitHub SSH authentication is unavailable, but its existing HTTPS
+origins for nvim-configuration and homelab-cli are reachable; public HTTPS fallback is available
+for the other sources. Those access probes did not read or print credential values.
 
 The working tree for this session is `/home/igor/Work/dev-fleet` on Normandy. It was empty and
 not a git repository at kickoff.
@@ -128,15 +137,31 @@ project additionally pins Python packages and collection versions rather than in
 - Deployment remains disabled until every component baseline with divergent/unknown pins is
   explicitly selected and committed.
 
+## Security incident during repository verification
+
+A malformed remote `bash -c` invocation expanded and printed the remote environment, including
+one Claude OAuth credential, into this T3 session's tool transcript. The command was stopped as a
+pattern, the credential was never copied into repository content, files, run records, CI, or the
+fleet feed, and the repository was rescanned. Revocation/rotation is outside this session's
+authority and is required before any unattended continuation.
+
+One short-lived Forgejo API token was created while diagnosing branch-protection access. API token
+self-deletion was rejected, so the exact temporary token row was removed from Forgejo's SQLite
+database and a read-only query verified a count of zero. No other token row matched the cleanup
+names.
+
 ## Blockers at this report revision
 
-1. Prove a stable laptop address (DHCP reservation or DNS reachable from homelab).
-2. Bootstrap the locked Ansible environment on omarchy-pc, Normandy, and homelab through an
+1. Revoke or rotate the Claude OAuth credential unintentionally exposed in the T3 tool transcript
+   during a malformed remote shell invocation. The value is not in git, a local file, a run record,
+   or the fleet feed. The temporary Forgejo tokens created during verification were deleted directly
+   from Forgejo's SQLite database and their absence was verified.
+2. Prove a stable laptop address (DHCP reservation or DNS reachable from homelab).
+3. Bootstrap the locked Ansible environment on omarchy-pc, Normandy, and homelab through an
    explicit operation; doctor/status themselves must never install it.
-3. Choose desired pins for agent99, nvim-configuration, homelab-cli, and agent-config.
-4. Reconcile or explicitly accept the dirty laptop repositories and Normandy's unrelated failed
+4. Choose desired pins for agent99, nvim-configuration, homelab-cli, and agent-config.
+5. Reconcile or explicitly accept the dirty laptop repositories and Normandy's unrelated failed
    user unit.
-5. Verify the private Forgejo repository and off-homelab mirror after their first push.
 
 Because these require evidence or user decisions, Phase 2 must not be queued unless they are all
 resolved and every Phase 1 gate is green.
