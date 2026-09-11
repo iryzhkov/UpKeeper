@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,18 +42,24 @@ Observer = Callable[[DeploymentSpec], Observation]
 
 
 def subprocess_runner(argv: Sequence[str], cwd: Path, timeout: int) -> CommandResult:
-    """Run an already validated argument vector without a shell."""
+    """Run a validated argument vector with regular output files, never pipes."""
     try:
-        result = subprocess.run(
-            list(argv),
-            cwd=cwd,
-            check=False,
-            capture_output=True,
-            timeout=timeout,
-        )
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            result = subprocess.run(
+                list(argv),
+                cwd=cwd,
+                check=False,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout,
+            )
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout = stdout_file.read()
+            stderr = stderr_file.read()
     except subprocess.TimeoutExpired as exc:
         raise AmbiguousOutcome("Ansible timed out; target state must be observed") from exc
-    return CommandResult(result.returncode, result.stdout, result.stderr)
+    return CommandResult(result.returncode, stdout, stderr)
 
 
 class AnsibleBackend:
@@ -74,28 +82,29 @@ class AnsibleBackend:
 
     def check(self, spec: DeploymentSpec) -> Observation:
         self._verify_repository(spec)
-        observation = self.observer(spec)
-        return observation
+        result = self.runner(
+            self._argv(spec, tag="upkeeper_check", effect_id=None, check_mode=True),
+            self.repository_root,
+            self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise BackendFailure(f"Ansible check exited {result.returncode}")
+        return self.observer(spec)
 
     def execute(self, spec: DeploymentSpec, phase: Phase, effect_id: str) -> BackendResult:
         self._verify_repository(spec)
         if not effect_id.startswith("effect-") or len(effect_id) != 71:
             raise ValueError("invalid UpKeeper effect identity")
-        inventory = self.repository_root / spec.backend.inventory
-        playbook = self.repository_root / spec.backend.playbook
-        argv = [
-            "ansible-playbook",
-            "-i",
-            os.fspath(inventory),
-            os.fspath(playbook),
-            "--limit",
-            ",".join(spec.hosts),
-            "--tags",
-            PHASE_TAGS[phase],
-            "--extra-vars",
-            f"upkeeper_effect_id={effect_id}",
-        ]
-        result = self.runner(argv, self.repository_root, self.timeout_seconds)
+        result = self.runner(
+            self._argv(
+                spec,
+                tag=PHASE_TAGS[phase],
+                effect_id=effect_id,
+                check_mode=False,
+            ),
+            self.repository_root,
+            self.timeout_seconds,
+        )
         receipt = {
             "backend": spec.backend.kind,
             "returncode": result.returncode,
@@ -107,6 +116,38 @@ class AnsibleBackend:
                 f"Ansible {phase.value} exited {result.returncode}; observe before compensation"
             )
         return BackendResult(self.observer(spec), receipt)
+
+    def _argv(
+        self,
+        spec: DeploymentSpec,
+        *,
+        tag: str,
+        effect_id: str | None,
+        check_mode: bool,
+    ) -> list[str]:
+        inventory = self.repository_root / spec.backend.inventory
+        playbook = self.repository_root / spec.backend.playbook
+        extra_vars = {
+            "upkeeper_desired_revision": spec.desired_revision,
+            "upkeeper_previous_revision": spec.previous_revision,
+        }
+        if effect_id is not None:
+            extra_vars["upkeeper_effect_id"] = effect_id
+        argv = [
+            "ansible-playbook",
+            "-i",
+            os.fspath(inventory),
+            os.fspath(playbook),
+            "--limit",
+            ",".join(spec.hosts),
+            "--tags",
+            tag,
+            "--extra-vars",
+            json.dumps(extra_vars, sort_keys=True, separators=(",", ":")),
+        ]
+        if check_mode:
+            argv.append("--check")
+        return argv
 
     def reconcile(self, spec: DeploymentSpec, phase: Phase, effect_id: str) -> Reconciliation:
         self._verify_repository(spec)

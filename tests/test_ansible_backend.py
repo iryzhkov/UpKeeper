@@ -96,7 +96,15 @@ def test_backend_builds_only_bounded_argument_vector(tmp_path: Path) -> None:
                 "--tags",
                 "upkeeper_install",
                 "--extra-vars",
-                "upkeeper_effect_id=effect-" + "a" * 64,
+                (
+                    '{"upkeeper_desired_revision":"'
+                    + NEW
+                    + '","upkeeper_effect_id":"effect-'
+                    + "a" * 64
+                    + '","upkeeper_previous_revision":"'
+                    + OLD
+                    + '"}'
+                ),
             ],
             root,
             300,
@@ -108,6 +116,23 @@ def test_backend_builds_only_bounded_argument_vector(tmp_path: Path) -> None:
         "stdout_sha256",
         "stderr_sha256",
     }
+
+
+def test_check_runs_bounded_ansible_check_mode(tmp_path: Path) -> None:
+    root, revision, remote = repository(tmp_path)
+    observation = Observation(OLD, OLD, OLD, True, {})
+    calls: list[list[str]] = []
+
+    def runner(argv, _cwd, _timeout):
+        calls.append(list(argv))
+        return CommandResult(0, b"checked", b"")
+
+    backend = AnsibleBackend(root, observer=lambda _: observation, runner=runner)
+
+    assert backend.check(spec(revision, remote)) == observation
+    assert calls[0][calls[0].index("--tags") + 1] == "upkeeper_check"
+    assert calls[0][-1] == "--check"
+    assert calls[0][calls[0].index("--limit") + 1] == "normandy"
 
 
 def test_backend_rejects_dirty_or_wrong_repository_identity(tmp_path: Path) -> None:
