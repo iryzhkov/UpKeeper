@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "mode": "adopt-running",
+  "source_repository": "https://github.com/iryzhkov/t3-steward.git",
+  "source_revision": "2222222222222222222222222222222222222222",
+  "artifact": {"path": "/var/lib/upkeeper-staging/t3-steward.bin", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size_bytes": 123},
+  "install_path": "/home/igor/.local/bin/t3-steward",
+  "configuration": {"path": "/home/igor/.local/libexec/t3-steward-f02-coordinator", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "size_bytes": 307},
+  "health_command": ["/home/igor/.local/bin/t3-steward", "status", "--json"],
+  "state_schema": "backlog-v2",
+  "rollback": {
+    "executor": {"path": "/home/igor/.local/libexec/upkeeper-external-rollback", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size_bytes": 123},
+    "artifact": {"path": "/home/igor/.local/libexec/t3-steward.rollback-f02", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size_bytes": 123},
+    "configuration": null,
+    "runbook": {"path": "/home/igor/.local/share/upkeeper/rollback-t3-steward.md", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size_bytes": 123}
+  }
+}

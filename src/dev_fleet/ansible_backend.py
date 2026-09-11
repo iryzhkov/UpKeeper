@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from .adoption import adoption_to_dict
 from .upkeeper import (
     AmbiguousOutcome,
     BackendFailure,
@@ -133,6 +134,9 @@ class AnsibleBackend:
         }
         if effect_id is not None:
             extra_vars["upkeeper_effect_id"] = effect_id
+        if spec.adoption is not None:
+            extra_vars["upkeeper_component"] = spec.component
+            extra_vars["upkeeper_adoption"] = adoption_to_dict(spec.adoption)
         argv = [
             "ansible-playbook",
             "-i",
@@ -153,7 +157,11 @@ class AnsibleBackend:
         self._verify_repository(spec)
         observation = self.observer(spec)
         if phase is Phase.ROLLBACK:
-            applied = _is_revision(observation, spec.previous_revision, require_health=True)
+            applied = (
+                _is_absent(observation)
+                if spec.previous_revision is None
+                else _is_revision(observation, spec.previous_revision, require_health=True)
+            )
         elif phase is Phase.OBSERVE:
             applied = _is_revision(observation, spec.desired_revision, require_health=True)
         elif phase is Phase.INSTALL:
@@ -197,6 +205,15 @@ class AnsibleBackend:
         if result.returncode != 0:
             raise BackendFailure(f"git verification failed: {' '.join(args)}")
         return result.stdout.strip()
+
+
+def _is_absent(observation: Observation) -> bool:
+    return (
+        observation.installed_revision is None
+        and observation.activated_revision is None
+        and observation.running_revision is None
+        and observation.healthy is not True
+    )
 
 
 def _is_revision(observation: Observation, revision: str, *, require_health: bool) -> bool:

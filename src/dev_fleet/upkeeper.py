@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from .adoption import AdoptionSpec, adoption_from_dict, adoption_to_dict
 from .locks import LocalLockStore, LockContentionError, LockMetadata
 from .redaction import redact
 from .validation import (
@@ -90,10 +91,11 @@ class DeploymentSpec:
     component: str
     hosts: tuple[str, ...]
     desired_revision: str
-    previous_revision: str
+    previous_revision: str | None
     authority_ref: str
     policy_evaluation_ref: str
     backend: BackendSpec
+    adoption: AdoptionSpec | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != 1:
@@ -112,9 +114,25 @@ class DeploymentSpec:
         if not checked or checked != self.hosts or len(set(checked)) != len(checked):
             raise ValueError("hosts must be nonempty, unique, and sorted")
         validate_git_commit(self.desired_revision)
-        validate_git_commit(self.previous_revision)
-        if self.desired_revision == self.previous_revision:
-            raise ValueError("desired_revision must differ from previous_revision")
+        if self.previous_revision is not None:
+            validate_git_commit(self.previous_revision)
+        if self.adoption is None:
+            if self.previous_revision is None:
+                raise ValueError("previous_revision is required without an adoption contract")
+            if self.desired_revision == self.previous_revision:
+                raise ValueError("desired_revision must differ from previous_revision")
+        else:
+            if self.adoption.source_revision != self.desired_revision:
+                raise ValueError("adoption source_revision must equal desired_revision")
+            if self.previous_revision is None and self.adoption.mode != "bootstrap-absent":
+                raise ValueError("missing previous_revision requires bootstrap-absent adoption")
+            if self.previous_revision is not None and self.adoption.mode == "bootstrap-absent":
+                raise ValueError("bootstrap-absent adoption requires no previous_revision")
+            if (
+                self.previous_revision == self.desired_revision
+                and self.adoption.mode != "adopt-running"
+            ):
+                raise ValueError("equal revisions require adopt-running adoption")
         if not self.authority_ref or not self.policy_evaluation_ref:
             raise ValueError("authority and policy evaluation references are required")
 
@@ -126,6 +144,9 @@ class Observation:
     running_revision: str | None
     healthy: bool | None
     evidence: Mapping[str, Any]
+    installed_artifact_sha256: str | None = None
+    activated_artifact_sha256: str | None = None
+    configuration_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -309,7 +330,7 @@ class UpKeeper:
     def check(self, run_id: str, *, expected_revision: int) -> RunSnapshot:
         snapshot = self._expect(run_id, expected_revision)
         observation = self.backend.check(snapshot.spec)
-        if not _matches_previous(observation, snapshot.spec.previous_revision):
+        if not _matches_previous(observation, snapshot.spec):
             raise BackendFailure("preflight does not match the previous healthy revision")
         return self.store.append(
             run_id,
@@ -332,7 +353,7 @@ class UpKeeper:
                 snapshot = self._execute_or_resume(snapshot, phase)
                 if phase is Phase.OBSERVE:
                     observation = _latest_observation(snapshot, phase)
-                    if observation is None or observation.healthy is not True:
+                    if observation is None or not _matches_desired(observation, snapshot.spec):
                         return self._rollback(snapshot, "health gate failed")
             snapshot = self.store.append(
                 run_id,
@@ -437,9 +458,7 @@ class UpKeeper:
                 raise RecoveryRequired(f"rollback {effect_id} requires reconciliation")
             if state is EffectState.RECONCILED and latest.data.get("applied") is True:
                 observation = _observation_from_event(latest)
-                if observation is None or not _matches_previous(
-                    observation, snapshot.spec.previous_revision
-                ):
+                if observation is None or not _matches_previous(observation, snapshot.spec):
                     raise RecoveryRequired(
                         f"rollback {effect_id} reconciliation lacks healthy rollback proof"
                     )
@@ -481,7 +500,7 @@ class UpKeeper:
                 {"reason": str(exc)},
             )
             raise RecoveryRequired(f"rollback {effect_id} requires reconciliation") from exc
-        if not _matches_previous(result.observation, snapshot.spec.previous_revision):
+        if not _matches_previous(result.observation, snapshot.spec):
             self._effect_event(
                 snapshot,
                 effect_id,
@@ -597,6 +616,10 @@ def _validate_relative_file(value: str) -> None:
 def _spec_dict(spec: DeploymentSpec) -> dict[str, Any]:
     value = asdict(spec)
     value["hosts"] = list(spec.hosts)
+    if spec.adoption is None:
+        value.pop("adoption")
+    else:
+        value["adoption"] = adoption_to_dict(spec.adoption)
     return value
 
 
@@ -604,6 +627,8 @@ def _spec_from_dict(raw: Mapping[str, Any]) -> DeploymentSpec:
     value = dict(raw)
     value["hosts"] = tuple(value["hosts"])
     value["backend"] = BackendSpec(**value["backend"])
+    if value.get("adoption") is not None:
+        value["adoption"] = adoption_from_dict(value["adoption"])
     return DeploymentSpec(**value)
 
 
@@ -678,6 +703,9 @@ def _observation_dict(observation: Observation) -> dict[str, Any]:
         "running_revision": observation.running_revision,
         "healthy": observation.healthy,
         "evidence": dict(observation.evidence),
+        "installed_artifact_sha256": observation.installed_artifact_sha256,
+        "activated_artifact_sha256": observation.activated_artifact_sha256,
+        "configuration_sha256": observation.configuration_sha256,
     }
 
 
@@ -691,6 +719,9 @@ def _observation_from_event(event: RunEvent) -> Observation | None:
         raw.get("running_revision"),
         raw.get("healthy"),
         raw.get("evidence", {}),
+        raw.get("installed_artifact_sha256"),
+        raw.get("activated_artifact_sha256"),
+        raw.get("configuration_sha256"),
     )
 
 
@@ -699,12 +730,57 @@ def _latest_observation(snapshot: RunSnapshot, phase: Phase) -> Observation | No
     return _observation_from_event(event) if event is not None else None
 
 
-def _matches_previous(observation: Observation, revision: str) -> bool:
-    return (
-        observation.installed_revision == revision
-        and observation.activated_revision == revision
-        and observation.running_revision == revision
+def _matches_previous(observation: Observation, spec: DeploymentSpec) -> bool:
+    if spec.previous_revision is None:
+        return (
+            spec.adoption is not None
+            and spec.adoption.mode == "bootstrap-absent"
+            and observation.installed_revision is None
+            and observation.activated_revision is None
+            and observation.running_revision is None
+            and observation.healthy is not True
+        )
+    if not (
+        observation.installed_revision == spec.previous_revision
+        and observation.activated_revision == spec.previous_revision
+        and observation.running_revision == spec.previous_revision
         and observation.healthy is True
+    ):
+        return False
+    if spec.adoption is None:
+        return True
+    if spec.adoption.mode == "adopt-running":
+        artifact = spec.adoption.artifact
+        configuration = spec.adoption.configuration
+    else:
+        artifact = spec.adoption.rollback.artifact
+        configuration = spec.adoption.rollback.configuration
+        if artifact is None:
+            return False
+    return (
+        observation.installed_artifact_sha256 == artifact.sha256
+        and observation.activated_artifact_sha256 == artifact.sha256
+        and (configuration is None or observation.configuration_sha256 == configuration.sha256)
+    )
+
+
+def _matches_desired(observation: Observation, spec: DeploymentSpec) -> bool:
+    if not (
+        observation.installed_revision == spec.desired_revision
+        and observation.activated_revision == spec.desired_revision
+        and observation.running_revision == spec.desired_revision
+        and observation.healthy is True
+    ):
+        return False
+    if spec.adoption is None:
+        return True
+    return (
+        observation.installed_artifact_sha256 == spec.adoption.artifact.sha256
+        and observation.activated_artifact_sha256 == spec.adoption.artifact.sha256
+        and (
+            spec.adoption.configuration is None
+            or observation.configuration_sha256 == spec.adoption.configuration.sha256
+        )
     )
 
 
