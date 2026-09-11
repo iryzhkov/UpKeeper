@@ -177,6 +177,8 @@ class RunSnapshot:
     def effects(self) -> dict[str, RunEvent]:
         latest: dict[str, RunEvent] = {}
         for event in self.events:
+            if event.kind != "EFFECT":
+                continue
             effect_id = event.data.get("effect_id")
             if isinstance(effect_id, str):
                 latest[effect_id] = event

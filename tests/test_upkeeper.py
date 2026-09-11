@@ -278,6 +278,44 @@ def test_lost_apply_response_requires_observation_and_never_duplicates(tmp_path:
     assert locks.inspect("normandy").state == "absent"
 
 
+def test_known_backend_failure_requires_observation_then_resumes(tmp_path: Path) -> None:
+    class KnownFailureOnceBackend(DisposableServiceBackend):
+        fail_once = True
+
+        def execute(self, spec: DeploymentSpec, phase: Phase, effect_id: str) -> BackendResult:
+            if phase is Phase.INSTALL and self.fail_once:
+                self.fail_once = False
+                raise BackendFailure("fixture refused before execution")
+            return super().execute(spec, phase, effect_id)
+
+    backend = KnownFailureOnceBackend()
+    upkeeper, store, locks = make_upkeeper(tmp_path, backend)
+    checked = prepare(upkeeper, make_spec())
+
+    with pytest.raises(BackendFailure, match="refused before execution"):
+        upkeeper.apply(
+            checked.spec.run_id,
+            expected_revision=checked.revision,
+            approved_plan_hash=checked.plan_hash,
+        )
+
+    failed = store.load(checked.spec.run_id)
+    assert failed.events[-1].kind == "PHASE_FAILED"
+    assert locks.inspect("normandy").state == "absent"
+
+    reconciled = upkeeper.reconcile(failed.spec.run_id, expected_revision=failed.revision)
+    assert reconciled.events[-1].data["applied"] is False
+    completed = upkeeper.apply(
+        reconciled.spec.run_id,
+        expected_revision=reconciled.revision,
+        approved_plan_hash=reconciled.plan_hash,
+    )
+
+    assert completed.events[-1].kind == "COMPLETED"
+    assert backend.calls[Phase.INSTALL] == 1
+    assert locks.inspect("normandy").state == "absent"
+
+
 def test_plan_is_idempotent_but_run_id_cannot_change_identity(tmp_path: Path) -> None:
     backend = DisposableServiceBackend()
     upkeeper, _, _ = make_upkeeper(tmp_path, backend)
