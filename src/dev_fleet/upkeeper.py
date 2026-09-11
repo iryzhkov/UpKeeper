@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .adoption import AdoptionSpec, adoption_from_dict, adoption_to_dict
-from .environment import AgentEnvironmentSpec, environment_from_dict, environment_to_dict
+from .environment import (
+    AgentEnvironmentSpec,
+    environment_from_dict,
+    environment_phase_verdict,
+    environment_to_dict,
+)
 from .locks import LocalLockStore, LockContentionError, LockMetadata
 from .redaction import redact
 from .validation import (
@@ -137,6 +142,8 @@ class DeploymentSpec:
                 raise ValueError("equal revisions require adopt-running adoption")
         if not self.authority_ref or not self.policy_evaluation_ref:
             raise ValueError("authority and policy evaluation references are required")
+        if self.component == "agent-environment" and self.environment is None:
+            raise ValueError("component agent-environment requires an environment contract")
         if self.environment is not None and self.component != "agent-environment":
             raise ValueError("environment contract requires component agent-environment")
 
@@ -931,6 +938,10 @@ def _matches_previous(observation: Observation, spec: DeploymentSpec) -> bool:
         and observation.healthy is True
     ):
         return False
+    if spec.environment is not None and environment_phase_verdict(
+        spec.environment, "rollback", observation.evidence.get("agent_environment")
+    ) is not True:
+        return False
     if spec.adoption is None:
         return True
     if spec.adoption.mode == "adopt-running":
@@ -1028,7 +1039,7 @@ def _phase_observation_verdict(
         return None
     previous = spec.previous_revision
     if phase is Phase.INSTALL:
-        return _all_known(
+        verdict = _all_known(
             (
                 _revision_axis(observation.installed_revision, spec.desired_revision),
                 _revision_axis(observation.activated_revision, previous),
@@ -1036,8 +1047,8 @@ def _phase_observation_verdict(
                 _candidate_identity_verdict(observation, spec, activated=False),
             )
         )
-    if phase is Phase.ACTIVATE:
-        return _all_known(
+    elif phase is Phase.ACTIVATE:
+        verdict = _all_known(
             (
                 _revision_axis(observation.installed_revision, spec.desired_revision),
                 _revision_axis(observation.activated_revision, spec.desired_revision),
@@ -1045,8 +1056,8 @@ def _phase_observation_verdict(
                 _candidate_identity_verdict(observation, spec, activated=True),
             )
         )
-    if phase is Phase.RUN:
-        return _all_known(
+    elif phase is Phase.RUN:
+        verdict = _all_known(
             (
                 _revision_axis(observation.installed_revision, spec.desired_revision),
                 _revision_axis(observation.activated_revision, spec.desired_revision),
@@ -1054,11 +1065,18 @@ def _phase_observation_verdict(
                 _candidate_identity_verdict(observation, spec, activated=True),
             )
         )
-    if phase is Phase.OBSERVE:
+    elif phase is Phase.OBSERVE:
         if observation.healthy is None:
             return None
-        return _matches_desired(observation, spec)
-    return _matches_previous(observation, spec)
+        verdict = _matches_desired(observation, spec)
+    else:
+        verdict = _matches_previous(observation, spec)
+    if spec.environment is None or phase is Phase.ROLLBACK:
+        return verdict
+    environment_verdict = environment_phase_verdict(
+        spec.environment, phase.value, observation.evidence.get("agent_environment")
+    )
+    return _all_known((verdict, environment_verdict))
 
 
 def _safe_not_applied(

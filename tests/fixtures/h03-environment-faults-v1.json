@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "host_profile": "normandy-codex-worker",
+      "worker_id": "normandy",
+      "host": "normandy"
+    }
+  ],
+  "faults": [
+    {
+      "fault_id": "partial-install",
+      "phase": "install",
+      "expected": "rollback"
+    },
+    {
+      "fault_id": "weakened-safety",
+      "phase": "install",
+      "expected": "rollback-before-activation"
+    },
+    {
+      "fault_id": "bad-environment-revision",
+      "phase": "activate",
+      "expected": "rollback-worker-ready"
+    },
+    {
+      "fault_id": "managed-drift",
+      "phase": "observe",
+      "expected": "rollback"
+    },
+    {
+      "fault_id": "unexplained-drift",
+      "phase": "observe",
+      "expected": "unknown-preserved"
+    }
+  ]
+}
