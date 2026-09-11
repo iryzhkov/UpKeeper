@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -288,9 +288,19 @@ class RunStore:
     ) -> RunSnapshot:
         run_root = self._run_root(run_id)
         transition_lock = run_root / ".transition.lock"
+        lock_record = {
+            "schema_version": 1,
+            "run_id": validate_run_id(run_id),
+            "expected_revision": expected_revision,
+            "target_revision": expected_revision + 1,
+            "kind": kind,
+            "data_sha256": _sha256(_canonical_json(redact(dict(data)))),
+            "controller_pid": os.getpid(),
+            "created_at": _now(),
+        }
         try:
-            descriptor = os.open(transition_lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            os.close(descriptor)
+            _write_exclusive(transition_lock, _canonical_json(lock_record))
+            _fsync_directory(run_root)
         except FileExistsError as exc:
             raise RecoveryRequired(f"run {run_id} has an unresolved transition lock") from exc
         try:
@@ -315,6 +325,58 @@ class RunStore:
                 _fsync_directory(run_root)
             except FileNotFoundError:
                 pass
+
+    def recover_transition(
+        self,
+        run_id: str,
+        *,
+        expected_revision: int,
+        controller_is_alive: Callable[[int], bool | None],
+    ) -> RunSnapshot:
+        """Clear a proven-orphaned append lock after reconciling its journal effect."""
+        run_root = self._run_root(run_id)
+        transition_lock = run_root / ".transition.lock"
+        try:
+            raw = json.loads(transition_lock.read_text(encoding="utf-8"))
+            if (
+                raw.get("schema_version") != 1
+                or raw.get("run_id") != run_id
+                or raw.get("expected_revision") != expected_revision
+                or raw.get("target_revision") != expected_revision + 1
+                or not isinstance(raw.get("kind"), str)
+                or not isinstance(raw.get("data_sha256"), str)
+                or not isinstance(raw.get("controller_pid"), int)
+            ):
+                raise ValueError("invalid transition record")
+        except FileNotFoundError:
+            snapshot = self.load(run_id)
+            if snapshot.revision != expected_revision:
+                raise RevisionConflict(
+                    f"expected run revision {expected_revision}, current is {snapshot.revision}"
+                ) from None
+            return snapshot
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RecoveryRequired(f"run {run_id} transition lock is invalid") from exc
+
+        if controller_is_alive(raw["controller_pid"]) is not False:
+            raise RecoveryRequired(f"run {run_id} transition owner is live or unknown")
+
+        snapshot = self.load(run_id)
+        if snapshot.revision == expected_revision + 1:
+            event = snapshot.events[-1]
+            if (
+                event.kind != raw["kind"]
+                or _sha256(_canonical_json(event.data)) != raw["data_sha256"]
+            ):
+                raise RecoveryRequired(f"run {run_id} committed transition contradicts its lock")
+        elif snapshot.revision != expected_revision:
+            raise RevisionConflict(
+                f"transition expected revision {expected_revision}, current is {snapshot.revision}"
+            )
+
+        transition_lock.unlink()
+        _fsync_directory(run_root)
+        return snapshot
 
     def _run_root(self, run_id: str) -> Path:
         return self.root / validate_run_id(run_id)
@@ -343,38 +405,69 @@ class UpKeeper:
             data={"observation": _observation_dict(observation)},
         )
 
-    def apply(self, run_id: str, *, expected_revision: int, approved_plan_hash: str) -> RunSnapshot:
-        snapshot = self._expect(run_id, expected_revision)
-        if snapshot.plan_hash != approved_plan_hash:
-            raise RevisionConflict("approval does not match the frozen plan hash")
+    def install(
+        self, run_id: str, *, expected_revision: int, approved_plan_hash: str
+    ) -> RunSnapshot:
+        """Install only, retaining the target locks for later activation."""
+        return self._transition(run_id, expected_revision, approved_plan_hash, Phase.INSTALL)
+
+    def activate(
+        self, run_id: str, *, expected_revision: int, approved_plan_hash: str
+    ) -> RunSnapshot:
+        return self._transition(run_id, expected_revision, approved_plan_hash, Phase.ACTIVATE)
+
+    def run(
+        self, run_id: str, *, expected_revision: int, approved_plan_hash: str
+    ) -> RunSnapshot:
+        return self._transition(run_id, expected_revision, approved_plan_hash, Phase.RUN)
+
+    def observe(
+        self, run_id: str, *, expected_revision: int, approved_plan_hash: str
+    ) -> RunSnapshot:
+        snapshot = self._transition(
+            run_id, expected_revision, approved_plan_hash, Phase.OBSERVE
+        )
         if snapshot.terminal:
             return snapshot
-        if not any(event.kind == "CHECKED" for event in snapshot.events):
-            raise RevisionConflict("apply requires a revision-fenced successful check")
+        snapshot = self.store.append(
+            run_id,
+            expected_revision=snapshot.revision,
+            kind="COMPLETED",
+            data={"desired_revision": snapshot.spec.desired_revision},
+        )
+        self._release_locks(snapshot.spec)
+        return snapshot
+
+    def rollback(
+        self,
+        run_id: str,
+        *,
+        expected_revision: int,
+        approved_plan_hash: str,
+        reason: str,
+    ) -> RunSnapshot:
+        snapshot = self._approved(run_id, expected_revision, approved_plan_hash)
+        if snapshot.terminal:
+            return snapshot
         self._ensure_locks(snapshot.spec)
-        try:
-            for phase in (Phase.INSTALL, Phase.ACTIVATE, Phase.RUN, Phase.OBSERVE):
-                snapshot = self._execute_or_resume(snapshot, phase)
-                if phase is Phase.OBSERVE:
-                    observation = _latest_observation(snapshot, phase)
-                    if observation is None or not _matches_desired(observation, snapshot.spec):
-                        return self._rollback(snapshot, "health gate failed")
-            snapshot = self.store.append(
+        return self._rollback(snapshot, reason)
+
+    def apply(self, run_id: str, *, expected_revision: int, approved_plan_hash: str) -> RunSnapshot:
+        """Compatibility helper that composes the independently fenced phase methods."""
+        snapshot = self.install(
+            run_id,
+            expected_revision=expected_revision,
+            approved_plan_hash=approved_plan_hash,
+        )
+        for transition in (self.activate, self.run, self.observe):
+            if snapshot.terminal:
+                return snapshot
+            snapshot = transition(
                 run_id,
                 expected_revision=snapshot.revision,
-                kind="COMPLETED",
-                data={"desired_revision": snapshot.spec.desired_revision},
+                approved_plan_hash=approved_plan_hash,
             )
-            self._release_locks(snapshot.spec)
-            return snapshot
-        except RecoveryRequired:
-            raise
-        except BaseException:
-            current = self.store.load(run_id)
-            if _confirmed_mutation(current):
-                return self._rollback(current, "known backend failure")
-            self._release_locks(current.spec)
-            raise
+        return snapshot
 
     def reconcile(self, run_id: str, *, expected_revision: int) -> RunSnapshot:
         snapshot = self._expect(run_id, expected_revision)
@@ -385,6 +478,16 @@ class UpKeeper:
         result = self.backend.reconcile(snapshot.spec, phase, str(effect.data["effect_id"]))
         if result.applied is None:
             raise RecoveryRequired("backend cannot determine whether effect applied")
+        if result.applied:
+            verdict = _phase_observation_verdict(result.observation, snapshot.spec, phase)
+            if verdict is not True:
+                raise RecoveryRequired(
+                    f"{effect.data['effect_id']} reconciliation contradicts applied state"
+                )
+        elif not _safe_not_applied(result.observation, snapshot.spec, phase):
+            raise RecoveryRequired(
+                f"{effect.data['effect_id']} reconciliation found unexplained changes"
+            )
         return self._effect_event(
             snapshot,
             str(effect.data["effect_id"]),
@@ -397,6 +500,75 @@ class UpKeeper:
                 "evidence": dict(result.evidence),
             },
         )
+
+    def _transition(
+        self,
+        run_id: str,
+        expected_revision: int,
+        approved_plan_hash: str,
+        phase: Phase,
+    ) -> RunSnapshot:
+        snapshot = self._approved(run_id, expected_revision, approved_plan_hash)
+        if snapshot.terminal:
+            return snapshot
+        self._require_phase_ready(snapshot, phase)
+        self._ensure_locks(snapshot.spec)
+        try:
+            if phase is Phase.INSTALL and not any(
+                event.kind == "LOCKED_CHECKED" for event in snapshot.events
+            ):
+                observation = self.backend.check(snapshot.spec)
+                if not _matches_previous(observation, snapshot.spec):
+                    raise BackendFailure(
+                        "locked preflight found drift from the previous healthy revision"
+                    )
+                snapshot = self.store.append(
+                    run_id,
+                    expected_revision=snapshot.revision,
+                    kind="LOCKED_CHECKED",
+                    data={"observation": _observation_dict(observation)},
+                )
+            snapshot = self._execute_or_resume(snapshot, phase)
+            verdict = _phase_observation_verdict(
+                _latest_observation(snapshot, phase), snapshot.spec, phase
+            )
+            if verdict is not True:
+                return self._rollback(snapshot, f"{phase.value} boundary verification failed")
+            return snapshot
+        except RecoveryRequired:
+            raise
+        except BaseException:
+            current = self.store.load(run_id)
+            if _confirmed_mutation(current):
+                return self._rollback(current, "known transition failure")
+            self._release_locks(current.spec)
+            raise
+
+    def _approved(
+        self, run_id: str, expected_revision: int, approved_plan_hash: str
+    ) -> RunSnapshot:
+        snapshot = self._expect(run_id, expected_revision)
+        if snapshot.plan_hash != approved_plan_hash:
+            raise RevisionConflict("approval does not match the frozen plan hash")
+        if not any(event.kind == "CHECKED" for event in snapshot.events):
+            raise RevisionConflict("transition requires a revision-fenced successful check")
+        return snapshot
+
+    def _require_phase_ready(self, snapshot: RunSnapshot, phase: Phase) -> None:
+        prerequisites = {
+            Phase.INSTALL: (),
+            Phase.ACTIVATE: (Phase.INSTALL,),
+            Phase.RUN: (Phase.INSTALL, Phase.ACTIVATE),
+            Phase.OBSERVE: (Phase.INSTALL, Phase.ACTIVATE, Phase.RUN),
+        }
+        if phase is Phase.ROLLBACK:
+            return
+        for prerequisite in prerequisites[phase]:
+            event = snapshot.effects().get(_effect_id(snapshot.spec, prerequisite))
+            if event is None or not _effect_applied(event):
+                raise RevisionConflict(
+                    f"{phase.value} requires confirmed {prerequisite.value}"
+                )
 
     def _execute_or_resume(self, snapshot: RunSnapshot, phase: Phase) -> RunSnapshot:
         effect_id = _effect_id(snapshot.spec, phase)
@@ -419,24 +591,31 @@ class UpKeeper:
         snapshot = self._effect_event(snapshot, effect_id, phase, input_hash, EffectState.STARTED)
         try:
             result = self.backend.execute(snapshot.spec, phase, effect_id)
-        except AmbiguousOutcome as exc:
+        except (AmbiguousOutcome, BackendFailure) as exc:
             self._effect_event(
                 snapshot,
                 effect_id,
                 phase,
                 input_hash,
                 EffectState.UNKNOWN,
-                {"reason": str(exc)},
+                {"reason": str(exc), "failure_type": type(exc).__name__},
             )
             raise RecoveryRequired(f"{effect_id} outcome is unknown") from exc
-        except BackendFailure as exc:
-            self.store.append(
-                snapshot.spec.run_id,
-                expected_revision=snapshot.revision,
-                kind="PHASE_FAILED",
-                data={"effect_id": effect_id, "phase": phase.value, "reason": str(exc)},
+        verdict = _phase_observation_verdict(result.observation, snapshot.spec, phase)
+        if verdict is None:
+            self._effect_event(
+                snapshot,
+                effect_id,
+                phase,
+                input_hash,
+                EffectState.UNKNOWN,
+                {
+                    "reason": "required boundary observation is unavailable",
+                    "observation": _observation_dict(result.observation),
+                    "receipt": dict(result.receipt),
+                },
             )
-            raise
+            raise RecoveryRequired(f"{effect_id} outcome is unknown")
         return self._effect_event(
             snapshot,
             effect_id,
@@ -444,6 +623,7 @@ class UpKeeper:
             input_hash,
             EffectState.CONFIRMED,
             {
+                "boundary_verified": verdict,
                 "observation": _observation_dict(result.observation),
                 "receipt": dict(result.receipt),
             },
@@ -472,22 +652,9 @@ class UpKeeper:
                     phase,
                     input_hash,
                     EffectState.COMPENSATED,
-                    {
-                        "observation": _observation_dict(observation),
-                        "reconciled": True,
-                    },
+                    {"observation": _observation_dict(observation), "reconciled": True},
                 )
-                snapshot = self.store.append(
-                    snapshot.spec.run_id,
-                    expected_revision=snapshot.revision,
-                    kind="ROLLED_BACK",
-                    data={
-                        "reason": reason,
-                        "restored_revision": snapshot.spec.previous_revision,
-                    },
-                )
-                self._release_locks(snapshot.spec)
-                return snapshot
+                return self._finish_rollback(snapshot, reason)
         snapshot = self._effect_event(
             snapshot, effect_id, phase, input_hash, EffectState.PREPARED, {"reason": reason}
         )
@@ -501,7 +668,7 @@ class UpKeeper:
                 phase,
                 input_hash,
                 EffectState.UNKNOWN,
-                {"reason": str(exc)},
+                {"reason": str(exc), "failure_type": type(exc).__name__},
             )
             raise RecoveryRequired(f"rollback {effect_id} requires reconciliation") from exc
         if not _matches_previous(result.observation, snapshot.spec):
@@ -511,7 +678,11 @@ class UpKeeper:
                 phase,
                 input_hash,
                 EffectState.UNKNOWN,
-                {"reason": "rollback does not prove previous healthy revision"},
+                {
+                    "reason": "rollback does not prove exact previous artifact and configuration",
+                    "observation": _observation_dict(result.observation),
+                    "receipt": dict(result.receipt),
+                },
             )
             raise RecoveryRequired(f"rollback {effect_id} is not independently confirmed")
         snapshot = self._effect_event(
@@ -525,6 +696,9 @@ class UpKeeper:
                 "receipt": dict(result.receipt),
             },
         )
+        return self._finish_rollback(snapshot, reason)
+
+    def _finish_rollback(self, snapshot: RunSnapshot, reason: str) -> RunSnapshot:
         snapshot = self.store.append(
             snapshot.spec.run_id,
             expected_revision=snapshot.revision,
@@ -790,6 +964,126 @@ def _matches_desired(observation: Observation, spec: DeploymentSpec) -> bool:
         and (
             spec.adoption.configuration is None
             or observation.configuration_sha256 == spec.adoption.configuration.sha256
+        )
+    )
+
+
+def _effect_applied(event: RunEvent) -> bool:
+    state = event.data.get("state")
+    return state in {EffectState.CONFIRMED.value, EffectState.COMPENSATED.value} or (
+        state == EffectState.RECONCILED.value and event.data.get("applied") is True
+    )
+
+
+def _all_known(values: tuple[bool | None, ...]) -> bool | None:
+    if any(value is False for value in values):
+        return False
+    if any(value is None for value in values):
+        return None
+    return True
+
+
+def _revision_axis(actual: str | None, expected: str | None) -> bool:
+    return actual == expected
+
+
+def _digest_axis(actual: str | None, expected: str) -> bool | None:
+    if actual is None:
+        return None
+    return actual == expected
+
+
+def _candidate_identity_verdict(
+    observation: Observation, spec: DeploymentSpec, *, activated: bool
+) -> bool | None:
+    if spec.adoption is None:
+        return True
+    checks: list[bool | None] = [
+        _digest_axis(
+            observation.installed_artifact_sha256,
+            spec.adoption.artifact.sha256,
+        )
+    ]
+    if activated:
+        checks.append(
+            _digest_axis(
+                observation.activated_artifact_sha256,
+                spec.adoption.artifact.sha256,
+            )
+        )
+    if spec.adoption.configuration is not None:
+        checks.append(
+            _digest_axis(
+                observation.configuration_sha256,
+                spec.adoption.configuration.sha256,
+            )
+        )
+    return _all_known(tuple(checks))
+
+
+def _phase_observation_verdict(
+    observation: Observation | None, spec: DeploymentSpec, phase: Phase
+) -> bool | None:
+    if observation is None:
+        return None
+    previous = spec.previous_revision
+    if phase is Phase.INSTALL:
+        return _all_known(
+            (
+                _revision_axis(observation.installed_revision, spec.desired_revision),
+                _revision_axis(observation.activated_revision, previous),
+                _revision_axis(observation.running_revision, previous),
+                _candidate_identity_verdict(observation, spec, activated=False),
+            )
+        )
+    if phase is Phase.ACTIVATE:
+        return _all_known(
+            (
+                _revision_axis(observation.installed_revision, spec.desired_revision),
+                _revision_axis(observation.activated_revision, spec.desired_revision),
+                _revision_axis(observation.running_revision, previous),
+                _candidate_identity_verdict(observation, spec, activated=True),
+            )
+        )
+    if phase is Phase.RUN:
+        return _all_known(
+            (
+                _revision_axis(observation.installed_revision, spec.desired_revision),
+                _revision_axis(observation.activated_revision, spec.desired_revision),
+                _revision_axis(observation.running_revision, spec.desired_revision),
+                _candidate_identity_verdict(observation, spec, activated=True),
+            )
+        )
+    if phase is Phase.OBSERVE:
+        if observation.healthy is None:
+            return None
+        return _matches_desired(observation, spec)
+    return _matches_previous(observation, spec)
+
+
+def _safe_not_applied(
+    observation: Observation, spec: DeploymentSpec, phase: Phase
+) -> bool:
+    if phase is Phase.INSTALL:
+        return _matches_previous(observation, spec)
+    if phase is Phase.ACTIVATE:
+        return _phase_observation_verdict(observation, spec, Phase.INSTALL) is True
+    if phase is Phase.RUN:
+        return _phase_observation_verdict(observation, spec, Phase.ACTIVATE) is True
+    if phase is Phase.OBSERVE:
+        return (
+            observation.installed_revision == spec.desired_revision
+            and observation.activated_revision == spec.desired_revision
+            and observation.running_revision == spec.desired_revision
+            and _candidate_identity_verdict(observation, spec, activated=True) is True
+        )
+    return (
+        _matches_previous(observation, spec)
+        or (
+            observation.installed_revision == spec.desired_revision
+            and observation.activated_revision == spec.desired_revision
+            and observation.running_revision == spec.desired_revision
+            and _candidate_identity_verdict(observation, spec, activated=True) is True
         )
     )
 

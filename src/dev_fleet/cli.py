@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,31 @@ from .validation import ValidationError, parse_host_selector
 
 
 def _root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    """Resolve status data explicitly for source checkouts and installed UpKeeper."""
+    override = os.environ.get("DEV_FLEET_CONFIG_ROOT")
+    candidates = []
+    if override:
+        configured = Path(override)
+        if not configured.is_absolute():
+            raise ValidationError("DEV_FLEET_CONFIG_ROOT must be an absolute path")
+        candidates.append(configured)
+    candidates.extend(
+        [
+            Path(__file__).resolve().parents[2],
+            Path.home() / ".config" / "dev-fleet",
+        ]
+    )
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if (
+            (resolved / "inventory" / "hosts.yml").is_file()
+            and (resolved / "desired" / "components.yml").is_file()
+        ):
+            return resolved
+    raise ValidationError(
+        "fleet configuration unavailable; install inventory/hosts.yml and "
+        "desired/components.yml under ~/.config/dev-fleet or set DEV_FLEET_CONFIG_ROOT"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
