@@ -102,3 +102,55 @@ def test_observer_reports_absence(tmp_path: Path) -> None:
         ),
     )
     assert FoundationObserver()(spec).evidence["probe"] == "absent"
+
+def test_observer_proves_exact_healthy_rollback_bytes(tmp_path: Path) -> None:
+    installed = tmp_path / "component"
+    installed.write_text("#!/bin/sh\nexit 0\n")
+    installed.chmod(0o755)
+    rollback_artifact = tmp_path / "rollback-artifact"
+    rollback_artifact.write_text("#!/bin/sh\nexit 0\n")
+    rollback_artifact.chmod(0o755)
+    candidate = tmp_path / "candidate"
+    candidate.write_text("#!/bin/sh\nexit 1\n")
+    executor = tmp_path / "rollback"
+    executor.write_text("#!/bin/sh\nexit 0\n")
+    runbook = tmp_path / "rollback.md"
+    runbook.write_text("rollback")
+    adoption = AdoptionSpec(
+        1,
+        "upgrade",
+        "https://example.test/component.git",
+        "2" * 40,
+        identity(candidate),
+        str(installed),
+        None,
+        ("/bin/true",),
+        "state-v1",
+        RollbackUnit(identity(executor), identity(rollback_artifact), None, identity(runbook)),
+    )
+    spec = DeploymentSpec(
+        1,
+        "deployment-" + "e" * 32,
+        "20260911T180001Z-abcd1234",
+        "laptop",
+        "component",
+        ("laptop",),
+        "2" * 40,
+        "1" * 40,
+        "authority",
+        "approval",
+        BackendSpec(
+            "homelab-ansible-v1",
+            "https://example.test/homelab.git",
+            "3" * 40,
+            "inventory/hosts.yml",
+            "playbooks/citadel-foundations.yml",
+        ),
+        adoption,
+    )
+
+    observed = FoundationObserver()(spec)
+    assert observed.healthy is True
+    assert observed.running_revision == spec.previous_revision
+    assert observed.installed_artifact_sha256 == adoption.rollback.artifact.sha256
+    assert observed.evidence["rollback_exact_bytes"] is True

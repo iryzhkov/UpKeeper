@@ -54,21 +54,40 @@ class FoundationObserver:
             if adoption.configuration is not None and Path(adoption.configuration.path).is_file()
             else None
         )
-        exact_bytes = installed_digest == adoption.artifact.sha256 and (
+        desired_exact = installed_digest == adoption.artifact.sha256 and (
             adoption.configuration is None or config_digest == adoption.configuration.sha256
         )
-        healthy = _run(adoption.health_command, self.timeout_seconds).returncode == 0
+        rollback = adoption.rollback
+        rollback_exact = (
+            spec.previous_revision is not None
+            and rollback.artifact is not None
+            and installed_digest == rollback.artifact.sha256
+            and (
+                rollback.configuration is None
+                or config_digest == rollback.configuration.sha256
+            )
+        )
+        healthy_probe = _run(adoption.health_command, self.timeout_seconds).returncode == 0
 
-        revision = spec.desired_revision if exact_bytes else _marker_revision(installed)
+        if desired_exact:
+            revision = spec.desired_revision
+        elif rollback_exact:
+            revision = spec.previous_revision
+        else:
+            revision = _marker_revision(installed)
         installed_revision = revision if installed_digest is not None else None
         activated_revision = revision if revision is not None else None
-        running_revision = revision if revision is not None and healthy else None
+        running_revision = revision if revision is not None and healthy_probe else None
         return Observation(
             installed_revision,
             activated_revision,
             running_revision,
-            healthy and exact_bytes,
-            {"probe": "foundation-local-v1", "exact_bytes": exact_bytes},
+            healthy_probe and (desired_exact or rollback_exact),
+            {
+                "probe": "foundation-local-v1",
+                "desired_exact_bytes": desired_exact,
+                "rollback_exact_bytes": rollback_exact,
+            },
             installed_digest,
             installed_digest,
             config_digest,
