@@ -3,9 +3,10 @@
 An audited Ansible deployment system for developer tooling on `laptop`, `omarchy-pc`
 (current SSH alias `gaming-pc`), `normandy`, and `homelab`.
 
-This repository is intentionally at the Phase 1 gate. It implements discovery, validation,
-redaction, run-record primitives, and deployment-lock primitives. It contains no mutating
-deployment role, reconciliation timer, remote bootstrap, or repair agent.
+Phase 1 read-only discovery remains unchanged. F03 adds a library-level UpKeeper mutation
+MVP with revision-fenced approval, durable effect records, reconciliation, rollback, and a
+bounded Ansible adapter. It is not a workflow coordinator and has not been deployed live.
+See `docs/upkeeper-mvp.md`.
 
 ## Read-only commands
 
