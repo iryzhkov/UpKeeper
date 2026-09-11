@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "adapter": "local-single-worker-v1",
+  "host_profile": "normandy-codex-worker",
+  "worker_ids": ["f02-worker-canary"],
+  "phases": ["install", "activate", "probe", "rollback"],
+  "assets": [
+    {
+      "asset_id": "codex-harness",
+      "kind": "harness-setting",
+      "provenance": "openai-codex-local",
+      "source_revision": "codex-v1",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size_bytes": 1,
+      "staged_path": "/home/igor/.local/state/upkeeper/environments/candidate/codex.toml",
+      "active_path": "/home/igor/.codex/config.toml",
+      "activation_order": 10
+    },
+    {
+      "asset_id": "global-agent-instructions",
+      "kind": "global-instruction",
+      "provenance": "agents-instructions-gen",
+      "source_revision": "instructions-v1",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size_bytes": 2,
+      "staged_path": "/home/igor/.local/state/upkeeper/environments/candidate/AGENTS.md",
+      "active_path": "/home/igor/.codex/AGENTS.md",
+      "activation_order": 20
+    },
+    {
+      "asset_id": "huyang-mcp",
+      "kind": "mcp-service",
+      "provenance": "github.com/iryzhkov/huyang",
+      "source_revision": "f0b537d90d522ae79b7aabcc54ada1cbd374175c",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size_bytes": 3,
+      "staged_path": "/home/igor/.local/state/upkeeper/environments/candidate/huyang",
+      "active_path": "/home/igor/.local/bin/huyang",
+      "activation_order": 30
+    },
+    {
+      "asset_id": "ov-memory-skill",
+      "kind": "skill",
+      "provenance": "local-curated-skill",
+      "source_revision": "skill-v1",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "size_bytes": 4,
+      "staged_path": "/home/igor/.local/state/upkeeper/environments/candidate/ov-memory.md",
+      "active_path": "/home/igor/.config/agents/ov-memory.md",
+      "activation_order": 40
+    }
+  ],
+  "project_instructions": [
+    {
+      "repository": "github.com/iryzhkov/dev-fleet",
+      "repository_revision": "cb6a926fc6b2b67391d1f6dc216d7d63206e7ca2",
+      "path": "AGENTS.md",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  ],
+  "probes": [
+    {
+      "probe_id": "huyang-revision-fence",
+      "argv": ["/home/igor/.local/bin/huyang", "version"],
+      "timeout_seconds": 30,
+      "safety_claims": ["revision-fenced-edits"]
+    },
+    {
+      "probe_id": "instruction-effect-policy",
+      "argv": ["/usr/bin/python3", "-m", "pytest", "tests/behavior/instructions.py"],
+      "timeout_seconds": 120,
+      "safety_claims": ["explicit-effect-authority", "preserve-unexplained-changes"]
+    }
+  ],
+  "recovery_sources": [
+    {"kind": "huyang-journal", "owner": "Huyang", "root": "/home/igor/.local/state/huyang"},
+    {"kind": "lease", "owner": "t3-steward", "root": "/home/igor/.local/state/t3-steward"},
+    {"kind": "t3-thread", "owner": "T3", "root": "/home/igor/.local/share/t3"},
+    {"kind": "worktree", "owner": "Git", "root": "/home/igor/Work"}
+  ],
+  "secret_refs": ["secretref:codex-auth"]
+}

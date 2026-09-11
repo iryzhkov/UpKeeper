@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .adoption import AdoptionSpec, adoption_from_dict, adoption_to_dict
+from .environment import AgentEnvironmentSpec, environment_from_dict, environment_to_dict
 from .locks import LocalLockStore, LockContentionError, LockMetadata
 from .redaction import redact
 from .validation import (
@@ -96,6 +97,7 @@ class DeploymentSpec:
     policy_evaluation_ref: str
     backend: BackendSpec
     adoption: AdoptionSpec | None = None
+    environment: AgentEnvironmentSpec | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != 1:
@@ -135,6 +137,8 @@ class DeploymentSpec:
                 raise ValueError("equal revisions require adopt-running adoption")
         if not self.authority_ref or not self.policy_evaluation_ref:
             raise ValueError("authority and policy evaluation references are required")
+        if self.environment is not None and self.component != "agent-environment":
+            raise ValueError("environment contract requires component agent-environment")
 
 
 @dataclass(frozen=True)
@@ -620,6 +624,10 @@ def _spec_dict(spec: DeploymentSpec) -> dict[str, Any]:
         value.pop("adoption")
     else:
         value["adoption"] = adoption_to_dict(spec.adoption)
+    if spec.environment is None:
+        value.pop("environment")
+    else:
+        value["environment"] = environment_to_dict(spec.environment)
     return value
 
 
@@ -629,6 +637,8 @@ def _spec_from_dict(raw: Mapping[str, Any]) -> DeploymentSpec:
     value["backend"] = BackendSpec(**value["backend"])
     if value.get("adoption") is not None:
         value["adoption"] = adoption_from_dict(value["adoption"])
+    if value.get("environment") is not None:
+        value["environment"] = environment_from_dict(value["environment"])
     return DeploymentSpec(**value)
 
 
