@@ -41,6 +41,12 @@ def redact_text(value: str) -> str:
 
 
 def redact(value: Any, key: str | None = None) -> Any:
+    if (
+        key == "secret_refs"
+        and isinstance(value, Sequence)
+        and not isinstance(value, (str, bytes, bytearray))
+    ):
+        return [redact(item) for item in value]
     if key is not None and SECRET_KEY_RE.search(key):
         return REDACTED
     if isinstance(value, str):

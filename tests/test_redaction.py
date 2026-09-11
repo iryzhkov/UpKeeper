@@ -20,6 +20,12 @@ def test_redacts_structured_secret_keys_recursively() -> None:
     assert result["items"][0]["password"] == REDACTED
 
 
+def test_opaque_secret_refs_remain_serializable() -> None:
+    assert redact({"secret_refs": ["secretref:codex-auth"]}) == {
+        "secret_refs": ["secretref:codex-auth"]
+    }
+
+
 def test_redacts_representative_secret_shapes() -> None:
     samples = [
         "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
