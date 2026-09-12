@@ -1,0 +1,52 @@
+{
+  "captured_at": "2026-09-12T14:00:34.527406Z",
+  "captured_from": "normandy",
+  "components": {
+    "agent-config": {
+      "files": [
+        {
+          "path": ".codex/AGENTS.md",
+          "sha256": "a14714e80053d5c57163c0b62caaaf83c67bf532013ca8623457f1ce66ad0ff9",
+          "store": "codex/AGENTS.md"
+        }
+      ],
+      "kind": "files"
+    },
+    "huyang": {
+      "build": [
+        "make",
+        "build"
+      ],
+      "commit": "f78e4448804df3c995ec88fdc13f4f79c5bac2f7",
+      "kind": "git-checkout",
+      "path": ".local/share/huyang",
+      "probe": {
+        "kind": "huyang-mcp",
+        "tools": 19
+      },
+      "ref": "feature/huyang",
+      "service": "huyang.service",
+      "source": "https://github.com/iryzhkov/huyang.git"
+    },
+    "omarchy-setup": {
+      "commit": "7b18d91d500475a1121d7e6c99efa604f750d34a",
+      "kind": "git-checkout",
+      "modules": [
+        "28-scripts",
+        "45-agents"
+      ],
+      "path": ".local/share/omarchy-setup",
+      "ref": "main",
+      "source": "https://github.com/iryzhkov/omarchy-setup.git"
+    },
+    "t3-steward": {
+      "installer": "t3-update",
+      "kind": "github-release",
+      "path": ".local/bin/t3-steward",
+      "repository": "iryzhkov/t3-steward",
+      "service": "t3-steward.service",
+      "version": "0.11.0-rc.1"
+    }
+  },
+  "schema_version": 1
+}
