@@ -124,6 +124,7 @@ def git_contains(checkout, ancestor, descendant):
 # ---- target-side lock ---------------------------------------------------------
 
 LOCK_DIR = HOME / ".local/state/dev-fleet/locks" / f"{HOST['name']}.lock"
+LOCK_STATE = {"owned": False}
 
 
 def acquire_lock():
@@ -136,14 +137,22 @@ def acquire_lock():
             owner = json.loads((LOCK_DIR / "owner.json").read_text())
         except (OSError, ValueError):
             pass
+        # When the controller is this machine it already holds the lock for this
+        # run in the same directory; re-entering our own run is not contention,
+        # and the controller, not this program, releases it.
+        if isinstance(owner, dict) and owner.get("run_id") == RUN_ID:
+            return None
         return owner or {"run_id": "unknown"}
     (LOCK_DIR / "owner.json").write_text(
         json.dumps(PAYLOAD["lock"], sort_keys=True) + "\n", encoding="utf-8"
     )
+    LOCK_STATE["owned"] = True
     return None
 
 
 def release_lock():
+    if not LOCK_STATE["owned"]:
+        return
     try:
         (LOCK_DIR / "owner.json").unlink()
         LOCK_DIR.rmdir()

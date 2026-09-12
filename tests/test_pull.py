@@ -126,6 +126,49 @@ def test_pull_locks_hosts_and_writes_a_run_record(tmp_path: Path) -> None:
     assert stored["result"] == "success" and stored["details"]["hosts"][0]["host"] == "homelab"
 
 
+def test_agent_reenters_a_lock_its_own_controller_holds(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    lock = home / ".local/state/dev-fleet/locks/normandy.lock"
+    lock.mkdir(parents=True)
+    (lock / "owner.json").write_text('{"run_id": "20260912T000000Z-deadbeef"}\n')
+    release = release_for(tmp_path)
+    payload = {
+        "run_id": "20260912T000000Z-deadbeef",
+        "dry_run": True,
+        "host": {"name": "normandy", "os_id": "omarchy"},
+        "components": ["agent-config"],
+        "manifest": release.manifest,
+        "stored_files": {"codex/AGENTS.md": "# Global agent instructions\n"},
+        "lock": {"run_id": "20260912T000000Z-deadbeef"},
+    }
+    environment = {**os.environ, "HOME": str(home), "XDG_RUNTIME_DIR": str(tmp_path / "run")}
+    completed = subprocess.run(
+        [sys.executable, "-"],
+        input=_agent_program(payload),
+        capture_output=True,
+        check=False,
+        text=True,
+        env=environment,
+        timeout=120,
+    )
+    report = json.loads(completed.stdout.splitlines()[-1])
+    assert report["result"] != "lock-contention"
+    # The controller's lock survives the agent; only the controller releases it.
+    assert (lock / "owner.json").exists()
+
+    (lock / "owner.json").write_text('{"run_id": "20260912T000001Z-cafebabe"}\n')
+    completed = subprocess.run(
+        [sys.executable, "-"],
+        input=_agent_program(payload),
+        capture_output=True,
+        check=False,
+        text=True,
+        env=environment,
+        timeout=120,
+    )
+    assert json.loads(completed.stdout.splitlines()[-1])["result"] == "lock-contention"
+
+
 def test_exit_codes_rank_worst_outcome_first() -> None:
     assert exit_code_for([{"reachable": True, "result": "converged"}]) == 0
     assert exit_code_for([{"reachable": True, "result": "ahead"}]) == 10
