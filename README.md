@@ -51,5 +51,5 @@ are reported as findings.
 - `docs/threat-model.md`: security boundaries.
 - `docs/recovery.md`: Forgejo-independent recovery design.
 
-The full audited plan remains at `/home/igor/Work/dev-fleet-plan.md`; Phase 2 must re-read it
+The full audited plan remains at `/home/igor/Work/plans/dev-fleet-plan.md`; Phase 2 must re-read it
 and the committed repository state before implementing any deployment behavior.

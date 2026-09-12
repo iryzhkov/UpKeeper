@@ -7,7 +7,7 @@ evidence, or a required decision is missing, stop safely and end with
 
 Before acting, follow the machine's AGENTS.md instructions and search OV memory. Re-read in full:
 
-- `/home/igor/Work/dev-fleet-plan.md`
+- `/home/igor/Work/plans/dev-fleet-plan.md`
 - `~/Work/dev-fleet/docs/discovery-2026-09-10.md`
 - every repository README and document relevant to architecture, recovery, threats, and handoff
 - `desired/components.yml`, inventory, tests, CI, and the complete git history/current status
