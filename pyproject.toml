@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 fleet = "dev_fleet.cli:main"
+upkeeper = "dev_fleet.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -39,3 +40,4 @@ ignore = ["S603", "S607"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108"]
 "src/dev_fleet/probe.py" = ["E501"]
+"src/dev_fleet/pull.py" = ["E501"]

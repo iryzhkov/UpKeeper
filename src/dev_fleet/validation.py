@@ -62,7 +62,8 @@ def validate_git_commit(value: str) -> str:
     return value
 
 
-def validate_home_relative_path(value: str) -> str:
+def validate_home_relative_path(value: str, roots: frozenset[str] | set[str] | None = None) -> str:
+    allowed = ALLOWED_HOME_ROOTS if roots is None else roots
     if not value or any(ord(char) < 32 for char in value):
         raise ValidationError("path is empty or contains control characters")
     path = PurePosixPath(value)
@@ -70,8 +71,8 @@ def validate_home_relative_path(value: str) -> str:
         raise ValidationError(f"path must be a normalized home-relative path: {value!r}")
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValidationError(f"path traversal is forbidden: {value!r}")
-    if path.parts[0] not in ALLOWED_HOME_ROOTS:
-        raise ValidationError(f"path must stay below .config or .local: {value!r}")
+    if path.parts[0] not in allowed:
+        raise ValidationError(f"path must stay below {', '.join(sorted(allowed))}: {value!r}")
     if str(path) != value:
         raise ValidationError(f"path is not normalized: {value!r}")
     return value
