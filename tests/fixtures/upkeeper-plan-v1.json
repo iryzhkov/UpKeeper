@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "deployment_id": "deployment-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_id": "20260911T120000Z-1234abcd",
+  "controller": "normandy",
+  "component": "disposable-service",
+  "hosts": ["normandy"],
+  "desired_revision": "2222222222222222222222222222222222222222",
+  "previous_revision": "1111111111111111111111111111111111111111",
+  "authority_ref": "authority-fixture",
+  "policy_evaluation_ref": "policy-fixture",
+  "backend": {
+    "kind": "homelab-ansible-v1",
+    "repository": "ssh://git@git.ryzhkov.dev/igor/homelab-infra.git",
+    "repository_revision": "3333333333333333333333333333333333333333",
+    "inventory": "inventory/disposable.yml",
+    "playbook": "playbooks/disposable.yml"
+  }
+}

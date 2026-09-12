@@ -3,9 +3,25 @@
 An audited Ansible deployment system for developer tooling on `laptop`, `omarchy-pc`
 (current SSH alias `gaming-pc`), `normandy`, and `homelab`.
 
-This repository is intentionally at the Phase 1 gate. It implements discovery, validation,
-redaction, run-record primitives, and deployment-lock primitives. It contains no mutating
-deployment role, reconciliation timer, remote bootstrap, or repair agent.
+Phase 1 read-only discovery remains unchanged. F03 adds a library-level UpKeeper mutation
+MVP with revision-fenced approval, durable effect records, reconciliation, rollback, and a
+bounded Ansible adapter. It is not a workflow coordinator and has not been deployed live.
+See `docs/upkeeper-mvp.md`.
+
+## Release commands
+
+```bash
+./scripts/upkeeper push                      # capture this machine, commit, push to all remotes
+./scripts/upkeeper push gitea --no-push      # capture and commit only
+./scripts/upkeeper pull --hosts homelab omarchy-pc --dry-run
+./scripts/upkeeper pull --all
+```
+
+`push` reads the running state of the controller (Huyang and omarchy-setup checkout
+commits, the installed t3-steward release, the Codex global instructions) into
+`desired/release.json`. `pull` converges named inventory hosts on that file over the
+same strict SSH transport the read-only commands use, observing before it changes
+anything and rolling a failed Huyang build back. See `docs/upkeeper-push-pull.md`.
 
 ## Read-only commands
 

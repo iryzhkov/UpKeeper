@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""UpKeeper entry point: the same CLI as scripts/fleet under the name the fleet uses."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from dev_fleet.cli import main
+
+raise SystemExit(main())
