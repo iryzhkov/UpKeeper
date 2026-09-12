@@ -292,7 +292,7 @@ def test_known_backend_failure_requires_observation_then_resumes(tmp_path: Path)
     upkeeper, store, locks = make_upkeeper(tmp_path, backend)
     checked = prepare(upkeeper, make_spec())
 
-    with pytest.raises(BackendFailure, match="refused before execution"):
+    with pytest.raises(RecoveryRequired, match="outcome is unknown"):
         upkeeper.apply(
             checked.spec.run_id,
             expected_revision=checked.revision,
@@ -300,8 +300,8 @@ def test_known_backend_failure_requires_observation_then_resumes(tmp_path: Path)
         )
 
     failed = store.load(checked.spec.run_id)
-    assert failed.events[-1].kind == "PHASE_FAILED"
-    assert locks.inspect("normandy").state == "absent"
+    assert failed.events[-1].data["state"] == EffectState.UNKNOWN.value
+    assert locks.inspect("normandy").state == "held"
 
     reconciled = upkeeper.reconcile(failed.spec.run_id, expected_revision=failed.revision)
     assert reconciled.events[-1].data["applied"] is False

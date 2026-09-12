@@ -119,6 +119,29 @@ def test_recovery_inventory_retains_owner_and_unavailable_sources() -> None:
         )
 
 
+def test_agent_environment_component_cannot_omit_its_contract() -> None:
+    with pytest.raises(ValueError, match="requires an environment contract"):
+        DeploymentSpec(
+            schema_version=1,
+            deployment_id="deployment-" + "b" * 32,
+            run_id="20260911T190000Z-f05f05f0",
+            controller="normandy",
+            component="agent-environment",
+            hosts=("normandy",),
+            desired_revision="b" * 40,
+            previous_revision="a" * 40,
+            authority_ref="authority-f05-canary",
+            policy_evaluation_ref="policy-f05-manual",
+            backend=BackendSpec(
+                kind="homelab-ansible-v1",
+                repository="ssh://git@git.ryzhkov.dev/igor/homelab-infra.git",
+                repository_revision="c" * 40,
+                inventory="inventory/agent-environment.yml",
+                playbook="playbooks/agent-environment.yml",
+            ),
+        )
+
+
 def test_spec_contains_references_not_secret_values() -> None:
     spec = environment_from_dict(load_raw())
     payload = environment_to_dict(spec)

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "adapter": "local-single-worker-v1",
   "host_profile": "normandy-codex-worker",
-  "worker_ids": ["f02-worker-canary"],
+  "worker_ids": ["normandy"],
   "phases": ["install", "activate", "probe", "rollback"],
   "assets": [
     {
@@ -69,7 +69,13 @@
       "probe_id": "instruction-effect-policy",
       "argv": ["/usr/bin/python3", "-m", "pytest", "tests/behavior/instructions.py"],
       "timeout_seconds": 120,
-      "safety_claims": ["explicit-effect-authority", "preserve-unexplained-changes"]
+      "safety_claims": ["explicit-effect-authority", "instruction-safety", "preserve-unexplained-changes"]
+    },
+    {
+      "probe_id": "skill-safety-policy",
+      "argv": ["/usr/bin/python3", "-m", "pytest", "tests/behavior/skills.py"],
+      "timeout_seconds": 120,
+      "safety_claims": ["skill-safety"]
     }
   ],
   "recovery_sources": [
@@ -78,5 +84,32 @@
     {"kind": "t3-thread", "owner": "T3", "root": "/home/igor/.local/share/t3"},
     {"kind": "worktree", "owner": "Git", "root": "/home/igor/Work"}
   ],
-  "secret_refs": ["secretref:codex-auth"]
+  "secret_refs": ["secretref:codex-auth"],
+  "previous_environment_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+  "prior_assets": [
+    {
+      "asset_id": "codex-harness",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "size_bytes": 6,
+      "active_path": "/home/igor/.codex/config.toml"
+    },
+    {
+      "asset_id": "global-agent-instructions",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "size_bytes": 7,
+      "active_path": "/home/igor/.codex/AGENTS.md"
+    },
+    {
+      "asset_id": "huyang-mcp",
+      "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "size_bytes": 8,
+      "active_path": "/home/igor/.local/bin/huyang"
+    },
+    {
+      "asset_id": "ov-memory-skill",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "size_bytes": 9,
+      "active_path": "/home/igor/.config/agents/ov-memory.md"
+    }
+  ]
 }

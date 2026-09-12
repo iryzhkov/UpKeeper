@@ -1,0 +1,58 @@
+{
+  "backup_restoration": {
+    "exact": true,
+    "objects": 30,
+    "sha256": "8b8a23527f204ac19e496a33bbbb8cad0b5d6fd79f59b8ca09ab146c79afa040"
+  },
+  "completed_workflows": 30,
+  "duplicate_external_effects": 0,
+  "effect_attempts": 72,
+  "evidence_sha256": "a7990b178c5a39d4918b2513febe9ee5971a91e1e91759f2586628a4fd7790f4",
+  "fault_injections": 42,
+  "fault_repetitions": {
+    "delayed-observation": 3,
+    "detached-success-unreachable-commit": 3,
+    "dirty-worktree": 3,
+    "duplicated-observation": 3,
+    "huyang-unavailable": 3,
+    "interrupted-settlement": 3,
+    "interrupted-verification": 3,
+    "lease-expiry-live-t3-thread": 3,
+    "missing-observation": 3,
+    "missing-worktree": 3,
+    "stale-observation": 3,
+    "steward-restart-during-rollout": 3,
+    "upkeeper-restart-during-steward-update": 3,
+    "worker-reboot": 3
+  },
+  "findings": [],
+  "h04_fixture_sha256": "d8d9d51ac81269db626600460f61f33d7b54f4ba10d10acc913fc7c5fe203711",
+  "kind": "accelerated-regression",
+  "leaked_locks": 0,
+  "leaked_sessions": 0,
+  "leaked_worktrees": 0,
+  "lost_work": 0,
+  "open_severity_1": 0,
+  "open_severity_2": 0,
+  "passed": true,
+  "recovery_objective_seconds": {
+    "max": 0.00313,
+    "p95": 0.000592,
+    "passed": true,
+    "threshold": 1.0
+  },
+  "schema_version": 1,
+  "source_revision": "1047210b641995978554b3d39c5e93633b8b782c",
+  "stage": "H05",
+  "starved_workflows": 0,
+  "unreconciled_ambiguous_states": 0,
+  "workflow_count": 30,
+  "workflow_kinds": {
+    "ambiguous-effect-reconciliation": 5,
+    "bounded-rollout": 5,
+    "detached-attempt-cleanup": 5,
+    "read-only-discovery": 5,
+    "rollback": 5,
+    "source-verification": 5
+  }
+}

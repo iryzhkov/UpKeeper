@@ -1,0 +1,18 @@
+{
+  "decision": "NOT_RELEASED",
+  "decision_sha256": "aab1b1e89fa17b6bb7812c4c5818814bb6d15036df11afa056b955545cc0dd58",
+  "evidence": {
+    "accelerated": "a7990b178c5a39d4918b2513febe9ee5971a91e1e91759f2586628a4fd7790f4",
+    "quota": "93142af07f849537b5b2712ca096c511d0d95fe09db5b45ea3b7d9e3a4fc4c60",
+    "soak": "e3fcdd047849ccbb8a168a2fc9f8decb6f1bfdd796134c08173f0e0288dc1227"
+  },
+  "ordinary_unattended_scheduling_allowed": false,
+  "rollback_state": "UNCHANGED_NO_LIVE_EFFECTS",
+  "schema_version": 1,
+  "source_revision": "1047210b641995978554b3d39c5e93633b8b782c",
+  "stage": "H05",
+  "unmet_gates": [
+    "72-hour sustained mixed-workload soak",
+    "independent quota admission qualification"
+  ]
+}

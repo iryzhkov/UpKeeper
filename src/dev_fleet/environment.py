@@ -29,6 +29,14 @@ _ASSET_KINDS = frozenset(
 )
 _RECOVERY_KINDS = frozenset({"lease", "t3-thread", "huyang-journal", "worktree"})
 _SECRET_REF_PREFIX = "secretref:"  # noqa: S105
+_REQUIRED_SAFETY_CLAIMS = frozenset(
+    {
+        "explicit-effect-authority",
+        "instruction-safety",
+        "preserve-unexplained-changes",
+        "skill-safety",
+    }
+)
 
 
 def _digest(value: str, field: str) -> str:
@@ -45,14 +53,20 @@ def _safe_text(value: str, field: str) -> str:
 
 def _absolute(value: str, field: str) -> str:
     path = Path(value)
-    if not path.is_absolute() or ".." in path.parts:
+    if not path.is_absolute() or ".." in path.parts or str(path) != value:
         raise ValueError(f"{field} must be an absolute normalized path")
     return str(path)
 
 
 def _relative(value: str, field: str) -> str:
     path = Path(value)
-    if not value or path.is_absolute() or ".." in path.parts or "." in path.parts:
+    if (
+        not value
+        or path.is_absolute()
+        or ".." in path.parts
+        or "." in path.parts
+        or str(path) != value
+    ):
         raise ValueError(f"{field} must be a normalized relative path")
     return str(path)
 
@@ -98,6 +112,23 @@ class ManagedAsset:
 
 
 @dataclass(frozen=True)
+class PriorAsset:
+    """Exact active identity in the coherent rollback environment."""
+
+    asset_id: str
+    sha256: str
+    size_bytes: int
+    active_path: str
+
+    def __post_init__(self) -> None:
+        _safe_text(self.asset_id, "prior asset_id")
+        _digest(self.sha256, "prior asset sha256")
+        if self.size_bytes < 0:
+            raise ValueError("prior asset size_bytes must be nonnegative")
+        _absolute(self.active_path, "prior active_path")
+
+
+@dataclass(frozen=True)
 class ProjectInstructionRef:
     repository: str
     repository_revision: str
@@ -123,18 +154,18 @@ class BehavioralProbe:
 
     def __post_init__(self) -> None:
         _safe_text(self.probe_id, "probe_id")
-        if (
-            not self.argv
-            or not Path(self.argv[0]).is_absolute()
-            or any(not item or "\x00" in item for item in self.argv)
-        ):
+        if not self.argv or not Path(self.argv[0]).is_absolute():
             raise ValueError(
                 "probe argv must be a nonempty argument vector with absolute executable"
             )
+        for item in self.argv:
+            _safe_text(item, "probe argv item")
         if not 1 <= self.timeout_seconds <= 300:
             raise ValueError("probe timeout must be between 1 and 300 seconds")
         if not self.safety_claims or tuple(sorted(set(self.safety_claims))) != self.safety_claims:
             raise ValueError("safety_claims must be nonempty, unique, and sorted")
+        for claim in self.safety_claims:
+            _safe_text(claim, "safety claim")
 
 
 @dataclass(frozen=True)
@@ -162,6 +193,8 @@ class AgentEnvironmentSpec:
     probes: tuple[BehavioralProbe, ...]
     recovery_sources: tuple[RecoverySource, ...]
     secret_refs: tuple[str, ...]
+    previous_environment_revision: str
+    prior_assets: tuple[PriorAsset, ...]
 
     def __post_init__(self) -> None:
         if self.schema_version != 1:
@@ -186,8 +219,36 @@ class AgentEnvironmentSpec:
             raise ValueError("assets must be sorted by activation_order")
         if len({item.active_path for item in self.assets}) != len(self.assets):
             raise ValueError("active paths must be unique")
+        if len({item.staged_path for item in self.assets}) != len(self.assets):
+            raise ValueError("staged paths must be unique")
+        if any(
+            _paths_overlap(staged.staged_path, active.active_path)
+            for staged in self.assets
+            for active in self.assets
+        ):
+            raise ValueError("all install staging paths must be distinct from active paths")
+        _digest(self.previous_environment_revision, "previous_environment_revision")
+        prior_ids = tuple(item.asset_id for item in self.prior_assets)
+        if prior_ids != tuple(item.asset_id for item in self.assets):
+            raise ValueError("prior assets must exactly cover desired assets in canonical order")
+        if tuple(item.active_path for item in self.prior_assets) != tuple(
+            item.active_path for item in self.assets
+        ):
+            raise ValueError("prior assets must restore the same active paths")
+        instruction_ids = tuple(_instruction_id(item) for item in self.project_instructions)
+        if not instruction_ids or tuple(sorted(set(instruction_ids))) != instruction_ids:
+            raise ValueError("project instruction identities must be nonempty, unique, and sorted")
+        safety_claims = {
+            claim for probe in self.probes for claim in probe.safety_claims
+        }
+        if not _REQUIRED_SAFETY_CLAIMS <= safety_claims:
+            raise ValueError("fixed probes do not cover required instruction and skill safety")
         for ref in self.secret_refs:
-            if not ref.startswith(_SECRET_REF_PREFIX):
+            _safe_text(ref, "secret reference")
+            suffix = ref.removeprefix(_SECRET_REF_PREFIX)
+            if not ref.startswith(_SECRET_REF_PREFIX) or not suffix or any(
+                not (char.isalnum() or char in "-._/") for char in suffix
+            ):
                 raise ValueError("only opaque secretref: identifiers are allowed")
         if tuple(sorted(set(self.secret_refs))) != self.secret_refs:
             raise ValueError("secret_refs must be unique and sorted")
@@ -222,6 +283,13 @@ class ProbeResult:
     evidence_sha256: str
 
     def __post_init__(self) -> None:
+        _safe_text(self.probe_id, "probe result id")
+        if not isinstance(self.passed, bool):
+            raise ValueError("probe result passed must be boolean")
+        if tuple(sorted(set(self.safety_claims))) != self.safety_claims:
+            raise ValueError("probe result safety_claims must be unique and sorted")
+        for claim in self.safety_claims:
+            _safe_text(claim, "probe result safety claim")
         _digest(self.evidence_sha256, "probe evidence sha256")
 
 
@@ -253,12 +321,27 @@ def environment_to_dict(spec: AgentEnvironmentSpec) -> dict[str, Any]:
         "probes",
         "recovery_sources",
         "secret_refs",
+        "prior_assets",
     ):
         value[field] = list(value[field])
     for probe in value["probes"]:
         probe["argv"] = list(probe["argv"])
         probe["safety_claims"] = list(probe["safety_claims"])
     return value
+
+
+def _instruction_id(ref: ProjectInstructionRef) -> str:
+    return f"{ref.repository}@{ref.repository_revision}:{ref.path}"
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    left_path = Path(left)
+    right_path = Path(right)
+    return (
+        left_path == right_path
+        or left_path in right_path.parents
+        or right_path in left_path.parents
+    )
 
 
 def environment_from_dict(raw: Mapping[str, Any]) -> AgentEnvironmentSpec:
@@ -274,6 +357,8 @@ def environment_from_dict(raw: Mapping[str, Any]) -> AgentEnvironmentSpec:
             "probes",
             "recovery_sources",
             "secret_refs",
+            "previous_environment_revision",
+            "prior_assets",
         }
     )
     value = _strict(raw, fields, "AgentEnvironmentSpec")
@@ -295,6 +380,7 @@ def environment_from_dict(raw: Mapping[str, Any]) -> AgentEnvironmentSpec:
         for item in value["probes"]
     )
     value["recovery_sources"] = tuple(RecoverySource(**item) for item in value["recovery_sources"])
+    value["prior_assets"] = tuple(PriorAsset(**item) for item in value["prior_assets"])
     return AgentEnvironmentSpec(**value)
 
 
@@ -343,6 +429,162 @@ def behavior_is_equivalent_or_stricter(
         and new[name].passed
         and required[name] <= set(old[name].safety_claims)
         and set(old[name].safety_claims) <= set(new[name].safety_claims)
+        for name in required
+    )
+
+
+def environment_phase_verdict(
+    spec: AgentEnvironmentSpec,
+    phase: str,
+    raw: Any,
+) -> bool | None:
+    """Validate exact, phase-specific environment evidence.
+
+    ``None`` is ambiguity: missing/malformed evidence or an unexplained path must
+    retain the target lock for observation.  ``False`` is an explained mismatch
+    that may use the separately journaled rollback transition.
+    """
+    if phase not in {"install", "activate", "run", "observe", "rollback"}:
+        raise ValueError(f"unsupported environment phase: {phase}")
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        value = _strict(
+            raw,
+            frozenset(
+                {
+                    "schema_version",
+                    "host_profile",
+                    "worker_id",
+                    "installed_environment_revision",
+                    "active_environment_revision",
+                    "worker_ready",
+                    "installed_assets",
+                    "active_assets",
+                    "project_instructions",
+                    "baseline_probes",
+                    "candidate_probes",
+                    "unexplained_paths",
+                    "preserved_unexplained_paths",
+                }
+            ),
+            "environment evidence",
+        )
+        if value["schema_version"] != 1:
+            return None
+        if value["host_profile"] != spec.host_profile or value["worker_id"] != spec.worker_ids[0]:
+            return False
+        unexplained = value["unexplained_paths"]
+        preserved = value["preserved_unexplained_paths"]
+        if (
+            not isinstance(unexplained, list)
+            or any(not isinstance(path, str) or not path for path in unexplained)
+            or not isinstance(preserved, list)
+            or any(not isinstance(path, str) or not path for path in preserved)
+        ):
+            return None
+        if unexplained != sorted(set(unexplained)) or preserved != sorted(set(preserved)):
+            return None
+        for path in (*unexplained, *preserved):
+            _absolute(path, "unexplained path")
+        if unexplained and (phase != "rollback" or preserved != unexplained):
+            return None
+        if phase != "rollback" and preserved:
+            return None
+        baseline = _probe_results(value["baseline_probes"])
+        candidate = _probe_results(value["candidate_probes"])
+        if baseline is None or candidate is None:
+            return None
+        instructions = value["project_instructions"]
+        if not isinstance(instructions, Mapping) or dict(instructions) != {
+            _instruction_id(item): item.sha256 for item in spec.project_instructions
+        }:
+            return False
+
+        forward = phase != "rollback"
+        installed_revision = spec.revision if forward else spec.previous_environment_revision
+        active_revision = (
+            spec.previous_environment_revision
+            if phase == "install"
+            else spec.revision
+            if forward
+            else spec.previous_environment_revision
+        )
+        installed_assets = spec.assets if forward else spec.prior_assets
+        active_assets = spec.prior_assets if phase == "install" else installed_assets
+        checks = (
+            value["installed_environment_revision"] == installed_revision,
+            value["active_environment_revision"] == active_revision,
+            _asset_map_matches(value["installed_assets"], installed_assets),
+            _asset_map_matches(value["active_assets"], active_assets),
+        )
+        if any(item is None for item in checks):
+            return None
+        if not all(checks):
+            return False
+
+        if phase == "activate":
+            if value["worker_ready"] is not False:
+                return False
+        elif value["worker_ready"] is not True:
+            return False
+
+        if phase == "rollback":
+            return _baseline_passes(spec.probes, baseline)
+        return behavior_is_equivalent_or_stricter(spec.probes, baseline, candidate)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _asset_map_matches(raw: Any, assets: Sequence[ManagedAsset | PriorAsset]) -> bool | None:
+    if not isinstance(raw, Mapping):
+        return None
+    expected = {item.asset_id: item.sha256 for item in assets}
+    if set(raw) != set(expected) or any(not isinstance(key, str) for key in raw):
+        return None
+    if any(value is not None and not isinstance(value, str) for value in raw.values()):
+        return None
+    return dict(raw) == expected
+
+
+def _probe_results(raw: Any) -> tuple[ProbeResult, ...] | None:
+    if not isinstance(raw, list) or any(not isinstance(item, Mapping) for item in raw):
+        return None
+    try:
+        results = tuple(
+            ProbeResult(
+                probe_id=value["probe_id"],
+                passed=value["passed"],
+                safety_claims=tuple(value["safety_claims"]),
+                evidence_sha256=value["evidence_sha256"],
+            )
+            for item in raw
+            for value in (
+                _strict(
+                    item,
+                    frozenset(
+                        {"probe_id", "passed", "safety_claims", "evidence_sha256"}
+                    ),
+                    "probe evidence",
+                ),
+            )
+        )
+        identities = tuple(item.probe_id for item in results)
+        if identities != tuple(sorted(set(identities))):
+            return None
+        return results
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _baseline_passes(
+    probes: Sequence[BehavioralProbe], baseline: Sequence[ProbeResult]
+) -> bool:
+    required = {item.probe_id: set(item.safety_claims) for item in probes}
+    observed = {item.probe_id: item for item in baseline}
+    return set(observed) == set(required) and all(
+        observed[name].passed
+        and required[name] <= set(observed[name].safety_claims)
         for name in required
     )
 

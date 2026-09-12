@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "seed": 20260911,
+  "campaign_id": "h04-cross-component-20260911",
+  "owners": [
+    "t3-steward",
+    "T3",
+    "Huyang",
+    "UpKeeper",
+    "Git",
+    "target"
+  ],
+  "scenarios": [
+    {
+      "fault_id": "steward-restart-during-rollout",
+      "fault": "restart",
+      "owner": "t3-steward",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "upkeeper-restart-during-steward-update",
+      "fault": "restart",
+      "owner": "UpKeeper",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "lease-expiry-live-t3-thread",
+      "fault": "expired-lease-live-thread",
+      "owner": "t3-steward",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "huyang-unavailable",
+      "fault": "unavailable",
+      "owner": "Huyang",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "dirty-worktree",
+      "fault": "dirty",
+      "owner": "Git",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "missing-worktree",
+      "fault": "missing",
+      "owner": "Git",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "interrupted-verification",
+      "fault": "interrupted",
+      "owner": "Huyang",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "interrupted-settlement",
+      "fault": "interrupted",
+      "owner": "T3",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "worker-reboot",
+      "fault": "restart",
+      "owner": "target",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "delayed-observation",
+      "fault": "delayed",
+      "owner": "target",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "stale-observation",
+      "fault": "stale",
+      "owner": "target",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "duplicated-observation",
+      "fault": "duplicate",
+      "owner": "target",
+      "expected": "CONVERGED"
+    },
+    {
+      "fault_id": "missing-observation",
+      "fault": "missing",
+      "owner": "target",
+      "expected": "RECOVERY_REQUIRED"
+    },
+    {
+      "fault_id": "detached-success-unreachable-commit",
+      "fault": "cleanup-before-durable-ref",
+      "owner": "Git",
+      "expected": "RECOVERY_REQUIRED"
+    }
+  ]
+}

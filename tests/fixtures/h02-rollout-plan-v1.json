@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "hosts": ["homelab", "laptop", "normandy", "omarchy-pc"],
+  "canary_hosts": ["normandy"],
+  "batch_size": 2,
+  "soak_seconds": 3600
+}
