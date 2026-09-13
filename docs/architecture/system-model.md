@@ -36,6 +36,13 @@ and records a durable host hold before dispatch. Uncertain or failed effects ret
 for operator observation, preventing automatic daily retries. It posts only changes or failures.
 See [scheduled convergence](../scheduled-convergence.md) for installation and recovery.
 
+U4 adds the laptop's own timer. It refreshes only fast-forward main commits whose
+exact GitHub push gate passed, then re-executes that code and uses the local-only
+self-pull transaction. The self-managed inventory flag prevents controller pulls
+from probing or dispatching to the laptop. Its local journal/run record, not a
+controller skip, is the deployment observation. Worker enrollment remains separate.
+See [laptop convergence](../laptop-self-convergence.md).
+
 ## State and ownership
 
 | State | Authority / mutator | Copies, freshness and recovery |

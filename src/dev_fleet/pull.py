@@ -883,7 +883,8 @@ def check_reachable(spec: HostSpec) -> dict[str, Any] | None:
 
 def exit_code_for(hosts: list[dict[str, Any]]) -> int:
     states = {host.get("result") for host in hosts}
-    offline = any(not host.get("reachable") and not host.get("skipped_unreachable") for host in hosts)
+    offline = any(not host.get("reachable") and not host.get("skipped_unreachable")
+                  and not host.get("self_managed") for host in hosts)
     if "rollback-failed" in states:
         return EXIT_ROLLBACK
     if "failed" in states or "rolled-back" in states:
@@ -953,6 +954,10 @@ def pull_fleet(
         runner_options["local_only"] = True
     for name in hosts:
         spec = config.hosts[name]
+        if spec.self_managed and not self_only:
+            results.append({"host": name, "reachable": False, "result": "skipped",
+                            "self_managed": True, "error": "converges through its local timer"})
+            continue
         if skip_unreachable:
             preflight = reachability(spec)
             if preflight is not None:

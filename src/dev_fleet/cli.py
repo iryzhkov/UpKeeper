@@ -151,6 +151,9 @@ def _print_pull(report: dict[str, Any]) -> None:
         f"exit={report['exit_code']}{mode}"
     )
     for host in report["hosts"]:
+        if host.get("self_managed"):
+            print(f"{host['host']}: self-managed (local timer; no controller SSH)")
+            continue
         if not host.get("reachable"):
             print(f"{host['host']}: offline ({host.get('error', 'unreachable')})")
             if host.get("stderr"):

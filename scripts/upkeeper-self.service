@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the gated UpKeeper release and converge this laptop
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.local/share/dev-fleet
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/.local/share/dev-fleet/scripts/upkeeper-self-pull
+TimeoutStartSec=45min
+UMask=0077

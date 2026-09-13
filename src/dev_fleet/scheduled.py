@@ -21,7 +21,7 @@ class ScheduledRunner:
         self.directory = directory
         self.runner = runner
 
-    def __call__(self, spec, program, *, timeout):
+    def __call__(self, spec, program, *, timeout, local_only=False):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         marker = self.directory / (spec.name + ".hold")
         try:
@@ -38,7 +38,8 @@ class ScheduledRunner:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-        result = self.runner(spec, program, timeout=timeout)
+        options = {"local_only": True} if local_only else {}
+        result = self.runner(spec, program, timeout=timeout, **options)
         # Only a complete, understood result allows the next daily observation.
         if result.get("reachable") and result.get("result") in {
             "converged", "updated", "ahead", "deferred", "lock-contention"

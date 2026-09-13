@@ -12,8 +12,10 @@ and the relationship between both mutation paths. The Citadel replan at
 U0 adds the T3 pair, F05 agent environment and the S4 worker bootstrap distribution
 contract. U1 removes the legacy self-update path and adds operator rollback from committed
 release manifests, with historical companion files and current deployment safeguards.
-U2 adds pull --self; the laptop converges through that path. Do not enroll workers
-as part of release distribution.
+U2 adds pull --self. U3 schedules Normandy convergence. U4 refreshes GitHub-gated
+main and converges the self-managed laptop locally from its own timer, without
+controller SSH. See docs/laptop-self-convergence.md. Do not enroll workers as
+part of release distribution.
 
 Use Huyang for repository reads, searches and edits. Run make gate before commits.
 Land normal-prose commits on main and push both remotes. The user's U0 decision

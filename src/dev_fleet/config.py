@@ -37,6 +37,7 @@ class HostSpec:
     stable_name: str | None = None
     nebula_address: str | None = None
     setup_checkout: str | None = None
+    self_managed: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,8 @@ def load_inventory(path: Path) -> dict[str, HostSpec]:
             validate_host_name(raw["ssh_alias"])
         if raw.get("setup_checkout") is not None:
             validate_home_relative_path(raw["setup_checkout"], frozenset({".local", "Work"}))
+        if not isinstance(raw.get("self_managed", False), bool):
+            raise ValidationError(f"{name}.self_managed must be boolean")
         hosts[name] = HostSpec(
             name=name,
             address=address,
@@ -117,6 +120,7 @@ def load_inventory(path: Path) -> dict[str, HostSpec]:
             stable_name=raw.get("stable_name"),
             nebula_address=raw.get("nebula_address"),
             setup_checkout=raw.get("setup_checkout"),
+            self_managed=raw.get("self_managed", False),
         )
     return hosts
 

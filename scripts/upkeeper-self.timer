@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily local UpKeeper convergence
+
+[Timer]
+OnCalendar=*-*-* 09:00
+OnStartupSec=5min
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
