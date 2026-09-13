@@ -164,6 +164,25 @@ def test_historical_steward_uses_pinned_installer_and_candidate_range(tmp_path):
     assert len(calls) == 1
 
 
+def test_inventory_setup_checkout_is_explicit_and_contained(tmp_path):
+    from pathlib import Path
+
+    from dev_fleet.config import load_inventory
+
+    root = Path(__file__).resolve().parents[1]
+    source = root / "inventory/hosts.yml"
+    assert load_inventory(source)["laptop"].setup_checkout == "Work/omarchy-setup"
+    import json
+
+    raw = json.loads(source.read_text())
+    path = tmp_path / "inventory.json"
+    for bad in ("../outside", "/tmp/outside", "Work/../outside", ".ssh"):
+        raw["all"]["hosts"]["laptop"]["setup_checkout"] = bad
+        path.write_text(json.dumps(raw))
+        with pytest.raises(ValidationError):
+            load_inventory(path)
+
+
 def test_retired_modules_are_refused_without_running_setup(tmp_path):
     ns = remote_namespace(tmp_path)
     ns["must"] = lambda *a, **kw: pytest.fail("retired installer must not execute")

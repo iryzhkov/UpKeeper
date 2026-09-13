@@ -59,6 +59,8 @@ HOST = PAYLOAD["host"]
 RUN_ID = PAYLOAD["run_id"]
 DRY_RUN = PAYLOAD["dry_run"]
 COMPONENTS = PAYLOAD["manifest"]["components"]
+if HOST.get("setup_checkout") and "omarchy-setup" in COMPONENTS:
+    COMPONENTS["omarchy-setup"] = dict(COMPONENTS["omarchy-setup"], path=HOST["setup_checkout"])
 SELECTED = PAYLOAD["components"]
 STORED = PAYLOAD["stored_files"]
 ENV = dict(os.environ)
@@ -900,7 +902,7 @@ def pull_fleet(
             "run_id": run_id,
             "retire_updater": True,
             "dry_run": dry_run,
-            "host": {"name": name, "os_id": spec.os_id},
+            "host": {"name": name, "os_id": spec.os_id, "setup_checkout": spec.setup_checkout},
             "components": selected_components,
             "manifest": release.manifest,
             "stored_files": stored,

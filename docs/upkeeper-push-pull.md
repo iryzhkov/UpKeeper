@@ -59,7 +59,9 @@ U0 leaves the worker hosts map empty.
 
 The controller validates and carries an in-memory Python module bundle and release
 payload over argument-vector SSH with BatchMode, StrictHostKeyChecking and bounded
-timeouts. Inventory machine identity selects local execution. Targets never read the
+timeouts. Inventory machine identity selects local execution. Optional setup_checkout locates
+an existing host checkout (the laptop uses Work/omarchy-setup); it does not clone,
+relocate or bootstrap it. Inventory paths are validated under .local or Work. Targets never read the
 repository. The planned --self exception belongs to U2.
 
 Each host is locked on controller and target; dry run observes without writes or service

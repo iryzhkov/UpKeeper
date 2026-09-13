@@ -36,6 +36,7 @@ class HostSpec:
     ssh_alias: str | None = None
     stable_name: str | None = None
     nebula_address: str | None = None
+    setup_checkout: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ def load_inventory(path: Path) -> dict[str, HostSpec]:
                 validate_address(raw[optional_address])
         if raw.get("ssh_alias") is not None:
             validate_host_name(raw["ssh_alias"])
+        if raw.get("setup_checkout") is not None:
+            validate_home_relative_path(raw["setup_checkout"], frozenset({".local", "Work"}))
         hosts[name] = HostSpec(
             name=name,
             address=address,
@@ -113,6 +116,7 @@ def load_inventory(path: Path) -> dict[str, HostSpec]:
             ssh_alias=raw.get("ssh_alias"),
             stable_name=raw.get("stable_name"),
             nebula_address=raw.get("nebula_address"),
+            setup_checkout=raw.get("setup_checkout"),
         )
     return hosts
 
