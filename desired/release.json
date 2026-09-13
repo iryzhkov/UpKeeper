@@ -1928,7 +1928,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.10"
+        "steward_version": "0.11.0-rc.11"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -1940,8 +1940,9 @@
       "kind": "github-release",
       "path": ".local/bin/t3-steward",
       "repository": "iryzhkov/t3-steward",
+      "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
       "service": "t3-steward.service",
-      "version": "0.11.0-rc.10"
+      "version": "0.11.0-rc.11"
     },
     "worker-configuration": {
       "hosts": {

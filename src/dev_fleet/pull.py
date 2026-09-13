@@ -542,11 +542,40 @@ def verify_pair_binary(binary):
     return bounds
 
 
+def steward_session_hook(spec):
+    """Only the explicitly pinned hook is managed; legacy releases are unchanged."""
+    return HOME / ".config/opencode/plugins/steward-session.js"
+
+
+def session_hook_converged(spec):
+    expected = spec.get("session_hook_sha256")
+    if not expected:
+        return True
+    path = steward_session_hook(spec)
+    return not path.is_symlink() and path.is_file() and sha256_file(path) == expected
+
+
+def stage_session_hook(tar, stage, spec):
+    expected = spec.get("session_hook_sha256")
+    if not expected:
+        return None
+    member = tar.getmember("packaging/opencode/steward-session.js")
+    if not member.isfile() or member.size > 64 * 1024:
+        raise StepFailed("invalid steward session hook member")
+    body = tar.extractfile(member).read()
+    if hashlib.sha256(body).hexdigest() != expected:
+        raise StepFailed("steward session hook checksum mismatch")
+    candidate = stage / "steward-session.js"
+    candidate.write_bytes(body)
+    candidate.chmod(0o644)
+    return candidate
+
+
 def apply_pinned_steward(spec, before, actions):
     binary = HOME / spec["path"]
     if before["version"] and before["version"].removeprefix("v") == spec["version"]:
         verify_pair_binary(binary)
-        if before["service_active"]:
+        if before["service_active"] and session_hook_converged(spec):
             return "converged"
     if DRY_RUN:
         actions.append("would install and verify pinned steward " + spec["version"])
@@ -583,6 +612,7 @@ def apply_pinned_steward(spec, before, actions):
                 candidate = stage / "t3-steward"
                 candidate.write_bytes(tar.extractfile(member).read())
                 candidate.chmod(0o755)
+                hook_candidate = stage_session_hook(tar, stage, spec)
             bounds = verify_pair_binary(candidate)
             current_t3 = observe_t3(COMPONENTS.get("t3", {"service": "t3code.service"}))
             if (not current_t3["check_ok"] or not current_t3["served"] or not numeric_version(bounds[0]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds[1])):
@@ -593,6 +623,16 @@ def apply_pinned_steward(spec, before, actions):
             raise StepFailed("steward artifact fetch failed: " + type(exc).__name__) from None
         backup = HOME / ".local/state/dev-fleet/binary-rollbacks" / RUN_ID
         backup.parent.mkdir(parents=True, exist_ok=True)
+        hook_path = steward_session_hook(spec)
+        hook_before = None
+        hook_mode = None
+        hook_installed = False
+        if hook_candidate is not None:
+            if hook_path.is_symlink() or (hook_path.exists() and not hook_path.is_file()):
+                raise StepFailed("session hook destination is not a regular file")
+            if hook_path.exists():
+                hook_before = hook_path.read_bytes()
+                hook_mode = hook_path.stat().st_mode & 0o777
         existed = binary.exists()
         if existed:
             shutil.copy2(binary, backup)
@@ -603,11 +643,29 @@ def apply_pinned_steward(spec, before, actions):
                 raise StepFailed("steward staging path already exists")
             shutil.copy2(candidate, temporary)
             os.replace(temporary, binary)
+            if hook_candidate is not None:
+                hook_path.parent.mkdir(parents=True, exist_ok=True)
+                hook_tmp = hook_path.with_name(hook_path.name + ".upkeeper-tmp")
+                with hook_tmp.open("xb") as stream:
+                    stream.write(hook_candidate.read_bytes())
+                hook_tmp.chmod(0o644)
+                os.replace(hook_tmp, hook_path)
+                hook_installed = True
             must(["systemctl", "--user", "restart", spec["service"]], what="restart pinned steward")
             verify_pair_binary(binary)
             if not unit_active(spec["service"]):
                 raise StepFailed("pinned steward service is inactive")
         except Exception:
+            hook_restore_failed = False
+            if hook_installed:
+                try:
+                    if hook_before is None:
+                        hook_path.unlink(missing_ok=True)
+                    else:
+                        hook_path.write_bytes(hook_before)
+                        hook_path.chmod(hook_mode)
+                except OSError:
+                    hook_restore_failed = True
             if not existed:
                 binary.unlink(missing_ok=True)
                 raise StepFailed("new steward failed; removed unverified binary") from None
@@ -619,8 +677,12 @@ def apply_pinned_steward(spec, before, actions):
                     raise StepFailed("previous steward did not verify")
             except Exception:
                 raise StepFailed("rollback failed: steward restoration failed") from None
-            raise RolledBack("restored previous steward binary and service") from None
+            if hook_restore_failed:
+                raise StepFailed("steward restored but session hook restoration failed") from None
+            raise RolledBack("restored previous steward binary, service and session hook") from None
     actions.append("installed verified pinned steward " + spec["version"])
+    if spec.get("session_hook_sha256"):
+        actions.append("installed verified OpenCode caller hook; loaded by new OpenCode servers")
     return "updated"
 
 

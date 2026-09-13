@@ -232,6 +232,10 @@ def validate_release(manifest: dict[str, Any]) -> Release:
             if not GITHUB_REPOSITORY_RE.fullmatch(_string(component, "repository", name)):
                 raise ValidationError(f"{name}.repository must be owner/name")
             validate_release_version(_string(component, "version", name), name)
+            if "session_hook_sha256" in component and not SHA256_RE.fullmatch(
+                _string(component, "session_hook_sha256", name)
+            ):
+                raise ValidationError("invalid steward session hook checksum")
             validate_home_relative_path(_string(component, "path", name), RELEASE_HOME_ROOTS)
             installer = "upkeeper" if "t3" in components else "t3-update"
             if component.get("installer") != installer:
@@ -412,6 +416,15 @@ def capture_release(
     for name in ("omarchy-setup", "huyang"):
         _capture_checkout(runner, home, name, components[name])
     _capture_steward(runner, home, "t3-steward", components["t3-steward"])
+    hook_hash = components["t3-steward"].get("session_hook_sha256")
+    if hook_hash:
+        hook_path = home / ".config/opencode/plugins/steward-session.js"
+        if (
+            hook_path.is_symlink()
+            or not hook_path.is_file()
+            or hashlib.sha256(hook_path.read_bytes()).hexdigest() != hook_hash
+        ):
+            raise CaptureError("installed OpenCode session hook does not match the reviewed pin")
     components["t3"] = _capture_t3(runner, home, components["t3-steward"])
     components["t3-steward"]["installer"] = "upkeeper"
     provenance = ProjectInstructionRef(
