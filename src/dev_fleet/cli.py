@@ -22,6 +22,7 @@ from .push import PushError, configured_remotes, push_release
 from .redaction import redact, redact_text
 from .release import COMPONENT_ORDER, CaptureError, load_release
 from .reporting import _controller, _manifest_commit, build_doctor_report, build_status_report
+from .rollback import load_historical_release
 from .validation import ValidationError, parse_host_selector, validate_host_name
 
 
@@ -79,16 +80,17 @@ def _parser() -> argparse.ArgumentParser:
     push.add_argument("--no-push", action="store_true", help="commit but do not push")
     push.add_argument("--json", action="store_true", dest="as_json")
 
-    pull = subparsers.add_parser("pull", help="converge hosts on the committed release manifest")
-    group = pull.add_mutually_exclusive_group(required=True)
-    group.add_argument("--hosts", nargs="+", metavar="HOST", help="exact canonical inventory names")
-    group.add_argument("--all", action="store_true", help="every inventory host")
-    pull.add_argument(
-        "--components", nargs="+", choices=COMPONENT_ORDER, help="limit to these components"
-    )
-    pull.add_argument("--dry-run", action="store_true", help="observe and report; change nothing")
-    pull.add_argument("--timeout", type=int, default=1800, help="seconds per host")
-    pull.add_argument("--json", action="store_true", dest="as_json")
+    for name in ("pull", "rollback"):
+        pull = subparsers.add_parser(name, help="converge hosts on an exact release manifest")
+        if name == "rollback":
+            pull.add_argument("--to", required=True, metavar="RELEASE-COMMIT")
+        group = pull.add_mutually_exclusive_group(required=True)
+        group.add_argument("--hosts", nargs="+", metavar="HOST", help="exact inventory names")
+        group.add_argument("--all", action="store_true", help="every inventory host")
+        pull.add_argument("--components", nargs="+", choices=COMPONENT_ORDER)
+        pull.add_argument("--dry-run", action="store_true", help="observe; change nothing")
+        pull.add_argument("--timeout", type=int, default=1800, help="seconds per host")
+        pull.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -149,6 +151,13 @@ def _print_pull(report: dict[str, Any]) -> None:
                 print(f"  {host['stderr'].strip().splitlines()[-1]}")
             continue
         print(f"{host['host']}: {host['result']}")
+        if host.get("legacy_updater"):
+            retirement = host["legacy_updater"]
+            print(f"  legacy updater: {retirement['state']}")
+            for action in retirement.get("actions", []):
+                print(f"    - {action}")
+            if retirement.get("error"):
+                print(f"    ! {retirement['error']}")
         for component in host.get("components", []):
             print(f"  {component['name']}: {component['state']}")
             for action in component.get("actions", []):
@@ -182,7 +191,12 @@ def _run_push(arguments: argparse.Namespace) -> int:
 def _run_pull(arguments: argparse.Namespace) -> int:
     root = _root()
     config = load_config(root)
-    release = load_release(root)
+    stored_files = None
+    if arguments.command == "rollback":
+        release, manifest_commit, stored_files = load_historical_release(root, arguments.to)
+    else:
+        release = load_release(root)
+        manifest_commit = _manifest_commit(root)
     if arguments.all:
         hosts = sorted(config.hosts)
     else:
@@ -198,7 +212,9 @@ def _run_pull(arguments: argparse.Namespace) -> int:
         components=arguments.components,
         dry_run=arguments.dry_run,
         timeout=arguments.timeout,
-        manifest_commit=_manifest_commit(root),
+        manifest_commit=manifest_commit,
+        stored_files=stored_files,
+        command=arguments.command,
     )
     if arguments.as_json:
         _print_json(report)
@@ -212,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "push":
             return _run_push(arguments)
-        if arguments.command == "pull":
+        if arguments.command in {"pull", "rollback"}:
             return _run_pull(arguments)
         config = load_config(_root())
         selected = parse_host_selector(arguments.limit, set(config.hosts))

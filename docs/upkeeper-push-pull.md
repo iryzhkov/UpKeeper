@@ -17,9 +17,10 @@ and the distinction from the F03 saga library.
 | worker-configuration | Reviewed per-host bootstrap entries preserved by push | Reference availability check, host-scoped configuration write; no enrollment |
 
 A new capture replaces 45-agents module execution with the explicit environment
-component. The old timer and module files remain installed until U1. Old four-component
-manifests remain readable and retain their legacy behavior, including t3-update
-delegation; capture upgrades their component set after all observations pass.
+component. U1 removes the timer and module installation paths. Old four-component manifests
+remain readable, but steward installation always uses UpKeeper's pinned artifact
+handler. It interrogates the candidate's T3 range for historical manifests without
+a frozen pair. Historical setup modules 26-t3 and 45-agents are refused.
 
 ## Capture and publication
 
@@ -77,7 +78,12 @@ unexplained concurrent changes are preserved and reported rollback-failed.
 The T3 guard defers on a failed check, unknown running-thread count or any running thread.
 Deferral is drift (exit 10), not convergence. A fresh check is repeated after npm install
 before restart. This is a point-in-time guard, not a scheduler admission lock.
-No U0 pull seeds T3 services, removes timers, enrolls workers or implements --self.
+U1 pull retires t3-update.timer/service before component effects on each host,
+even for rollback or component-limited pulls. An active updater is deferred after
+disabling its timer; it is never killed mid-install. Unknown unit state fails.
+The T3 component seeds an absent t3code.service when the pinned package is installed,
+with loopback binding and optional host-local oauth.env, warning when that file is
+missing. Existing units are preserved. Pull does not enroll workers or implement --self.
 
 ## Records and recovery
 
@@ -90,7 +96,25 @@ not an automatic process-crash replay mechanism.
 Lost SSH responses/timeouts are reported and never automatically retried. Observe the
 host and its private prior record before taking another action. Pull does not claim
 the F03 PREPARED/STARTED/UNKNOWN journal semantics. Its component compensation is not
-atomic fleet rollback. The operator rollback --to command remains U1.
+atomic fleet rollback. Operator rollback reads immutable release intent without moving the controller checkout:
+
+```bash
+./scripts/upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward --dry-run
+./scripts/upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward
+./scripts/upkeeper pull --hosts omarchy-pc --components t3-steward
+```
+
+The hash must resolve to an ancestor of controller HEAD (HEAD itself is allowed).
+Manifest and legacy companion files come from that same commit; missing or corrupt
+history fails before transport. Inventory and deployment code remain current.
+Reports and locks name the resolved commit and rollback command. New manifests
+select the T3 pair together; old manifests restore the steward alone after proving
+the currently served T3 fits the candidate. No operation rediscovers a latest release
+or recreates retired updater units. Use component selection when historical setup
+modules have been retired. Setup retains fast-forward semantics; Huyang and steward
+use exact historical pins. Binary rollback does not downgrade steward databases or
+protocol state: select a version compatible with that host's persisted state.
+This is an ordinary pull with the same locking, deferral and lost-response limits.
 
 Exit codes retain the existing interface: 0 converged/updated, 10 ahead/deferred,
 20 partial/offline when no deployment-failure result takes precedence, 40 failed or

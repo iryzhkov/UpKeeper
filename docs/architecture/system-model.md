@@ -22,8 +22,9 @@ projections, activates, verifies and reports. A lost response is uncertainty:
 the controller records failure and does not retry. Observe the host before
 deciding how to proceed.
 
-U0 implements release components and worker bootstrap distribution. Timer/module
-removal and the operator rollback command remain U1. Target-side repository reads
+U0 implements release components and worker bootstrap distribution. U1 retires
+legacy updater units before every pull and loads historical release manifests for
+operator rollback without moving the controller checkout. Target-side repository reads
 through pull --self are the sole planned exception to the no-target-repository
 invariant; U2 implements that path. It is not present in U0.
 
@@ -94,6 +95,8 @@ and interrogates the candidate binary for the frozen compatibility range.
 Currently served T3 must fit that range too. Failed steward activation restores
 and verifies the previous binary/service.
 
+U1 seeds an absent t3code.service once the pinned package is installed, preserving
+existing units and host-local credentials. Missing oauth.env is a warning.
 T3 npm installation and restart both require a fresh successful steward check
 reporting zero running threads. Missing, failed or busy evidence yields deferred
 (exit 10). Installed and served versions are verified after restart. Worker
@@ -116,7 +119,8 @@ values, environment payloads or private prior contents.
 
 The idle check is a point-in-time observation, not a coordinator admission lock.
 An admitted thread between observation and restart remains a reliability risk.
-Legacy update timers remain able to race until U1 removes them. File projection
+Pull disables and deletes legacy updater units before deployment. A running
+updater is deferred after timer disable; failed observation stops component effects. File projection
 does not prove instruction semantics or provider readiness. U0 does not close the
 hardening waiver or claim S5's multi-host soak.
 

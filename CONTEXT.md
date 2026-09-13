@@ -10,10 +10,12 @@ and the relationship between both mutation paths. The Citadel replan at
 ../citadel/docs/reference/active-plan/replan-2026-09-12.md controls stage order.
 
 U0 adds the T3 pair, F05 agent environment and the S4 worker bootstrap distribution
-contract. U1 removes the legacy self-update path and adds operator rollback.
+contract. U1 removes the legacy self-update path and adds operator rollback from committed
+release manifests, with historical companion files and current deployment safeguards.
 U2 adds pull --self; the laptop converges through that path. Do not enroll workers
 as part of release distribution.
 
 Use Huyang for repository reads, searches and edits. Run make gate before commits.
-Land normal-prose commits on main and verify both configured remote CI workflows.
+Land normal-prose commits on main and push both remotes. The user's U0 decision
+selects GitHub CI as the gate; gitea remains a mirror.
 Unknown external effects require observation, never automatic retries.

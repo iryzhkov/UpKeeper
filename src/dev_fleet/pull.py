@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import environment, release_assets, worker_release
+from . import environment, release_assets, t3_lifecycle, worker_release
 from .config import FleetConfig, HostSpec
 from .constants import (
     EXIT_DEPLOYMENT,
@@ -51,6 +51,7 @@ import re
 from pathlib import Path
 from dev_fleet.release_assets import observe_environment, apply_environment
 from dev_fleet.worker_release import worker_projection
+from dev_fleet.t3_lifecycle import retire_updater, seed_t3_service
 
 PAYLOAD = json.loads(__PAYLOAD__)
 HOME = Path.home()
@@ -243,6 +244,8 @@ def apply_omarchy_setup(spec, before, actions):
 
 
 def run_modules(checkout, modules):
+    if set(modules) & {"26-t3", "45-agents"}:
+        raise StepFailed("historical setup release includes retired fleet modules; select other components")
     if shutil.which("omarchy") and (checkout / "run.sh").exists():
         argv = ["bash", str(checkout / "run.sh"), "--yes", "--skip-secrets"]
         for module in modules:
@@ -250,7 +253,7 @@ def run_modules(checkout, modules):
         must(argv, timeout=900, what="omarchy-setup run.sh")
         return
     # A host without Omarchy (homelab) cannot use run.sh; drive the modules the
-    # way bin/t3-update does, with the same environment.
+    # bootstrap environment without delegating fleet installation.
     env_prefix = {
         "OMARCHY_SETUP_ROOT": str(checkout),
         "OMARCHY_SETUP_LIB": str(checkout / "lib"),
@@ -457,28 +460,7 @@ def observe_steward(spec):
 
 
 def apply_steward(spec, before, actions):
-    if "t3" in COMPONENTS:
-        return apply_pinned_steward(spec, before, actions)
-    if before["version"] == spec["version"] and before["service_active"]:
-        return "converged"
-    if DRY_RUN:
-        actions.append(f"would run t3-update to move {before['version']} to {spec['version']}")
-        return "updated"
-    must(["systemctl", "--user", "start", "t3-update.service"], timeout=400, what="t3-update")
-    actions.append("ran t3-update.service")
-    after = observe_steward(spec)
-    actions.append(f"installed {after['version']}")
-    if not after["service_active"]:
-        raise StepFailed(f"{spec['service']} is not active after t3-update")
-    if after["version"] == spec["version"]:
-        return "updated"
-    try:
-        if after["version"] and version_tuple(after["version"]) > version_tuple(spec["version"]):
-            actions.append("t3-update chose a newer release than the manifest")
-            return "ahead"
-    except ValueError:
-        pass
-    raise StepFailed(f"t3-update left {after['version']}, wanted {spec['version']}")
+    return apply_pinned_steward(spec, before, actions)
 
 
 # ---- U0 pair, environment and worker-bootstrap components ---------------------------
@@ -527,12 +509,15 @@ def numeric_version(value):
 def verify_pair_binary(binary):
     observed = run([str(binary), "version"], timeout=15)
     bounds = pair_range(observed["output"])
-    spec = COMPONENTS["t3"]
-    wanted = spec["compatibility"]
-    if (not observed["ok"] or pair_version(observed["output"]) != wanted["steward_version"]
-            or bounds != (wanted["min"], wanted["max"])
-            or not numeric_version(bounds[0]) <= numeric_version(spec["version"]) <= numeric_version(bounds[1])):
-        raise StepFailed("steward binary does not prove the frozen T3 compatibility range")
+    if not observed["ok"] or not bounds or pair_version(observed["output"]) != COMPONENTS["t3-steward"]["version"]:
+        raise StepFailed("steward binary does not prove the pinned version and T3 compatibility")
+    if "t3" in COMPONENTS:
+        spec = COMPONENTS["t3"]
+        wanted = spec["compatibility"]
+        if (bounds != (wanted["min"], wanted["max"])
+                or not numeric_version(bounds[0]) <= numeric_version(spec["version"]) <= numeric_version(bounds[1])):
+            raise StepFailed("steward binary does not prove the frozen T3 compatibility range")
+    return bounds
 
 
 def apply_pinned_steward(spec, before, actions):
@@ -576,10 +561,9 @@ def apply_pinned_steward(spec, before, actions):
                 candidate = stage / "t3-steward"
                 candidate.write_bytes(tar.extractfile(member).read())
                 candidate.chmod(0o755)
-            verify_pair_binary(candidate)
-            current_t3 = observe_t3(COMPONENTS["t3"])
-            bounds = COMPONENTS["t3"]["compatibility"]
-            if (not current_t3["served"] or not numeric_version(bounds["min"]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds["max"])):
+            bounds = verify_pair_binary(candidate)
+            current_t3 = observe_t3(COMPONENTS.get("t3", {"service": "t3code.service"}))
+            if (not current_t3["check_ok"] or not current_t3["served"] or not numeric_version(bounds[0]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds[1])):
                 raise StepFailed("running T3 is outside candidate steward range; no safe pair transition")
         except StepFailed:
             raise
@@ -633,10 +617,19 @@ def observe_t3(spec):
 
 
 def apply_t3(spec, before, actions):
+    # Service seeding never overwrites an existing unit or its credentials/bind address.
+    # Only start a seed after the installed package and steward have been verified.
+    seeded = False
+    if before["installed"] == spec["version"]:
+        if not DRY_RUN:
+            verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
+        seeded = seed_t3_service(HOME, run, must, DRY_RUN, actions)
+        if seeded and not DRY_RUN:
+            before = observe_t3(spec)
     if before["installed"] == spec["version"] and before["served"] == spec["version"] and before["service_active"]:
         if not DRY_RUN:
             verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
-        return "converged"
+        return "updated" if seeded else "converged"
     if DRY_RUN:
         actions.append("would install t3@" + spec["version"] + "; restart requires a fresh zero-running-thread observation")
         return "updated"
@@ -706,6 +699,14 @@ def main():
     rank = ["converged", "updated", "ahead", "skipped", "deferred", "rolled-back", "failed", "rollback-failed"]
     stop = False
     try:
+        if PAYLOAD.get("retire_updater"):
+            try:
+                retirement = retire_updater(HOME, run, must, DRY_RUN)
+            except Exception as exc:
+                retirement = {"state": "failed", "actions": [], "error": str(exc)}
+            result["legacy_updater"] = retirement
+            worst = retirement["state"]
+            stop = worst in {"failed", "deferred"}
         for name in SELECTED:
             observe, apply = HANDLERS[name]
             entry = {"name": name, "actions": []}
@@ -771,7 +772,7 @@ def _agent_program(payload: dict[str, Any]) -> str:
     literal = json.dumps(json.dumps(payload, sort_keys=True))
     # Supply audited stdlib modules in memory; targets never read this repository,
     # and a dry run does not create an import cache or a temporary checkout.
-    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release)}
+    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release, t3_lifecycle)}
     bootstrap = (
         "import sys, types\n"
         "package = types.ModuleType('dev_fleet'); package.__path__ = []\n"
@@ -858,6 +859,8 @@ def pull_fleet(
     dry_run: bool = False,
     timeout: int = 1800,
     manifest_commit: str | None = None,
+    stored_files: dict[str, str] | None = None,
+    command: str = "pull",
     lock_store: LocalLockStore | None = None,
     record_store: RunRecordStore | None = None,
     runner=run_host,
@@ -881,7 +884,7 @@ def pull_fleet(
     )
     record = RunRecord.new(
         run_id=run_id,
-        command="pull",
+        command=command,
         controller=controller,
         desired_manifest_commit=manifest_commit,
         components=selected_components,
@@ -889,12 +892,13 @@ def pull_fleet(
     )
     if not dry_run:
         records.write(record)
-    stored = _stored_files(config.root, release)
+    stored = _stored_files(config.root, release) if stored_files is None else stored_files
     results: list[dict[str, Any]] = []
     for name in hosts:
         spec = config.hosts[name]
         payload = {
             "run_id": run_id,
+            "retire_updater": True,
             "dry_run": dry_run,
             "host": {"name": name, "os_id": spec.os_id},
             "components": selected_components,
@@ -925,7 +929,7 @@ def pull_fleet(
     exit_code = exit_code_for(results)
     report = {
         "schema_version": 1,
-        "command": "pull",
+        "command": command,
         "run_id": run_id,
         "controller": controller,
         "dry_run": dry_run,
