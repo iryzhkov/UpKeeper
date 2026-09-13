@@ -1928,7 +1928,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.1.u0.1"
+        "steward_version": "0.11.0-rc.3"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -1941,10 +1941,29 @@
       "path": ".local/bin/t3-steward",
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
-      "version": "0.11.0-rc.1.u0.1"
+      "version": "0.11.0-rc.3"
     },
     "worker-configuration": {
-      "hosts": {},
+      "hosts": {
+        "homelab": {
+          "capabilities": ["git", "huyang"],
+          "coordinator_id": "normandy-coordinator",
+          "credential_ref": "secretref:f02-protocol/homelab",
+          "provider_routes": ["claudeAgent", "codex"],
+          "schema_version": 1,
+          "transport": "ssh",
+          "worker_id": "homelab"
+        },
+        "omarchy-pc": {
+          "capabilities": ["git", "huyang"],
+          "coordinator_id": "normandy-coordinator",
+          "credential_ref": "secretref:f02-protocol/omarchy-pc",
+          "provider_routes": ["claudeAgent", "codex"],
+          "schema_version": 1,
+          "transport": "ssh",
+          "worker_id": "omarchy-pc"
+        }
+      },
       "kind": "worker-configuration"
     }
   },
