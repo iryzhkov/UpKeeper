@@ -437,6 +437,12 @@ def apply_huyang(spec, before, actions):
     actions.append(f"fetched origin {spec['ref']}")
     if not run(["git", "-C", str(checkout), "cat-file", "-e", spec["commit"] + "^{commit}"], timeout=15)["ok"]:
         raise StepFailed(f"origin/{spec['ref']} does not contain {spec['commit'][:12]}")
+    if git_dirty(checkout) or git_head(checkout) != before["commit"]:
+        raise StepFailed("Huyang checkout changed during preparation; preserving local work")
+    if (not PAYLOAD.get("allow_downgrade", False)
+            and not git_contains(checkout, before["commit"], spec["commit"])):
+        actions.append("checkout diverges from the pin; normal pull preserves local Huyang work")
+        return "ahead"
     try:
         huyang_build_and_restart(spec, checkout, spec["commit"], actions)
     except StepFailed as failure:

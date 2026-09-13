@@ -7,8 +7,9 @@ Citadel Track U0, 2026-09-12. The active Citadel replan controls stage order.
 ## Purpose, scenarios and current state
 
 UpKeeper publishes a controller-observed release and converges selected inventory
-hosts. It owns fleet software and the managed agent environment. Normandy is the
-capture controller. Targets receive a fixed Python program and validated payload
+hosts. It owns fleet software and the managed agent environment. Any validated fleet host can be the
+capture controller. Independent per-host timers refresh the CI-gated release and
+converge locally; see [fleet convergence](../fleet-self-convergence.md). Targets receive a fixed Python program and validated payload
 over strict SSH; the inventory machine-id match executes locally.
 
 Successful capture observes clean, remotely reachable setup/Huyang commits, a

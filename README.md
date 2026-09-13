@@ -8,6 +8,10 @@ remains a separate mutation API with revision-fenced approval, durable effects a
 reconciliation. Neither interface is a workflow coordinator. Start with
 [the system model](docs/architecture/system-model.md) and [CONTEXT.md](CONTEXT.md).
 
+Every host can publish a validated release. Each host independently fetches the
+GitHub-gated release and converges through its own local timer. See
+[the fleet self-convergence guide](docs/fleet-self-convergence.md).
+
 ## Release commands
 
 ```bash

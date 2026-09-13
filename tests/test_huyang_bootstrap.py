@@ -129,3 +129,43 @@ def test_normal_pull_preserves_newer_checkout_but_explicit_rollback_can_move(tmp
     state = env["apply_huyang"](spec, before, calls)
     assert state == ("updated" if rollback else "ahead")
     assert ("would fetch" in calls[0]) is rollback
+
+
+@pytest.mark.parametrize("dirty,changed_head,diverged", [
+    (True, False, False), (False, True, False), (False, False, True),
+])
+def test_huyang_preserves_work_that_changes_or_diverges_before_activation(
+    tmp_path, dirty, changed_head, diverged,
+):
+    node = next(n for n in ast.parse(REMOTE_AGENT).body
+                if isinstance(n, ast.FunctionDef) and n.name == "apply_huyang")
+    old, pin = "b" * 40, "a" * 40
+    env = {
+        "HOME": tmp_path, "DRY_RUN": False, "PAYLOAD": {},
+        "StepFailed": ValueError,
+        "git_contains": lambda checkout, ancestor, descendant:
+            ancestor == old and not diverged,
+        "must": lambda *a, **kw: None,
+        "run": lambda *a, **kw: {"ok": True},
+        "git_dirty": lambda checkout: dirty,
+        "git_head": lambda checkout: "c" * 40 if changed_head else old,
+        "huyang_build_and_restart": lambda *a: pytest.fail("must preserve development"),
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<agent-test>", "exec"), env)  # noqa: S102
+    spec = {"path": ".local/share/huyang", "commit": pin, "ref": "main"}
+    before = {"commit": old, "dirty": False, "service_active": True, "socket": True}
+    if dirty or changed_head:
+        with pytest.raises(ValueError, match="preserving local work"):
+            env["apply_huyang"](spec, before, [])
+    else:
+        assert env["apply_huyang"](spec, before, []) == "ahead"
+
+
+def test_dirty_huyang_never_fetches_or_activates(tmp_path):
+    node = next(n for n in ast.parse(REMOTE_AGENT).body
+                if isinstance(n, ast.FunctionDef) and n.name == "apply_huyang")
+    env = {"HOME": tmp_path, "StepFailed": ValueError}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<agent-test>", "exec"), env)  # noqa: S102
+    with pytest.raises(ValueError, match="local changes"):
+        env["apply_huyang"]({"path": ".local/share/huyang"},
+                            {"commit": "a" * 40, "dirty": True}, [])

@@ -1,4 +1,4 @@
-"""Refresh a gated release and converge the laptop locally, without inbound SSH."""
+"""Refresh a gated release and converge this fleet host locally, without inbound SSH."""
 from __future__ import annotations
 
 import argparse
@@ -60,8 +60,6 @@ def converge(root: Path, dry_run=False):
     revision = checkout_revision(root)
     config = load_config(root)
     host = local_host(config)
-    if host != "laptop":
-        raise ValueError("this self schedule belongs to the laptop")
     release, revision, stored = load_historical_release(root, revision)
     if checkout_revision(root) != revision:
         raise ValueError("checkout changed during self validation")
@@ -81,8 +79,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     try:
-        if local_host(load_config(root)) != "laptop":
-            raise ValueError("this self schedule belongs to the laptop")
+        local_host(load_config(root))  # Exactly one local inventory identity, before network.
         if not args.dry_run and not args.converge:
             refresh(root)
             # Import and run the newly gated code, never old imports with a new manifest.

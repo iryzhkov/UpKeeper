@@ -17,6 +17,11 @@ main and converges the self-managed laptop locally from its own timer, without
 controller SSH. See docs/laptop-self-convergence.md. Do not enroll workers as
 part of release distribution.
 
+The subsequent user-authorized fleet decentralization extends the gated self timer
+to every inventory host. Each host refreshes and converges independently; Normandy
+is no longer a required deployment controller. See docs/fleet-self-convergence.md.
+
+
 Use Huyang for repository reads, searches and edits. Run make gate before commits.
 Land normal-prose commits on main and push both remotes. The user's U0 decision
 selects GitHub CI as the gate; gitea remains a mirror.

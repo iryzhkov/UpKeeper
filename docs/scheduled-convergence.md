@@ -1,5 +1,8 @@
 # Scheduled convergence and drift
 
+The fleet now uses [independent local timers](fleet-self-convergence.md).
+The Normandy timer below is the legacy central mode; disable it after migration.
+
 Citadel U3 adds one daily systemd user timer on Normandy. Install from a clean,
 GitHub-gated main checkout with `python3 scripts/install-pull-timer`.
 It installs `upkeeper-pull.service` and `upkeeper-pull.timer`, scheduled at 06:30

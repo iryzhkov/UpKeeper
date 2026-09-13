@@ -98,3 +98,44 @@ def test_scheduled_runner_carries_local_only_fence(tmp_path):
     runner = ScheduledRunner(tmp_path, run)
     runner(load_config(ROOT).hosts["laptop"], "", timeout=60, local_only=True)
     assert not list(tmp_path.glob("*.hold"))
+
+@pytest.mark.parametrize("host", ["laptop", "normandy", "homelab", "omarchy-pc"])
+def test_each_host_schedules_only_its_own_local_pull(tmp_path, monkeypatch, host):
+    from dev_fleet import self_schedule
+    config = load_config(ROOT)
+    monkeypatch.setattr("dev_fleet.self_pull.local_machine_id_sha256",
+                        lambda: config.hosts[host].machine_id_sha256)
+    monkeypatch.setattr(self_schedule, "checkout_revision", lambda root: "f" * 40)
+    monkeypatch.setattr(self_schedule, "load_config", lambda root: config)
+    monkeypatch.setattr(self_schedule, "load_historical_release",
+                        lambda root, revision: (release_for(tmp_path), revision, {}))
+    def pull(config, release, **kwargs):
+        assert kwargs["hosts"] == [host]
+        assert kwargs["self_only"] is True
+        assert kwargs["dry_run"] is True
+        return {"controller": host}, 0
+    monkeypatch.setattr(self_schedule, "pull_fleet", pull)
+    assert self_schedule.converge(tmp_path, dry_run=True) == ({"controller": host}, 0)
+
+
+def test_unknown_host_refused_before_refresh(monkeypatch, capsys):
+    from dev_fleet import self_schedule
+    monkeypatch.setattr("dev_fleet.self_pull.local_machine_id_sha256", lambda: "unknown")
+    monkeypatch.setattr(self_schedule, "refresh",
+                        lambda root: pytest.fail("unknown host must not fetch"))
+    assert self_schedule.main([]) == 30
+    assert "exactly one inventory match" in capsys.readouterr().out
+
+
+def test_divergent_checkout_preserved(pair):
+    clone, _, candidate = pair
+    git(clone, "config", "user.name", "Test")
+    git(clone, "config", "user.email", "test@example.com")
+    git(clone, "config", "commit.gpgsign", "false")
+    (clone / "local").write_text("preserve")
+    git(clone, "add", ".")
+    git(clone, "commit", "-m", "local change")
+    before = git(clone, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="refresh failed"):
+        refresh(clone, runner_for(candidate))
+    assert git(clone, "rev-parse", "HEAD") == before

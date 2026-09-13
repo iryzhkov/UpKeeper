@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the committed laptop self-convergence timer."""
+"""Install the committed fleet host self-convergence timer."""
 import shutil
 import subprocess
 import sys
@@ -12,8 +12,9 @@ from dev_fleet.config import load_config
 from dev_fleet.self_pull import checkout_revision, local_host
 
 checkout_revision(ROOT)
-if local_host(load_config(ROOT)) != "laptop" or ROOT != Path.home() / ".local/share/dev-fleet":
-    raise SystemExit("This timer requires the laptop's ~/.local/share/dev-fleet checkout")
+local_host(load_config(ROOT))
+if ROOT != Path.home() / ".local/share/dev-fleet":
+    raise SystemExit("This timer requires ~/.local/share/dev-fleet")
 destination = Path.home() / ".config/systemd/user"
 destination.mkdir(parents=True, exist_ok=True)
 for name in ("upkeeper-self.service", "upkeeper-self.timer"):

@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh the gated UpKeeper release and converge this laptop
+Description=Refresh the gated UpKeeper release and converge this host
 
 [Service]
 Type=oneshot

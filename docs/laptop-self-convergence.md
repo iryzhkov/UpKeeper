@@ -1,5 +1,9 @@
 # Laptop self-convergence
 
+This mechanism now also supports every other inventory host; see
+[fleet self-convergence](fleet-self-convergence.md). The laptop constraints below
+still apply to its deployment and worker transport.
+
 Citadel U4 runs the laptop's pull locally from its own checkout. After the
 omarchy-setup `27-upkeeper.sh` bootstrap handoff, install the timer from the clean
 GitHub-gated checkout:
