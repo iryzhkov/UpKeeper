@@ -73,13 +73,27 @@ A dry run through scripts/upkeeper-self-pull --dry-run never fetches or advances
 
 ## Rollout evidence
 
-Implementation gates: 231 tests, Ruff, Ansible lint, syntax/check mode, redaction,
-and systemd unit verification passed locally. Live migration is pending the exact
-GitHub release gate. Homelab has gh installed but needs the user's local
-`gh auth login --hostname github.com` before its timer can query private CI.
-The other hosts have existing GitHub authentication. Keep Normandy's legacy timer
-until all four independent timers have been verified; do not claim completed
-migration from a successful source push alone.
+Implementation 8548a9b145170fb4879999cbeec4d39ad801a88f passed GitHub CI
+34739139497. Local gates passed 231 tests, Ruff, Ansible lint, syntax/check mode,
+redaction and systemd unit verification.
+
+All four hosts run the gated checkout from ~/.local/share/dev-fleet. Their self
+timers are enabled. The laptop refreshed and returned systemd Result=success,
+exit 0. Omarchy-pc run 20260913T050022Z-d4ec5d31 and homelab run
+20260913T050025Z-4c372773 updated successfully with self=true, transport=local.
+Normandy run 20260913T050024Z-c3a25376 used the same gated revision and local
+transport. It returned exit 10 only because Huyang is ahead of the pin; the clean
+development checkout stayed at 3f64e94e6b4bf426543ff5af17a7274904895464 and all
+other components converged. Systemd displays this deliberate drift exit as failed;
+no deployment error or retained scheduled hold was reported.
+
+The user authorized copying Normandy's GitHub credential directly over SSH to
+homelab's local gh store. No credential was printed or committed. Homelab uses
+gh 2.100.0 because Debian's packaged gh lacks the timer's --event filter; the
+mise download verified GitHub artifact attestations. Its private CI query passed.
+Normandy's legacy upkeeper-pull.timer was disabled after verifying all four local
+runs. The development checkout under ~/Work is separate and remains untouched by
+scheduled refresh. This removes Normandy from automatic deployment dependencies.
 
 This change does not enroll workers, change the T3 coordinator, or move secrets.
 Normandy may still own those independent roles; fleet software refresh does not.
