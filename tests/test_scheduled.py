@@ -37,6 +37,7 @@ def test_reachability_keeps_authentication_failures_visible(monkeypatch, error, 
         return subprocess.CompletedProcess(command, 255, "", error)
     monkeypatch.setattr("dev_fleet.pull.subprocess.run", run)
     result = check_reachable(load_config(ROOT).hosts["homelab"])
+    assert result is not None
     assert result["skipped_unreachable"] is skipped
     assert (exit_code_for([result]) == 0) is skipped
 
@@ -88,6 +89,17 @@ def test_changed_and_failed_feed_posts_once(report, severity):
         return subprocess.CompletedProcess(command, 0, "", "")
     post_report(report, runner=run)
     assert len(calls) == 1
+
+
+def test_feed_does_not_copy_large_environment_observations():
+    report = {"exit_code": 0, "hosts": [host("updated", components=[
+        {"name": "agent-environment", "state": "updated", "before": {"drift": "x" * 500000}}
+    ])]}
+    def run(command, **kwargs):
+        assert len(kwargs["input"]) < 1000
+        assert "before" not in kwargs["input"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+    post_report(report, runner=run)
 
 
 def test_failed_feed_post_is_not_retried():

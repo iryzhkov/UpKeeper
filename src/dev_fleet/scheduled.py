@@ -67,7 +67,20 @@ def post_report(report, runner=subprocess.run):
     if notice is None:
         return
     severity, title = notice
-    body = json.dumps(redact(report), indent=2, sort_keys=True)
+    summary = {key: report[key] for key in (
+        "run_id", "controller", "desired_manifest_commit", "exit_code", "error"
+    ) if key in report}
+    summary["hosts"] = [
+        {"host": host.get("host"), "result": host.get("result"),
+         "error": host.get("error"),
+         "components": [
+             {"name": entry.get("name"), "state": entry.get("state"),
+              "error": entry.get("error")}
+             for entry in host.get("components", []) if entry.get("state") != "converged"
+         ]}
+        for host in report.get("hosts", [])
+    ]
+    body = json.dumps(redact(summary), indent=2, sort_keys=True)
     # One attempt only: a lost feed response does not justify duplicate posts.
     result = runner(
         ["feed", "post", title, "--source", "upkeeper-pull", "--tag", "citadel upkeeper",
