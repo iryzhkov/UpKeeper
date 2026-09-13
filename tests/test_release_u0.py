@@ -244,6 +244,17 @@ def test_t3_never_installs_or_restarts_without_proven_idle(tmp_path, running, ok
     assert exit_code_for([{"reachable": True, "result": "deferred"}]) == 10
 
 
+def test_pair_dry_run_does_not_require_future_steward_already_installed(tmp_path):
+    ns = remote_namespace(tmp_path)
+    ns["DRY_RUN"] = True
+    ns["verify_pair_binary"] = lambda _: pytest.fail("future binary is not installed in dry run")
+    assert ns["apply_t3"](
+        {"version": "0.0.38"},
+        {"installed": "0.0.38", "served": "0.0.38", "service_active": True},
+        [],
+    ) == "converged"
+
+
 def test_t3_rechecks_idle_after_install_and_verifies_served_version(tmp_path):
     ns = remote_namespace(tmp_path)
     ns["COMPONENTS"] = {"t3-steward": {"path": ".local/bin/t3-steward"}}

@@ -632,7 +632,8 @@ def observe_t3(spec):
 
 def apply_t3(spec, before, actions):
     if before["installed"] == spec["version"] and before["served"] == spec["version"] and before["service_active"]:
-        verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
+        if not DRY_RUN:
+            verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
         return "converged"
     if DRY_RUN:
         actions.append("would install t3@" + spec["version"] + "; restart requires a fresh zero-running-thread observation")
