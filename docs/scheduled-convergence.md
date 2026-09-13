@@ -9,6 +9,14 @@ The timer calls `scripts/upkeeper-scheduled-pull`. It requires Normandy's invent
 machine-id, refuses a dirty controller and freezes the release and companion files
 from its own HEAD. It does not fetch, capture, promote pins, or follow tool releases.
 New versions become eligible only through a committed release promotion.
+Normal pulls preserve Huyang checkouts ahead of the pin rather than implicitly
+rolling newer persistent state back. Explicit rollback remains an operator action.
+If the Huyang checkout is absent, UpKeeper clones the declared source, verifies
+pin ancestry, builds in staging, installs the checkout and seeds its missing user
+service. Existing non-Git paths and units are preserved and reported for inspection.
+Failed builds never activate; failed fresh service starts retain diagnostic files
+and disable the newly created unit. Python, Git, Go and make remain OS/toolchain
+prerequisites supplied by omarchy-setup.
 
 The runner uses the same pull transaction with all inventory hosts. A strict SSH
 `true` probe skips network-unreachable hosts before dispatch. Authentication and

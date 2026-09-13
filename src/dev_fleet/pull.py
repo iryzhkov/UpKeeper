@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import environment, release_assets, t3_lifecycle, worker_release
+from . import environment, huyang_lifecycle, release_assets, t3_lifecycle, worker_release
 from .config import FleetConfig, HostSpec
 from .constants import (
     EXIT_DEPLOYMENT,
@@ -52,6 +52,7 @@ from pathlib import Path
 from dev_fleet.release_assets import observe_environment, apply_environment
 from dev_fleet.worker_release import worker_projection
 from dev_fleet.t3_lifecycle import retire_updater, seed_t3_service
+from dev_fleet.huyang_lifecycle import bootstrap_huyang
 
 PAYLOAD = json.loads(__PAYLOAD__)
 HOME = Path.home()
@@ -369,6 +370,15 @@ def huyang_probe(checkout, expected_tools):
     }
 
 
+def huyang_wait_probe(checkout, expected_tools):
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline and not huyang_socket().exists():
+        time.sleep(1)
+    if not huyang_socket().exists():
+        raise StepFailed("control socket did not appear after restart")
+    return huyang_probe(checkout, expected_tools)
+
+
 def observe_huyang(spec):
     checkout = HOME / spec["path"]
     head = git_head(checkout)
@@ -406,9 +416,13 @@ def huyang_build_and_restart(spec, checkout, commit, actions):
 def apply_huyang(spec, before, actions):
     checkout = HOME / spec["path"]
     if before["commit"] is None:
-        raise StepFailed(f"{checkout} is not a git checkout; bootstrap Huyang by hand first")
+        return bootstrap_huyang(HOME, spec, RUN_ID, DRY_RUN, ENV, must, huyang_wait_probe, actions)
     if before["dirty"]:
         raise StepFailed(f"{checkout} has local changes; refusing to move it")
+    if (before["commit"] != spec["commit"] and not PAYLOAD.get("allow_downgrade", False)
+            and git_contains(checkout, spec["commit"], before["commit"])):
+        actions.append("checkout is ahead of the pin; normal pull preserves newer Huyang state")
+        return "ahead"
     converged = before["commit"] == spec["commit"] and before["service_active"] and before["socket"]
     if converged:
         probe = huyang_probe(checkout, spec["probe"]["tools"])
@@ -774,7 +788,7 @@ def _agent_program(payload: dict[str, Any]) -> str:
     literal = json.dumps(json.dumps(payload, sort_keys=True))
     # Supply audited stdlib modules in memory; targets never read this repository,
     # and a dry run does not create an import cache or a temporary checkout.
-    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release, t3_lifecycle)}
+    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release, t3_lifecycle, huyang_lifecycle)}
     bootstrap = (
         "import sys, types\n"
         "package = types.ModuleType('dev_fleet'); package.__path__ = []\n"
@@ -947,6 +961,7 @@ def pull_fleet(
         payload = {
             "run_id": run_id,
             "retire_updater": True,
+            "allow_downgrade": command == "rollback",
             "dry_run": dry_run,
             "host": {"name": name, "os_id": spec.os_id, "setup_checkout": spec.setup_checkout},
             "components": selected_components,
