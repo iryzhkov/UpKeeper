@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-13T16:00:14.227585Z",
+  "captured_at": "2026-09-13T17:50:00.519295Z",
   "captured_from": "normandy",
   "components": {
     "agent-config": {
@@ -1903,7 +1903,7 @@
         "make",
         "build"
       ],
-      "commit": "5d244adf13c978599a267ee6f35b446faf7430c5",
+      "commit": "574539d881d3ba4fadb3a8f1906b5a7ca5b858e4",
       "kind": "git-checkout",
       "path": ".local/share/huyang",
       "probe": {
