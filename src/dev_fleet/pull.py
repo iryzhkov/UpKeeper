@@ -622,7 +622,7 @@ def apply_t3(spec, before, actions):
     # Service seeding never overwrites an existing unit or its credentials/bind address.
     # Only start a seed after the installed package and steward have been verified.
     seeded = False
-    if before["installed"] == spec["version"]:
+    if before["installed"] == spec["version"] and not before["service_active"]:
         if not DRY_RUN:
             verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
         seeded = seed_t3_service(HOME, run, must, DRY_RUN, actions)

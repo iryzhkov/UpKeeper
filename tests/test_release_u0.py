@@ -290,6 +290,7 @@ def test_pair_dry_run_does_not_require_future_steward_already_installed(tmp_path
     ns = remote_namespace(tmp_path)
     ns["DRY_RUN"] = True
     ns["verify_pair_binary"] = lambda _: pytest.fail("future binary is not installed in dry run")
+    ns["seed_t3_service"] = lambda *args: pytest.fail("an active T3 service is never seeded")
     assert ns["apply_t3"](
         {"version": "0.0.38"},
         {"installed": "0.0.38", "served": "0.0.38", "service_active": True},
