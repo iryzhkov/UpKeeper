@@ -4,6 +4,8 @@ UpKeeper captures a controller-observed release and converges named inventory ho
 Read [the system model](architecture/system-model.md) for ownership, failure semantics
 and the distinction from the F03 saga library.
 
+The [bootstrap and --self guide](self-bootstrap.md) describes the U2 local entry point.
+
 ## Release components
 
 | Component | Capture and authority | Pull behavior |
@@ -62,7 +64,7 @@ payload over argument-vector SSH with BatchMode, StrictHostKeyChecking and bound
 timeouts. Inventory machine identity selects local execution. Optional setup_checkout locates
 an existing host checkout (the laptop uses Work/omarchy-setup); it does not clone,
 relocate or bootstrap it. Inventory paths are validated under .local or Work. Targets never read the
-repository. The planned --self exception belongs to U2.
+repository. pull --self is the explicit target-side repository exception described below.
 
 Each host is locked on controller and target; dry run observes without writes or service
 effects. Components run in fixed order. Selecting either t3 or t3-steward in a new release
@@ -85,7 +87,7 @@ even for rollback or component-limited pulls. An active updater is deferred afte
 disabling its timer; it is never killed mid-install. Unknown unit state fails.
 The T3 component seeds an absent t3code.service when the pinned package is installed,
 with loopback binding and optional host-local oauth.env, warning when that file is
-missing. Existing units are preserved. Pull does not enroll workers or implement --self.
+missing. Existing units are preserved. Pull does not enroll workers.
 
 ## Records and recovery
 

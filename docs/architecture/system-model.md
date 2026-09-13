@@ -24,9 +24,11 @@ deciding how to proceed.
 
 U0 implements release components and worker bootstrap distribution. U1 retires
 legacy updater units before every pull and loads historical release manifests for
-operator rollback without moving the controller checkout. Target-side repository reads
-through pull --self are the sole planned exception to the no-target-repository
-invariant; U2 implements that path. It is not present in U0.
+operator rollback without moving the controller checkout. U2 adds target-side repository reads
+through pull --self as the sole exception to the no-target-repository invariant.
+It validates a clean invoking checkout, freezes its HEAD and release/companion files,
+and matches exactly one inventory machine-id. Identity changes fail before execution;
+there is no SSH fallback. Locks, records and component safeguards are shared with pull.
 
 ## State and ownership
 
@@ -142,7 +144,9 @@ durable reconciliation protocol. The replan explicitly accepts that distinction.
 Enforced: exact component sets, reachable immutable pins, clean capture and
 target checkouts, compatibility provenance, owned-key preservation, verified
 environment payloads, contained target paths, host-scoped ref-only worker bootstrap,
-strict SSH, no target repository reads, no automatic retries and no dry-run writes.
+strict SSH, target repository reads only through --self, no automatic retries and
+no dry-run writes. The setup handoff installs prerequisites and invokes --self last;
+failed machine-bootstrap modules prevent that handoff. It adds no schedule.
 
 Not proved by local tests: fleet atomicity, restart admission fencing, live provider
 behavior, enrollment, process-crash recovery or soak reliability.

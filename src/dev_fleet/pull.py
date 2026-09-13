@@ -792,8 +792,12 @@ def run_host(
     program: str,
     *,
     timeout: int,
+    local_only: bool = False,
 ) -> dict[str, Any]:
     is_local = local_machine_id_sha256() == spec.machine_id_sha256
+    if local_only and not is_local:
+        return {"host": spec.name, "reachable": False, "result": "failed",
+                "error": "self identity changed; remote fallback refused"}
     if is_local:
         command = [sys.executable, "-"]
     else:
@@ -863,10 +867,15 @@ def pull_fleet(
     manifest_commit: str | None = None,
     stored_files: dict[str, str] | None = None,
     command: str = "pull",
+    self_only: bool = False,
     lock_store: LocalLockStore | None = None,
     record_store: RunRecordStore | None = None,
     runner=run_host,
 ) -> tuple[dict[str, Any], int]:
+    if self_only:
+        identity = local_machine_id_sha256()
+        if len(hosts) != 1 or config.hosts[hosts[0]].machine_id_sha256 != identity:
+            raise PullError("--self may select only this inventory machine")
     selected_components = [name for name in COMPONENT_ORDER if name in release.components and (components is None or name in components)]
     if "t3" in release.components and set(selected_components) & {"t3", "t3-steward"}:
         selected_components = [n for n in COMPONENT_ORDER if n in set(selected_components) | {"t3", "t3-steward"}]
@@ -896,6 +905,9 @@ def pull_fleet(
         records.write(record)
     stored = _stored_files(config.root, release) if stored_files is None else stored_files
     results: list[dict[str, Any]] = []
+    runner_options = {"timeout": timeout}
+    if self_only:
+        runner_options["local_only"] = True
     for name in hosts:
         spec = config.hosts[name]
         payload = {
@@ -917,7 +929,7 @@ def pull_fleet(
             },
         }
         if dry_run:
-            results.append(runner(spec, _agent_program(payload), timeout=timeout))
+            results.append(runner(spec, _agent_program(payload), **runner_options))
             continue
         try:
             locks.acquire(name, metadata)
@@ -925,7 +937,7 @@ def pull_fleet(
             results.append({"host": name, "reachable": True, "result": "lock-contention", "error": str(exc)})
             continue
         try:
-            results.append(runner(spec, _agent_program(payload), timeout=timeout))
+            results.append(runner(spec, _agent_program(payload), **runner_options))
         finally:
             locks.release(name, run_id)
     exit_code = exit_code_for(results)
@@ -935,6 +947,7 @@ def pull_fleet(
         "run_id": run_id,
         "controller": controller,
         "dry_run": dry_run,
+        "self": self_only,
         "release_sha256": release.sha256(),
         "desired_manifest_commit": manifest_commit,
         "exit_code": exit_code,

@@ -23,6 +23,7 @@ from .redaction import redact, redact_text
 from .release import COMPONENT_ORDER, CaptureError, load_release
 from .reporting import _controller, _manifest_commit, build_doctor_report, build_status_report
 from .rollback import load_historical_release
+from .self_pull import checkout_revision, local_host
 from .validation import ValidationError, parse_host_selector, validate_host_name
 
 
@@ -87,6 +88,9 @@ def _parser() -> argparse.ArgumentParser:
         group = pull.add_mutually_exclusive_group(required=True)
         group.add_argument("--hosts", nargs="+", metavar="HOST", help="exact inventory names")
         group.add_argument("--all", action="store_true", help="every inventory host")
+        if name == "pull":
+            group.add_argument("--self", action="store_true", dest="self_only",
+                               help="read this checkout and converge only this inventory machine")
         pull.add_argument("--components", nargs="+", choices=COMPONENT_ORDER)
         pull.add_argument("--dry-run", action="store_true", help="observe; change nothing")
         pull.add_argument("--timeout", type=int, default=1800, help="seconds per host")
@@ -189,15 +193,23 @@ def _run_push(arguments: argparse.Namespace) -> int:
 
 
 def _run_pull(arguments: argparse.Namespace) -> int:
-    root = _root()
+    self_only = getattr(arguments, "self_only", False)
+    root = Path(__file__).resolve().parents[2] if self_only else _root()
+    self_revision = checkout_revision(root) if self_only else None
     config = load_config(root)
     stored_files = None
-    if arguments.command == "rollback":
+    if self_revision:
+        release, manifest_commit, stored_files = load_historical_release(root, self_revision)
+        if checkout_revision(root) != self_revision:
+            raise ValidationError("self checkout changed during validation; inspect before retry")
+    elif arguments.command == "rollback":
         release, manifest_commit, stored_files = load_historical_release(root, arguments.to)
     else:
         release = load_release(root)
         manifest_commit = _manifest_commit(root)
-    if arguments.all:
+    if self_only:
+        hosts = [local_host(config)]
+    elif arguments.all:
         hosts = sorted(config.hosts)
     else:
         hosts = [validate_host_name(host, set(config.hosts)) for host in arguments.hosts]
@@ -215,6 +227,7 @@ def _run_pull(arguments: argparse.Namespace) -> int:
         manifest_commit=manifest_commit,
         stored_files=stored_files,
         command=arguments.command,
+        self_only=self_only,
     )
     if arguments.as_json:
         _print_json(report)
