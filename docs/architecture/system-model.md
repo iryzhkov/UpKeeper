@@ -30,6 +30,12 @@ It validates a clean invoking checkout, freezes its HEAD and release/companion f
 and matches exactly one inventory machine-id. Identity changes fail before execution;
 there is no SSH fallback. Locks, records and component safeguards are shared with pull.
 
+U3 adds Normandy's daily all-host convergence and the homelab-infra drift report seam.
+The schedule freezes clean committed input, skips only pre-dispatch network unavailability,
+and records a durable host hold before dispatch. Uncertain or failed effects retain that hold
+for operator observation, preventing automatic daily retries. It posts only changes or failures.
+See [scheduled convergence](../scheduled-convergence.md) for installation and recovery.
+
 ## State and ownership
 
 | State | Authority / mutator | Copies, freshness and recovery |

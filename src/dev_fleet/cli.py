@@ -91,6 +91,8 @@ def _parser() -> argparse.ArgumentParser:
         if name == "pull":
             group.add_argument("--self", action="store_true", dest="self_only",
                                help="read this checkout and converge only this inventory machine")
+        pull.add_argument("--skip-unreachable", action="store_true",
+                          help="skip offline hosts; authentication failures still fail")
         pull.add_argument("--components", nargs="+", choices=COMPONENT_ORDER)
         pull.add_argument("--dry-run", action="store_true", help="observe; change nothing")
         pull.add_argument("--timeout", type=int, default=1800, help="seconds per host")
@@ -228,6 +230,7 @@ def _run_pull(arguments: argparse.Namespace) -> int:
         stored_files=stored_files,
         command=arguments.command,
         self_only=self_only,
+        skip_unreachable=arguments.skip_unreachable,
     )
     if arguments.as_json:
         _print_json(report)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily UpKeeper fleet convergence on Normandy
+
+[Timer]
+OnCalendar=*-*-* 06:30
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

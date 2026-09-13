@@ -840,9 +840,36 @@ def run_host(
     return redact(payload)
 
 
+def check_reachable(spec: HostSpec) -> dict[str, Any] | None:
+    """Probe before dispatch; only network unavailability is a quiet skip."""
+    if local_machine_id_sha256() == spec.machine_id_sha256:
+        return None
+    command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+               "-o", "ConnectTimeout=10", f"{spec.user}@{spec.address}", "--", "true"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except subprocess.TimeoutExpired:
+        return {"host": spec.name, "reachable": False, "result": "skipped",
+                "skipped_unreachable": True, "error": "pre-dispatch connection timeout"}
+    except OSError:
+        return {"host": spec.name, "reachable": False, "result": "failed",
+                "error": "reachability probe could not run"}
+    if result.returncode == 0:
+        return None
+    offline = result.returncode == 255 and any(message in result.stderr for message in (
+        "Connection timed out", "No route to host", "Network is unreachable",
+        "Connection refused", "Could not resolve hostname",
+    ))
+    return {"host": spec.name, "reachable": False,
+            "result": "skipped" if offline else "failed",
+            "skipped_unreachable": offline,
+            "error": "unreachable before dispatch" if offline else "SSH preflight failed",
+            "stderr": result.stderr[-2000:]}
+
+
 def exit_code_for(hosts: list[dict[str, Any]]) -> int:
     states = {host.get("result") for host in hosts}
-    offline = any(not host.get("reachable") for host in hosts)
+    offline = any(not host.get("reachable") and not host.get("skipped_unreachable") for host in hosts)
     if "rollback-failed" in states:
         return EXIT_ROLLBACK
     if "failed" in states or "rolled-back" in states:
@@ -871,6 +898,8 @@ def pull_fleet(
     lock_store: LocalLockStore | None = None,
     record_store: RunRecordStore | None = None,
     runner=run_host,
+    skip_unreachable: bool = False,
+    reachability=check_reachable,
 ) -> tuple[dict[str, Any], int]:
     if self_only:
         identity = local_machine_id_sha256()
@@ -910,6 +939,11 @@ def pull_fleet(
         runner_options["local_only"] = True
     for name in hosts:
         spec = config.hosts[name]
+        if skip_unreachable:
+            preflight = reachability(spec)
+            if preflight is not None:
+                results.append(preflight)
+                continue
         payload = {
             "run_id": run_id,
             "retire_updater": True,

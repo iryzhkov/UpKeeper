@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Install the committed daily controller timer on Normandy."""
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from dev_fleet.config import load_config
+from dev_fleet.self_pull import checkout_revision, local_host
+
+checkout_revision(ROOT)
+if local_host(load_config(ROOT)) != "normandy" or ROOT != Path.home() / "Work/dev-fleet":
+    raise SystemExit("This timer requires Normandy's ~/Work/dev-fleet checkout")
+destination = Path.home() / ".config/systemd/user"
+destination.mkdir(parents=True, exist_ok=True)
+for name in ("upkeeper-pull.service", "upkeeper-pull.timer"):
+    shutil.copyfile(ROOT / "scripts" / name, destination / name)
+    (destination / name).chmod(0o644)
+subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+subprocess.run(["systemctl", "--user", "enable", "--now", "upkeeper-pull.timer"], check=True)
