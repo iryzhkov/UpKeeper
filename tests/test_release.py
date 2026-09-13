@@ -43,8 +43,10 @@ class FakeMachine:
                 return subprocess.CompletedProcess(
                     [], 0 if f"origin/{ref}" in self.branches else 1, stdout="", stderr=""
                 )
+        if argv[0] == "npm":
+            return _done('{"dependencies":{"t3":{"version":"0.0.38"}}}')
         if argv[-1] == "version":
-            return _done(f"t3-steward {self.steward} (commit deadbeef, built now, linux/amd64)\n")
+            return _done(f"t3-steward {self.steward} (tested with T3 0.0.38..0.0.38)\n")
         raise AssertionError(f"unexpected command {argv}")
 
 
@@ -58,6 +60,27 @@ def fake_home(tmp_path: Path) -> Path:
         (home / checkout / ".git").mkdir(parents=True)
     (home / ".codex").mkdir()
     (home / ".codex/AGENTS.md").write_text("# Global agent instructions\n", encoding="utf-8")
+    from dev_fleet.release_assets import CLAUDE_BEGIN, CLAUDE_END
+
+    files = {
+        ".claude/omarchy-setup/CLAUDE.md": "# Shared rules\n",
+        ".claude/CLAUDE.md": CLAUDE_BEGIN + "\n@~/.claude/omarchy-setup/CLAUDE.md\n" + CLAUDE_END,
+        ".claude/settings.json": '{"model":"test","permissions":{"allow":[]}}',
+        ".claude.json": (
+            '{"mcpServers":{"huyang":{"command":"huyang"}},"oauthAccount":{"token":"not-captured"}}'
+        ),
+        ".codex/config.toml": '[mcp_servers.huyang]\ncommand = "huyang"\n',
+        ".config/opencode/opencode.json": (
+            '{"mcp":{"huyang":{"command":["huyang"]}},"instructions":[]}'
+        ),
+        ".config/agents/huyang.md": "# Huyang\n",
+        ".claude/skills/sample/SKILL.md": "# Sample\n",
+    }
+    for path, text in files.items():
+        target = home / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    (tmp_path / "repo/README.md").write_text("# dev-fleet\n")
     return home
 
 
@@ -74,8 +97,15 @@ def test_capture_reads_the_controller_and_round_trips(tmp_path: Path) -> None:
     assert components["huyang"]["commit"] == COMMIT_A
     assert components["omarchy-setup"]["commit"] == COMMIT_B
     assert components["t3-steward"]["version"] == "0.11.0-rc.1"
-    stored = root / "desired/agent-config/codex/AGENTS.md"
-    assert stored.read_text(encoding="utf-8") == "# Global agent instructions\n"
+    import base64
+
+    assets = components["agent-environment"]["files"]
+    stored = next(f for f in assets if f["path"] == ".codex/AGENTS.md")
+    assert base64.b64decode(stored["content"]) == b"# Global agent instructions\n"
+    assert components["agent-config"]["files"] == []
+    assert components["worker-configuration"]["hosts"] == {}
+    assert components["t3"]["version"] == "0.0.38"
+    assert "not-captured" not in release.canonical_bytes().decode()
     assert load_release(root).manifest == release.manifest
     assert json.loads((root / "desired/release.json").read_text())["captured_from"] == "normandy"
 
@@ -96,9 +126,12 @@ def test_capture_refuses_dirty_checkouts_and_local_builds(tmp_path: Path) -> Non
             home=home,
             runner=FakeMachine(steward="v0.10.1-117-gdd438c5-dirty"),
         )
-    with pytest.raises(CaptureError, match="not on origin/feature/huyang"):
+    with pytest.raises(CaptureError, match="not on origin/main"):
         capture_release(
-            root, controller="normandy", home=home, runner=FakeMachine(branches={"origin/main"})
+            root,
+            controller="normandy",
+            home=home,
+            runner=FakeMachine(branches={"origin/feature/huyang"}),
         )
 
 

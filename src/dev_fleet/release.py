@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .environment import ProjectInstructionRef
+from .release_assets import capture_environment, validate_environment
 from .validation import (
     ValidationError,
     validate_git_commit,
@@ -27,6 +29,7 @@ from .validation import (
     validate_host_name,
     validate_source_url,
 )
+from .worker_release import validate_workers
 
 RELEASE_SCHEMA_VERSION = 1
 RELEASE_FILE = "desired/release.json"
@@ -44,7 +47,16 @@ MODULE_RE = re.compile(r"^\d{2}-[a-z][a-z0-9-]*$")
 GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 STORE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
 
-COMPONENT_ORDER = ("omarchy-setup", "agent-config", "huyang", "t3-steward")
+LEGACY_COMPONENT_ORDER = ("omarchy-setup", "agent-config", "huyang", "t3-steward")
+COMPONENT_ORDER = (
+    "omarchy-setup",
+    "agent-config",
+    "agent-environment",
+    "huyang",
+    "t3-steward",
+    "t3",
+    "worker-configuration",
+)
 
 # The shape of a fresh manifest. Values that push captures are None here.
 DEFAULT_MANIFEST: dict[str, Any] = {
@@ -67,7 +79,7 @@ DEFAULT_MANIFEST: dict[str, Any] = {
         "huyang": {
             "kind": "git-checkout",
             "source": "https://github.com/iryzhkov/huyang.git",
-            "ref": "feature/huyang",
+            "ref": "main",
             "commit": None,
             "path": ".local/share/huyang",
             "build": ["make", "build"],
@@ -143,12 +155,50 @@ def validate_release(manifest: dict[str, Any]) -> Release:
         _string(manifest, key, "release")
     validate_host_name(manifest["captured_from"])
     components = manifest.get("components")
-    if not isinstance(components, dict) or set(components) != set(COMPONENT_ORDER):
+    if not isinstance(components, dict) or set(components) not in (
+        set(LEGACY_COMPONENT_ORDER),
+        set(COMPONENT_ORDER),
+    ):
         raise ValidationError(f"release components must be exactly {', '.join(COMPONENT_ORDER)}")
     for name, component in components.items():
         if not isinstance(component, dict):
             raise ValidationError(f"component {name} must be an object")
         kind = _string(component, "kind", name)
+        if name == "agent-environment":
+            try:
+                validate_environment(component)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ValidationError("invalid agent-environment: " + str(exc)) from exc
+            continue
+        if name == "worker-configuration":
+            try:
+                validate_workers(component)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise ValidationError("invalid worker configuration: " + str(exc)) from exc
+            continue
+        if name == "t3":
+            if set(component) != {"kind", "package", "version", "compatibility", "service"}:
+                raise ValidationError("invalid T3 component fields")
+            if (
+                kind != "npm-package"
+                or component["package"] != "t3"
+                or component["service"] != "t3code.service"
+            ):
+                raise ValidationError("T3 must be the pinned t3 npm package and service")
+            validate_release_version(_string(component, "version", name), name)
+            bounds = component["compatibility"]
+            if not isinstance(bounds, dict) or set(bounds) != {"min", "max", "steward_version"}:
+                raise ValidationError("T3 compatibility must name min, max and steward_version")
+            for bound in ("min", "max"):
+                if not re.fullmatch(r"\d+\.\d+\.\d+", str(bounds[bound])):
+                    raise ValidationError("T3 compatibility requires numeric release bounds")
+            if bounds["steward_version"] != components["t3-steward"][
+                "version"
+            ] or not _version_tuple(bounds["min"]) <= _version_tuple(
+                component["version"]
+            ) <= _version_tuple(bounds["max"]):
+                raise ValidationError("T3 is outside the captured steward compatibility range")
+            continue
         if kind == "git-checkout":
             validate_source_url(_string(component, "source", name))
             validate_ref(_string(component, "ref", name), name)
@@ -183,13 +233,14 @@ def validate_release(manifest: dict[str, Any]) -> Release:
                 raise ValidationError(f"{name}.repository must be owner/name")
             validate_release_version(_string(component, "version", name), name)
             validate_home_relative_path(_string(component, "path", name), RELEASE_HOME_ROOTS)
-            if component.get("installer") != "t3-update":
-                raise ValidationError(f"{name}.installer must be t3-update")
+            installer = "upkeeper" if "t3" in components else "t3-update"
+            if component.get("installer") != installer:
+                raise ValidationError(f"{name}.installer must be {installer}")
             if not re.fullmatch(r"[a-z][a-z0-9-]*\.service", _string(component, "service", name)):
                 raise ValidationError(f"{name}.service is not a user unit name")
         elif kind == "files":
             files = component.get("files")
-            if not isinstance(files, list) or not files:
+            if not isinstance(files, list) or (not files and "agent-environment" not in components):
                 raise ValidationError(f"{name}.files must be a non-empty list")
             for entry in files:
                 if not isinstance(entry, dict):
@@ -201,6 +252,13 @@ def validate_release(manifest: dict[str, Any]) -> Release:
                     raise ValidationError(f"{name}.files sha256 is invalid")
         else:
             raise ValidationError(f"{name}.kind {kind!r} is not supported")
+    if "agent-environment" in components:
+        if components["agent-config"]["files"]:
+            raise ValidationError(
+                "agent-config must be empty when agent-environment owns its files"
+            )
+        if components["omarchy-setup"]["modules"] != ["28-scripts"]:
+            raise ValidationError("release environment replaces the 45-agents module")
     return Release(manifest)
 
 
@@ -236,10 +294,7 @@ def write_release(root: Path, release: Release) -> Path:
 def _existing_or_default(root: Path) -> dict[str, Any]:
     path = root / RELEASE_FILE
     if path.exists():
-        try:
-            return load_release(root).manifest
-        except ValidationError:
-            pass
+        return load_release(root).manifest
     return json.loads(json.dumps(DEFAULT_MANIFEST))
 
 
@@ -262,9 +317,7 @@ def _capture_checkout(runner: Runner, home: Path, name: str, component: dict[str
     ref = validate_ref(component["ref"], name)
     # Ask the remote itself rather than trusting stale remote-tracking refs: a
     # target can only fetch what origin/<ref> actually reaches today.
-    fetched = runner(
-        ["git", "-C", str(checkout), "fetch", "--quiet", "origin", ref], None, 90
-    )
+    fetched = runner(["git", "-C", str(checkout), "fetch", "--quiet", "origin", ref], None, 90)
     if fetched.returncode != 0:
         raise CaptureError(f"{name}: cannot fetch origin/{ref}: {fetched.stderr.strip()[-300:]}")
     reachable = runner(
@@ -289,12 +342,41 @@ def _capture_steward(runner: Runner, home: Path, name: str, component: dict[str,
     if len(words) < 2:
         raise CaptureError(f"{name}: cannot parse version output {completed.stdout.strip()!r}")
     try:
-        component["version"] = validate_release_version(words[1], name)
+        component["version"] = validate_release_version(words[1].removeprefix("v"), name)
     except ValidationError as exc:
         raise CaptureError(
             f"{name}: installed build {words[1]!r} is not a published release; "
             "tag and release it first"
         ) from exc
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        raise ValidationError("T3 pair requires a stable numeric npm version")
+    return tuple(int(n) for n in value.split("."))
+
+
+def _capture_t3(runner: Runner, home: Path, steward: dict[str, Any]) -> dict[str, Any]:
+    version = runner([str(home / steward["path"]), "version"], None, 15)
+    match = re.search(r"tested with T3 (\d+\.\d+\.\d+)\.\.(\d+\.\d+\.\d+)", version.stdout)
+    if version.returncode or not match:
+        raise CaptureError("steward does not report its tested T3 range")
+    installed = runner(["npm", "ls", "-g", "--depth=0", "--json", "t3"], None, 30)
+    try:
+        package = json.loads(installed.stdout)["dependencies"]["t3"]["version"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CaptureError("cannot observe installed npm t3 package") from exc
+    if installed.returncode or not _version_tuple(match[1]) <= _version_tuple(
+        package
+    ) <= _version_tuple(match[2]):
+        raise CaptureError("installed T3 is outside the steward tested range")
+    return {
+        "kind": "npm-package",
+        "package": "t3",
+        "version": package,
+        "compatibility": {"min": match[1], "max": match[2], "steward_version": steward["version"]},
+        "service": "t3code.service",
+    }
 
 
 def _capture_files(root: Path, home: Path, name: str, component: dict[str, Any]) -> None:
@@ -322,12 +404,29 @@ def capture_release(
 ) -> Release:
     """Read the controller's own machine into a validated release manifest."""
     home = (home or Path.home()).resolve()
+    if _git(runner, root, "status", "--porcelain"):
+        raise CaptureError("release repository has uncommitted changes; commit before capture")
     manifest = _existing_or_default(root)
     components = manifest["components"]
+    components["huyang"]["ref"] = "main"
     for name in ("omarchy-setup", "huyang"):
         _capture_checkout(runner, home, name, components[name])
     _capture_steward(runner, home, "t3-steward", components["t3-steward"])
-    _capture_files(root, home, "agent-config", components["agent-config"])
+    components["t3"] = _capture_t3(runner, home, components["t3-steward"])
+    components["t3-steward"]["installer"] = "upkeeper"
+    provenance = ProjectInstructionRef(
+        "github.com/iryzhkov/dev-fleet",
+        _git(runner, root, "rev-parse", "HEAD"),
+        "README.md",
+        hashlib.sha256((root / "README.md").read_bytes()).hexdigest(),
+    )
+    try:
+        components["agent-environment"] = capture_environment(home, provenance)
+    except (ValueError, OSError) as exc:
+        raise CaptureError("agent-environment: " + str(exc)) from exc
+    components["agent-config"]["files"] = []
+    components["omarchy-setup"]["modules"] = ["28-scripts"]
+    components.setdefault("worker-configuration", {"kind": "worker-configuration", "hosts": {}})
     manifest["captured_at"] = (
         (now or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
     )
@@ -347,4 +446,12 @@ def describe(release: Release) -> list[str]:
         f"agent-config {files}",
         f"huyang {huyang['commit'][:12]} ({huyang['ref']})",
         f"t3-steward {components['t3-steward']['version']}",
-    ]
+    ] + (
+        [
+            f"t3 {components['t3']['version']}",
+            f"agent-environment {len(components['agent-environment']['files'])} owned files",
+            f"worker-configuration {len(components['worker-configuration']['hosts'])} hosts",
+        ]
+        if "t3" in components
+        else []
+    )

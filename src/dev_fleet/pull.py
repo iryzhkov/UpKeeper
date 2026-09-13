@@ -10,6 +10,7 @@ the duration and the controller writes a redacted run record.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import environment, release_assets, worker_release
 from .config import FleetConfig, HostSpec
 from .constants import (
     EXIT_DEPLOYMENT,
@@ -45,7 +47,10 @@ import subprocess
 import sys
 import threading
 import time
+import re
 from pathlib import Path
+from dev_fleet.release_assets import observe_environment, apply_environment
+from dev_fleet.worker_release import worker_projection
 
 PAYLOAD = json.loads(__PAYLOAD__)
 HOME = Path.home()
@@ -128,6 +133,8 @@ LOCK_STATE = {"owned": False}
 
 
 def acquire_lock():
+    if DRY_RUN and not LOCK_DIR.exists():
+        return None
     LOCK_DIR.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         LOCK_DIR.mkdir(mode=0o700)
@@ -448,6 +455,8 @@ def observe_steward(spec):
 
 
 def apply_steward(spec, before, actions):
+    if "t3" in COMPONENTS:
+        return apply_pinned_steward(spec, before, actions)
     if before["version"] == spec["version"] and before["service_active"]:
         return "converged"
     if DRY_RUN:
@@ -468,6 +477,186 @@ def apply_steward(spec, before, actions):
     except ValueError:
         pass
     raise StepFailed(f"t3-update left {after['version']}, wanted {spec['version']}")
+
+
+# ---- U0 pair, environment and worker-bootstrap components ---------------------------
+
+
+def observe_release_environment(spec):
+    _, _, _, drift = observe_environment(spec, HOME)
+    return {"drift": drift}
+
+
+def apply_release_environment(spec, before, actions):
+    result = apply_environment(spec, HOME, RUN_ID, DRY_RUN)
+    actions.extend(("would project " if DRY_RUN else "projected ") + p for p in result["changed"])
+    if result["state"] == "rolled-back":
+        actions.append("restored and verified the complete previous environment")
+    return result["state"]
+
+
+def observe_worker_configuration(spec):
+    return worker_projection(spec, HOME, HOST["name"], RUN_ID, dry_run=True)
+
+
+def apply_worker_configuration(spec, before, actions):
+    result = worker_projection(spec, HOME, HOST["name"], RUN_ID, dry_run=DRY_RUN)
+    if result["configured"]:
+        actions.append("worker bootstrap projected; enrollment belongs to S4")
+    return result["state"]
+
+
+def pair_range(output):
+    match = re.search(r"tested with T3 (\d+\.\d+\.\d+)\.\.(\d+\.\d+\.\d+)", output)
+    return (match[1], match[2]) if match else None
+
+
+def pair_version(output):
+    match = re.match(r"t3-steward v?(\S+)", output)
+    return match[1] if match else None
+
+
+def numeric_version(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d+\.\d+\.\d+", value):
+        raise StepFailed("T3 version is not a stable numeric version")
+    return tuple(int(n) for n in value.split("."))
+
+
+def verify_pair_binary(binary):
+    observed = run([str(binary), "version"], timeout=15)
+    bounds = pair_range(observed["output"])
+    spec = COMPONENTS["t3"]
+    wanted = spec["compatibility"]
+    if (not observed["ok"] or pair_version(observed["output"]) != wanted["steward_version"]
+            or bounds != (wanted["min"], wanted["max"])
+            or not numeric_version(bounds[0]) <= numeric_version(spec["version"]) <= numeric_version(bounds[1])):
+        raise StepFailed("steward binary does not prove the frozen T3 compatibility range")
+
+
+def apply_pinned_steward(spec, before, actions):
+    binary = HOME / spec["path"]
+    if before["version"] and before["version"].removeprefix("v") == spec["version"]:
+        verify_pair_binary(binary)
+        if before["service_active"]:
+            return "converged"
+    if DRY_RUN:
+        actions.append("would install and verify pinned steward " + spec["version"])
+        return "updated"
+    # This is a pinned artifact install, not the self-update command or timer.
+    import platform
+    import tarfile
+    import tempfile
+    import urllib.request
+    arch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine())
+    system = platform.system().lower()
+    if not arch or system not in {"linux", "darwin"}:
+        raise StepFailed("no steward release artifact for this platform")
+    archive = f"t3-steward_{spec['version']}_{system}_{arch}.tar.gz"
+    base = f"https://github.com/{spec['repository']}/releases/download/v{spec['version']}"
+    with tempfile.TemporaryDirectory(prefix="upkeeper-steward-") as directory:
+        stage = Path(directory)
+        try:
+            with urllib.request.urlopen(base + "/checksums.txt", timeout=60) as response:
+                checksums = response.read(1024 * 1024).decode()
+            expected = [line.split()[0] for line in checksums.splitlines()
+                        if len(line.split()) == 2 and line.split()[1].lstrip("*") == archive]
+            if len(expected) != 1:
+                raise StepFailed("release checksum entry missing or ambiguous")
+            with urllib.request.urlopen(base + "/" + archive, timeout=120) as response:
+                payload = response.read(128 * 1024 * 1024 + 1)
+            if len(payload) > 128 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != expected[0]:
+                raise StepFailed("steward release archive checksum mismatch")
+            (stage / archive).write_bytes(payload)
+            with tarfile.open(stage / archive) as tar:
+                member = tar.getmember("t3-steward")
+                if not member.isfile() or member.size > 128 * 1024 * 1024:
+                    raise StepFailed("invalid steward archive member")
+                candidate = stage / "t3-steward"
+                candidate.write_bytes(tar.extractfile(member).read())
+                candidate.chmod(0o755)
+            verify_pair_binary(candidate)
+            current_t3 = observe_t3(COMPONENTS["t3"])
+            bounds = COMPONENTS["t3"]["compatibility"]
+            if (not current_t3["served"] or not numeric_version(bounds["min"]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds["max"])):
+                raise StepFailed("running T3 is outside candidate steward range; no safe pair transition")
+        except StepFailed:
+            raise
+        except Exception as exc:
+            raise StepFailed("steward artifact fetch failed: " + type(exc).__name__) from None
+        backup = HOME / ".local/state/dev-fleet/binary-rollbacks" / RUN_ID
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        existed = binary.exists()
+        if existed:
+            shutil.copy2(binary, backup)
+        try:
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            temporary = binary.with_name(binary.name + ".upkeeper-tmp")
+            if temporary.exists() or temporary.is_symlink():
+                raise StepFailed("steward staging path already exists")
+            shutil.copy2(candidate, temporary)
+            os.replace(temporary, binary)
+            must(["systemctl", "--user", "restart", spec["service"]], what="restart pinned steward")
+            verify_pair_binary(binary)
+            if not unit_active(spec["service"]):
+                raise StepFailed("pinned steward service is inactive")
+        except Exception:
+            if not existed:
+                binary.unlink(missing_ok=True)
+                raise StepFailed("new steward failed; removed unverified binary") from None
+            try:
+                shutil.copy2(backup, binary.with_name(binary.name + ".upkeeper-restore"))
+                os.replace(binary.with_name(binary.name + ".upkeeper-restore"), binary)
+                must(["systemctl", "--user", "restart", spec["service"]], what="restore steward")
+                if sha256_file(binary) != before["binary_sha256"] or not unit_active(spec["service"]):
+                    raise StepFailed("previous steward did not verify")
+            except Exception:
+                raise StepFailed("rollback failed: steward restoration failed") from None
+            raise RolledBack("restored previous steward binary and service") from None
+    actions.append("installed verified pinned steward " + spec["version"])
+    return "updated"
+
+
+def observe_t3(spec):
+    package = run(["npm", "ls", "-g", "--depth=0", "--json", "t3"], timeout=30)
+    try:
+        installed = json.loads(package["output"])["dependencies"]["t3"]["version"] if package["ok"] else None
+    except (ValueError, KeyError, TypeError):
+        installed = None
+    check = run([str(HOME / COMPONENTS["t3-steward"]["path"]), "check"], timeout=30)
+    served = re.search(r"T3 server (\d+\.\d+\.\d+) ", check["output"])
+    threads = re.search(r"shell snapshot: \d+ threads, (\d+) running", check["output"])
+    return {"installed": installed, "served": served[1] if served else None,
+            "running_threads": int(threads[1]) if threads else None,
+            "service_active": unit_active(spec["service"]), "check_ok": check["ok"]}
+
+
+def apply_t3(spec, before, actions):
+    if before["installed"] == spec["version"] and before["served"] == spec["version"] and before["service_active"]:
+        verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
+        return "converged"
+    if DRY_RUN:
+        actions.append("would install t3@" + spec["version"] + "; restart requires a fresh zero-running-thread observation")
+        return "updated"
+    verify_pair_binary(HOME / COMPONENTS["t3-steward"]["path"])
+    # Guard the installation too: npm replaces files a running T3 process may need.
+    fresh = observe_t3(spec)
+    if not fresh["check_ok"] or fresh["running_threads"] != 0:
+        actions.append("T3 change deferred: steward cannot prove zero running threads")
+        return "deferred"
+    if fresh["installed"] != spec["version"]:
+        must(["npm", "install", "-g", "t3@" + spec["version"]], timeout=400, what="install pinned T3")
+        if shutil.which("mise", path=ENV["PATH"]):
+            must(["mise", "reshim"], what="refresh T3 shim")
+    fresh = observe_t3(spec)
+    if not fresh["check_ok"] or fresh["running_threads"] != 0:
+        actions.append("T3 installed; restart deferred because idle evidence changed")
+        return "deferred"
+    must(["systemctl", "--user", "restart", spec["service"]], what="restart idle T3")
+    after = observe_t3(spec)
+    if after["installed"] != spec["version"] or after["served"] != spec["version"] or not after["service_active"]:
+        raise StepFailed("T3 did not verify after restart; observe before retry")
+    actions.append("installed and serving t3@" + spec["version"])
+    return "updated"
 
 
 # ---- harness registration (read-only) ----------------------------------------------
@@ -494,6 +683,9 @@ def harness_report():
 HANDLERS = {
     "omarchy-setup": (observe_omarchy_setup, apply_omarchy_setup),
     "agent-config": (observe_agent_config, apply_agent_config),
+    "agent-environment": (observe_release_environment, apply_release_environment),
+    "worker-configuration": (observe_worker_configuration, apply_worker_configuration),
+    "t3": (observe_t3, apply_t3),
     "huyang": (observe_huyang, apply_huyang),
     "t3-steward": (observe_steward, apply_steward),
 }
@@ -508,7 +700,7 @@ def main():
         print(json.dumps(result, sort_keys=True))
         return
     worst = "converged"
-    rank = ["converged", "updated", "ahead", "skipped", "rolled-back", "failed", "rollback-failed"]
+    rank = ["converged", "updated", "ahead", "skipped", "deferred", "rolled-back", "failed", "rollback-failed"]
     stop = False
     try:
         for name in SELECTED:
@@ -521,6 +713,8 @@ def main():
             try:
                 entry["before"] = observe(COMPONENTS[name])
                 entry["state"] = apply(COMPONENTS[name], entry["before"], entry["actions"])
+                if entry["state"] in {"deferred", "rolled-back", "rollback-failed"}:
+                    stop = True
             except RolledBack as exc:
                 entry["state"] = "rolled-back"
                 entry["error"] = str(exc)
@@ -572,7 +766,19 @@ def _stored_files(root: Path, release: Release) -> dict[str, str]:
 
 def _agent_program(payload: dict[str, Any]) -> str:
     literal = json.dumps(json.dumps(payload, sort_keys=True))
-    return REMOTE_AGENT.replace("__PAYLOAD__", literal, 1)
+    # Supply audited stdlib modules in memory; targets never read this repository,
+    # and a dry run does not create an import cache or a temporary checkout.
+    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release)}
+    bootstrap = (
+        "import sys, types\n"
+        "package = types.ModuleType('dev_fleet'); package.__path__ = []\n"
+        "sys.modules['dev_fleet'] = package\n"
+        f"for name, source in {sources!r}.items():\n"
+        "    module = types.ModuleType(name); module.__package__ = 'dev_fleet'\n"
+        "    sys.modules[name] = module\n"
+        "    exec(compile(source, '<upkeeper-module>', 'exec'), module.__dict__)\n"
+    )
+    return bootstrap + REMOTE_AGENT.replace("__PAYLOAD__", literal, 1)
 
 
 def run_host(
@@ -635,7 +841,7 @@ def exit_code_for(hosts: list[dict[str, Any]]) -> int:
         return EXIT_LOCK_CONTENTION
     if offline:
         return EXIT_PARTIAL
-    if "ahead" in states:
+    if states & {"ahead", "deferred"}:
         return EXIT_DRIFT
     return EXIT_SUCCESS
 
@@ -653,7 +859,9 @@ def pull_fleet(
     record_store: RunRecordStore | None = None,
     runner=run_host,
 ) -> tuple[dict[str, Any], int]:
-    selected_components = [name for name in COMPONENT_ORDER if components is None or name in components]
+    selected_components = [name for name in COMPONENT_ORDER if name in release.components and (components is None or name in components)]
+    if "t3" in release.components and set(selected_components) & {"t3", "t3-steward"}:
+        selected_components = [n for n in COMPONENT_ORDER if n in set(selected_components) | {"t3", "t3-steward"}]
     unknown = set(components or []) - set(COMPONENT_ORDER)
     if unknown:
         raise PullError(f"unknown components: {', '.join(sorted(unknown))}")

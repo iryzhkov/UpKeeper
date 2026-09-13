@@ -71,7 +71,7 @@ def push_release(
     staged = _git(runner, root, "diff", "--cached", "--name-only", *RELEASE_PATHS)
     if staged:
         message = (
-            f"upkeeper: capture release from {controller}\n\n"
+            f"Capture the fleet release from {controller}\n\n"
             + "\n".join(f"- {line}" for line in describe(release))
             + "\n"
         )

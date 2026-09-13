@@ -1,5 +1,9 @@
 # Phase 1 architecture
 
+This document describes the read-only discovery interface. Deployment now exists
+through UpKeeper; see [the current system model](architecture/system-model.md) for
+state ownership, push/pull transactions and the separate F03 saga path.
+
 ## Boundary
 
 Phase 1 is a read-only control plane. `fleet doctor` verifies whether a controller is safe

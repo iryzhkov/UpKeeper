@@ -3,10 +3,10 @@
 An audited Ansible deployment system for developer tooling on `laptop`, `omarchy-pc`
 (current SSH alias `gaming-pc`), `normandy`, and `homelab`.
 
-Phase 1 read-only discovery remains unchanged. F03 adds a library-level UpKeeper mutation
-MVP with revision-fenced approval, durable effect records, reconciliation, rollback, and a
-bounded Ansible adapter. It is not a workflow coordinator and has not been deployed live.
-See `docs/upkeeper-mvp.md`.
+UpKeeper owns fleet deployment through release capture and pull. The F03 saga library
+remains a separate mutation API with revision-fenced approval, durable effects and
+reconciliation. Neither interface is a workflow coordinator. Start with
+[the system model](docs/architecture/system-model.md) and [CONTEXT.md](CONTEXT.md).
 
 ## Release commands
 
@@ -17,11 +17,13 @@ See `docs/upkeeper-mvp.md`.
 ./scripts/upkeeper pull --all
 ```
 
-`push` reads the running state of the controller (Huyang and omarchy-setup checkout
-commits, the installed t3-steward release, the Codex global instructions) into
-`desired/release.json`. `pull` converges named inventory hosts on that file over the
-same strict SSH transport the read-only commands use, observing before it changes
-anything and rolling a failed Huyang build back. See `docs/upkeeper-push-pull.md`.
+`push` captures clean reachable checkout commits, the installed T3/steward pair and
+compatibility range, and the complete owned agent environment into `desired/release.json`.
+Worker bootstrap entries are host-scoped and carry only secret references.
+`pull` carries the validated payload over strict SSH, observes before changing,
+preserves unowned settings and compensates failed environment/Huyang/steward activation.
+See [the release guide](docs/upkeeper-push-pull.md) and
+[the S4 distribution contract](docs/worker-distribution-v1.md).
 
 ## Read-only commands
 
@@ -67,5 +69,5 @@ are reported as findings.
 - `docs/threat-model.md`: security boundaries.
 - `docs/recovery.md`: Forgejo-independent recovery design.
 
-The full audited plan remains at `/home/igor/Work/plans/dev-fleet-plan.md`; Phase 2 must re-read it
-and the committed repository state before implementing any deployment behavior.
+The Citadel replan at `../citadel/docs/reference/active-plan/replan-2026-09-12.md`
+controls current stages. The earlier audited dev-fleet plan is historical context.

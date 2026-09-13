@@ -1,99 +1,98 @@
 # UpKeeper push and pull
 
-`upkeeper push` and `upkeeper pull` are the first UpKeeper commands that change a
-machine. They deliberately do less than the F03 library saga: no Ansible, no
-hash-chained event journal, no multi-phase approval. What they keep from that design
-is the shape that matters operationally: a frozen, validated manifest; observe before
-mutate; verify after; roll back what can be rolled back; locks on both sides; and a
-redacted run record on the controller.
+UpKeeper captures a controller-observed release and converges named inventory hosts.
+Read [the system model](architecture/system-model.md) for ownership, failure semantics
+and the distinction from the F03 saga library.
 
-## The release manifest
+## Release components
 
-`desired/release.json` is the fleet's desired state for the four things this
-repository now deploys. It is captured, never typed:
+| Component | Capture and authority | Pull behavior |
+| --- | --- | --- |
+| omarchy-setup | Clean reachable main commit | Fast-forward checkout, 28-scripts only |
+| agent-config | Legacy manifest file list; empty in U0 captures | Legacy file handler, retained for reading old manifests |
+| agent-environment | F05 AgentEnvironmentSpec v1 and owned file projections | Stage, merge owned keys, activate, verify, whole-environment compensation |
+| Huyang | Clean reachable main commit and probe expectation | Build pinned commit, restart/probe, restore previous commit on failure |
+| t3-steward | Installed release version | Exact checksum-verified GitHub artifact, candidate compatibility interrogation, restart and verification |
+| t3 | Installed npm package/version and range from steward version | Pinned npm install, fresh zero-running-thread guard before install/restart, served-version verification |
+| worker-configuration | Reviewed per-host bootstrap entries preserved by push | Reference availability check, host-scoped configuration write; no enrollment |
 
-| Component | Kind | Captured from | Applied by |
-| --- | --- | --- | --- |
-| `omarchy-setup` | git checkout | `~/.local/share/omarchy-setup` HEAD, must be on `origin/main` | `git pull --ff-only`, then the `28-scripts` and `45-agents` modules |
-| `agent-config` | files | `~/.codex/AGENTS.md`, stored under `desired/agent-config/` | atomic write with a `.upkeeper-<run>.bak` backup |
-| `huyang` | git checkout | `~/.local/share/huyang` HEAD, must be on `origin/feature/huyang` | fetch, detach at the commit, `make build`, restart, MCP probe |
-| `t3-steward` | GitHub release | `t3-steward version`, must be a published release | `t3-update.service` (the fleet's existing installer) |
+A new capture replaces 45-agents module execution with the explicit environment
+component. The old timer and module files remain installed until U1. Old four-component
+manifests remain readable and retain their legacy behavior, including t3-update
+delegation; capture upgrades their component set after all observations pass.
 
-Every value is validated before it is written and again before it is sent: full 40
-character commits, safe ref names, home-relative paths below `.config`, `.local`,
-`.claude` or `.codex`, module names of the form `NN-name`, and a steward version that
-is a release rather than a `-N-gHASH` or `-dirty` local build. A dirty checkout or an
-unpushed commit refuses to become a release, because a target could not fetch it.
+## Capture and publication
 
-Claude Code's own files are not listed: omarchy-setup owns them, and running its
-`45-agents` module is how they converge. Codex and OpenCode MCP registrations are
-checked read-only and reported, not rewritten, because those files carry per-host
-provider settings.
+```bash
+./scripts/upkeeper push
+./scripts/upkeeper push github gitea
+./scripts/upkeeper push --no-push
+```
 
-## `upkeeper push [REMOTE ...]`
+Capture requires a clean release repository and clean installed checkouts whose exact
+commits are reachable on origin/main. It refuses unpublished/local steward builds,
+missing compatibility output, incompatible npm versions, malformed existing manifests,
+and credential-bearing MCP registration fields. It never silently substitutes defaults
+for a damaged existing manifest. After capture, push commits only release paths and
+pushes to explicitly named remotes or all configured remotes.
 
-1. Capture this machine into the manifest and store the agent files.
-2. Commit `desired/release.json` and `desired/agent-config/` (only those paths) when
-   they changed.
-3. Push the current branch to the named remotes, or to every configured remote.
+The release embeds frozen agent payloads, including installed skills and executable
+permissions. The Claude import block and owned settings keys, shared agent instructions,
+Codex global instructions, Claude/Codex/OpenCode MCP registrations and OpenCode instruction
+list are captured. Provider/account state and unrelated settings are not captured.
+Capture errors must be resolved at their owning source, never by weakening validation.
 
-`--no-commit` writes the manifest only; `--no-push` commits without pushing.
+Worker entries are explicit reviewed inputs, not inferred from normandy's duplicated
+coordinator YAML. See [the exact S4 contract](worker-distribution-v1.md).
+U0 leaves the worker hosts map empty.
 
-Publishing is for durability and review. Targets never fetch this repository; the
-controller carries the manifest to them.
+## Pull and observation
 
-## `upkeeper pull --hosts HOST ... | --all`
+```bash
+./scripts/upkeeper pull --hosts homelab omarchy-pc --dry-run
+./scripts/upkeeper pull --hosts homelab --components agent-environment
+./scripts/upkeeper pull --hosts homelab --components t3
+./scripts/upkeeper pull --all
+```
 
-For each host, in the order given:
+The controller validates and carries an in-memory Python module bundle and release
+payload over argument-vector SSH with BatchMode, StrictHostKeyChecking and bounded
+timeouts. Inventory machine identity selects local execution. Targets never read the
+repository. The planned --self exception belongs to U2.
 
-1. Acquire the controller-side lock (`~/.local/state/dev-fleet/locks/<host>.lock`).
-2. Send the fixed standard-library agent program over the same strict SSH transport
-   `fleet doctor` uses (`BatchMode=yes`, `StrictHostKeyChecking=yes`, argument
-   vector only), with the validated manifest embedded as a JSON literal. The
-   inventory host that matches this machine's `/etc/machine-id` runs it locally.
-3. The agent takes the target-side lock, then handles components in a fixed order:
-   `omarchy-setup`, `agent-config`, `huyang`, `t3-steward`. Each is observed first and
-   left alone when it already matches. The first failure stops the host; later
-   components are reported as `skipped`.
-4. Results come back as one JSON document per host and are written, redacted, to
-   `~/.local/state/dev-fleet/runs/<run-id>.json` on the controller.
+Each host is locked on controller and target; dry run observes without writes or service
+effects. Components run in fixed order. Selecting either t3 or t3-steward in a new release
+selects the pair. A failure or deferred T3 restart stops later components on that host.
+A successful earlier component is not automatically rolled back by a later failure.
 
-`--dry-run` observes and prints what would change without taking locks or writing a
-run record. `--components` limits the set. `--timeout` is per host (default 1800 s,
-because a Huyang build plus an omarchy-setup module run can take minutes).
+Environment materialization rebases structured home paths, preserves the local Claude
+text outside the managed block, merges owned JSON keys and permission allows, preserves
+Codex project/provider tables, and adds OpenCode instructions without removing local ones.
+MCP credentials are never copied from normandy. The target uses the shared F05 parser and
+drift projection against full materialized files, and retains a private complete prior
+snapshot before activation. Synchronous failure restores and verifies that snapshot;
+unexplained concurrent changes are preserved and reported rollback-failed.
 
-### Per-component behaviour
+The T3 guard defers on a failed check, unknown running-thread count or any running thread.
+Deferral is drift (exit 10), not convergence. A fresh check is repeated after npm install
+before restart. This is a point-in-time guard, not a scheduler admission lock.
+No U0 pull seeds T3 services, removes timers, enrolls workers or implements --self.
 
-- **omarchy-setup**: refuses a dirty checkout. Pulls fast-forward only. A checkout
-  that ends ahead of the release is reported as `ahead`, not rewound. Modules run
-  when the commit changed or when any managed file (`config/claude/CLAUDE.md`,
-  `config/claude/skills/*/*`, `config/bin/*`) differs from its installed copy. On a
-  host with Omarchy, `run.sh --only ...` runs them; on Debian the modules run directly
-  with the environment `bin/t3-update` uses.
-- **agent-config**: compares digests, backs up, writes atomically, verifies the digest.
-- **huyang**: refuses a dirty checkout. If the pinned commit is already checked out,
-  the service is active and the MCP probe returns the expected tool count, nothing
-  happens. Otherwise: fetch the ref, confirm the commit is present, detach at it,
-  build, restart, wait for the control socket, probe. Any failure rebuilds and
-  restarts the commit that was found before, probes again, and the component ends
-  `rolled-back` (or `rollback-failed` when that also fails).
-- **t3-steward**: runs `t3-update.service`, which installs the newest compatible
-  release. A result equal to the manifest is `updated`; a newer one is `ahead`; an
-  older one or an inactive service is a failure. There is no rollback here because
-  the installer, not UpKeeper, owns that path (edit `config/t3.conf` and rerun).
+## Records and recovery
 
-### Exit codes
+Controller results are redacted under ~/.local/state/dev-fleet/runs/. Environment
+prior bytes and modes remain target-local under
+~/.local/state/dev-fleet/environments/<run-id>/; steward backups are under
+~/.local/state/dev-fleet/binary-rollbacks/. They are evidence for deliberate recovery,
+not an automatic process-crash replay mechanism.
 
-The stable codes from `docs/architecture.md`, worst outcome first: `50` rollback
-failure, `40` a failed or rolled-back component, `60` lock contention, `20` a host
-that could not be reached, `10` a host ahead of the release, `0` converged or updated.
+Lost SSH responses/timeouts are reported and never automatically retried. Observe the
+host and its private prior record before taking another action. Pull does not claim
+the F03 PREPARED/STARTED/UNKNOWN journal semantics. Its component compensation is not
+atomic fleet rollback. The operator rollback --to command remains U1.
 
-## What this is not
-
-It is not the R3/R4 mutation plane of the Citadel roadmap and does not replace the
-library in `src/dev_fleet/upkeeper.py`: there is no approval step, no revision-fenced
-event journal, no reconciliation of an ambiguous SSH loss (a lost response is reported
-as offline and the host must be observed with `fleet status` or a dry run before
-retrying), and no host bootstrap. A missing checkout is a failure, never a clone.
-`desired/components.yml` and its `deployment_enabled: false` are untouched; the
-release manifest is a separate, narrower authority.
+Exit codes retain the existing interface: 0 converged/updated, 10 ahead/deferred,
+20 partial/offline when no deployment-failure result takes precedence, 40 failed or
+rolled-back, 50 rollback-failed, 60 lock contention. A dry-run update describes a planned
+change and retains the existing exit-0 reporting convention. A transport failure
+currently carries result failed and therefore returns 40; it is never success.
