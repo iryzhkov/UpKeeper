@@ -257,6 +257,21 @@ def test_t3_never_installs_or_restarts_without_proven_idle(tmp_path, running, ok
     assert exit_code_for([{"reachable": True, "result": "deferred"}]) == 10
 
 
+def test_setup_drift_does_not_reclaim_environment_owned_files(tmp_path):
+    ns = remote_namespace(tmp_path)
+    ns["COMPONENTS"] = {"agent-environment": {}}
+    checkout = tmp_path / "setup"
+    for path in ("config/claude/CLAUDE.md", "config/claude/skills/example/SKILL.md",
+                 "config/bin/helper"):
+        file = checkout / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("source")
+    pairs = ns["managed_file_pairs"](checkout)
+    assert [str(source.relative_to(checkout)) for source, _ in pairs] == ["config/bin/helper"]
+    ns["COMPONENTS"] = {}
+    assert len(ns["managed_file_pairs"](checkout)) == 3
+
+
 def test_pair_dry_run_does_not_require_future_steward_already_installed(tmp_path):
     ns = remote_namespace(tmp_path)
     ns["DRY_RUN"] = True

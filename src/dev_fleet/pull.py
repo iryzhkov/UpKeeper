@@ -171,9 +171,11 @@ def release_lock():
 
 
 def managed_file_pairs(checkout):
-    pairs = [(checkout / "config/claude/CLAUDE.md", HOME / ".claude/omarchy-setup/CLAUDE.md")]
+    pairs = []
+    if "agent-environment" not in COMPONENTS:
+        pairs.append((checkout / "config/claude/CLAUDE.md", HOME / ".claude/omarchy-setup/CLAUDE.md"))
     skills = checkout / "config/claude/skills"
-    if skills.is_dir():
+    if "agent-environment" not in COMPONENTS and skills.is_dir():
         for skill in sorted(skills.iterdir()):
             for source in sorted(skill.iterdir()):
                 if source.is_file():
