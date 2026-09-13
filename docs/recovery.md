@@ -4,7 +4,7 @@ Forgejo at `git.ryzhkov.dev` is the primary collaboration remote and must be nam
 It runs on `homelab`, so it cannot be the only recovery copy.
 
 The Phase 1 recovery design is implemented as a private recovery repository at
-`git@github.com:iryzhkov/dev-fleet.git`, named `github` locally. It was created and seeded from
+`git@github.com:iryzhkov/UpKeeper.git`, named `github` locally. It was created and seeded from
 Normandy. GitHub is not a deployment source unless it is explicitly listed and its repository
 identity is verified. Normal work pushes to `gitea` first; the recovery remote receives the same
 reviewed commit after that succeeds. Local `main` tracks `gitea/main`.
@@ -12,11 +12,11 @@ reviewed commit after that succeeds. Local `main` tracks `gitea/main`.
 A recovery drill is:
 
 ```bash
-git clone --origin github git@github.com:iryzhkov/dev-fleet.git dev-fleet-recovery
+git clone --origin github git@github.com:iryzhkov/UpKeeper.git dev-fleet-recovery
 cd dev-fleet-recovery
 git fsck --full
 git verify-commit HEAD  # required once signing is enabled; until then record that it is unsigned
-git remote add gitea git@git.ryzhkov.dev:igor/dev-fleet.git
+git remote add gitea git@git.ryzhkov.dev:igor/UpKeeper.git
 git remote -v
 ```
 

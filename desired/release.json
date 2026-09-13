@@ -1915,7 +1915,7 @@
       "source": "https://github.com/iryzhkov/huyang.git"
     },
     "omarchy-setup": {
-      "commit": "44df1800cdd2531ea135326e5bfa06c48f004eda",
+      "commit": "d56ba3617069ac416919a4da4c5d28ecd5186701",
       "kind": "git-checkout",
       "modules": [
         "28-scripts"

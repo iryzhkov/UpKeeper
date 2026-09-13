@@ -415,7 +415,7 @@ def capture_release(
     components["t3"] = _capture_t3(runner, home, components["t3-steward"])
     components["t3-steward"]["installer"] = "upkeeper"
     provenance = ProjectInstructionRef(
-        "github.com/iryzhkov/dev-fleet",
+        "github.com/iryzhkov/UpKeeper",
         _git(runner, root, "rev-parse", "HEAD"),
         "README.md",
         hashlib.sha256((root / "README.md").read_bytes()).hexdigest(),
