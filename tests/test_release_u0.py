@@ -77,6 +77,20 @@ def test_environment_preserves_host_settings_and_rolls_back_the_whole_file_set(t
     assert not (home / ".local/state/dev-fleet/environments/noop").exists()
 
 
+def test_local_harness_reformatting_and_account_updates_are_not_owned_drift(tmp_path):
+    home, component = environment(tmp_path)
+    apply_environment(component, home, "initial")
+    path = home / ".claude.json"
+    data = json.loads(path.read_text())
+    data["localCache"] = {"new": "value"}
+    text = json.dumps(data, separators=(",", ":"))
+    path.write_text(text)
+    result = apply_environment(component, home, "no-owned-drift")
+    assert result["state"] == "converged"
+    assert path.read_text() == text
+    assert not (home / ".local/state/dev-fleet/environments/no-owned-drift").exists()
+
+
 def test_target_local_mcp_credentials_survive_owned_registration_updates(tmp_path):
     home, component = environment(tmp_path)
     claude = home / ".claude.json"

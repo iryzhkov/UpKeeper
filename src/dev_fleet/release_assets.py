@@ -357,6 +357,10 @@ def render(f, old: bytes | None, source_home: str, home: Path) -> bytes:
         current["instructions"] = list(
             dict.fromkeys(current.get("instructions", []) + owned["instructions"])
         )
+    # Harnesses rewrite their own account/cache state and formatting. Those
+    # bytes are not owned drift when all projected keys already agree.
+    if old is not None and json.loads(text) == current:
+        return old
     return canonical(current)
 
 
