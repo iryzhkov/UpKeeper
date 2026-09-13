@@ -36,8 +36,9 @@ and credential-bearing MCP registration fields. It never silently substitutes de
 for a damaged existing manifest. After capture, push commits only release paths and
 pushes to explicitly named remotes or all configured remotes.
 
-The release embeds frozen agent payloads, including installed skills and executable
-permissions. The Claude import block and owned settings keys, shared agent instructions,
+The release embeds frozen agent payloads, including home-owned skills and executable
+permissions. OS-supplied skill symlinks outside the home (such as /usr/share/omarchy)
+remain package-owned and are preserved; UpKeeper neither captures nor writes them. The Claude import block and owned settings keys, shared agent instructions,
 Codex global instructions, Claude/Codex/OpenCode MCP registrations and OpenCode instruction
 list are captured. Provider/account state and unrelated settings are not captured.
 Capture errors must be resolved at their owning source, never by weakening validation.

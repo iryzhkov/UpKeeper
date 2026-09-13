@@ -125,6 +125,19 @@ def test_rejects_corrupt_payload_and_escaping_symlink(tmp_path):
         observe_environment(component, home)
 
 
+def test_capture_preserves_os_owned_skill_symlinks(tmp_path):
+    home, _ = environment(tmp_path)
+    system_skill = tmp_path / "system-skill"
+    system_skill.mkdir()
+    (system_skill / "SKILL.md").write_text("# OS-owned skill")
+    (home / ".claude/skills/os-owned").symlink_to(system_skill, target_is_directory=True)
+    component = capture_environment(home, PROVENANCE)
+    assert not any("os-owned" in f["path"] for f in component["files"])
+    apply_environment(component, home, "preserve-os")
+    assert (home / ".claude/skills/os-owned").is_symlink()
+    assert (system_skill / "SKILL.md").read_text() == "# OS-owned skill"
+
+
 def test_capture_rejects_credentials_in_owned_registrations(tmp_path):
     home, _ = environment(tmp_path)
     (home / ".claude.json").write_text(

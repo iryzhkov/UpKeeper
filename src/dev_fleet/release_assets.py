@@ -114,7 +114,9 @@ def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
         add(str(p.relative_to(home)))
     # Resolve published skill directory symlinks, but freeze bytes, never links.
     for directory in sorted((home / ".claude/skills").iterdir()):
-        if not directory.is_dir():
+        if not directory.is_dir() or not directory.resolve().is_relative_to(home.resolve()):
+            # OS-supplied skill links (for example /usr/share/omarchy) remain
+            # package-owned. Never turn their installed bytes into a writable target.
             continue
         for p in sorted(directory.rglob("*")):
             if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts:

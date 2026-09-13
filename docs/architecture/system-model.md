@@ -57,7 +57,7 @@ S4 consumes [the distribution contract](../worker-distribution-v1.md), then
 observes capabilities and authenticates enrollment separately.
 
 Environment capture owns the Claude managed import and imported instructions,
-installed skill files, Claude settings keys, shared agent instructions, Codex global
+home-owned skill files, Claude settings keys, shared agent instructions, Codex global
 instructions, named MCP registrations and OpenCode instruction-list additions.
 It omits account state, provider credentials, unrelated JSON keys, Codex project
 tables and unrelated MCP registrations. Unsupported/malformed shared-file layouts
