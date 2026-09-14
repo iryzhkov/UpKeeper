@@ -64,3 +64,51 @@ may enroll as a side effect.
 `testdata/fleet/` holds the fixture set that both repositories carry with identical bytes:
 `fleet-intent.json`, `projection-worker-<host>.json`, `projection-coordinator.json` and
 `projection-client-<host>.yaml`. UpKeeper renders them; Steward parses them.
+
+The model identifiers in the fixture are illustrative. The fixture's worker projections are
+not: they are the exact bytes the current release publishes for `homelab` and `omarchy-pc`,
+which is what makes the compatibility property testable.
+
+## Implementation notes
+
+These record where the implementation is stricter than the contract, and where the contract
+left something open. They are notes about the implementation; the contract above is what was
+frozen.
+
+**The client projection is rendered but not written.** Its destination, the `backlog_v2`
+section of `~/.config/t3-steward/config.yaml`, is a file t3-steward also authors. Writing one
+key of it would give one document two authors, which is the failure the coordinator half of
+this component exists to avoid, and merging into it would require a YAML round-trip that
+preserves everything UpKeeper does not own. UpKeeper therefore renders the fragment
+deterministically, publishes it as a shared fixture and reports its digest during
+convergence. How the fragment reaches `config.yaml` is the open question this contract does
+not answer, and it is deliberately left to be settled with t3-steward rather than improvised
+here.
+
+**A disagreement between the two components is refused.** Both `worker-configuration` v1 and
+this component project `~/.config/t3-steward/worker-bootstrap.json`, and this one converges
+second. When a release carries an entry for the same host in both, and the two documents are
+not byte-identical, convergence refuses instead of letting the later component silently
+rewrite the reviewed v1 entry. Changing a host's bootstrap therefore means editing both, or
+removing the host from `worker-configuration`.
+
+**The component is optional in the accepted component set.** A release carries either the
+legacy component set exactly, or the current set with any optional component absent. That is
+what lets every release published before this component existed keep loading, converging and
+rolling back unchanged. Any other component set is still refused by name.
+
+**Capture writes nothing into this component, not even `observed`.** The authored document is
+taken aside before capture observes anything and put back byte-for-byte at the end, and a
+release that never carried the component does not gain one. Recording observations is
+permitted by the contract but is not implemented, because the controller has no observation
+of another host's models that it did not ask that host for.
+
+**Retention lives in its own directory.** The previous document is kept under
+`~/.local/state/dev-fleet/fleet-config/<run-id>/prior.json`, alongside but not inside
+`worker-config/<run-id>/`, so that a run in which both components act cannot collide on one
+exclusively created directory. The retained record names its destination, and restoring it
+puts the host back to exactly what the run found, including having no document at all.
+
+**An exception must produce a valid profile.** Overriding a key the profile does not have is
+refused, and the merged result is validated as if it had been authored directly, so an
+exception cannot smuggle in a value the profile schema would have rejected.

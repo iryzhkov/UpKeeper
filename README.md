@@ -29,6 +29,31 @@ preserves unowned settings and compensates failed environment/Huyang/steward act
 See [the release guide](docs/upkeeper-push-pull.md) and
 [the S4 distribution contract](docs/worker-distribution-v1.md).
 
+## Steward fleet intent
+
+```bash
+./bin/upkeeper fleet-plan                                # report what the fleet authorizes
+./bin/upkeeper fleet-plan --previous 6bcd2f8 --json      # and what enrolling it would change
+```
+
+The `steward-fleet-configuration` component holds the authored, non-secret intent for the
+whole Steward fleet: the coordinator and its client endpoint, reusable host profiles, one
+entry per worker host with its explicit exceptions, and the projects a worker may be offered.
+Three projections are rendered from that one source: the worker bootstrap, the client
+endpoint and the catalog input proposed to the coordinator.
+
+`fleet-plan` only reads. It reaches no host, writes no file and never enrolls; exit code `0`
+means it reported, `2` is a malformed command line and `30` is a refusal. Applying a catalog
+is a deliberate Steward admin operation with its own idempotency key and revision fence.
+
+The component is optional, so a release captured before it existed loads and converges
+unchanged, and for a host whose intent has not changed the worker projection is byte-identical
+to the `worker-configuration` v1 document. Capture never writes the authored document: one
+host's observations may never become fleet-wide authorization. See
+[the frozen contract](docs/steward-fleet-configuration-v1.md), its
+[ADR](docs/architecture/adr-h2-steward-fleet-configuration.md) and the shared fixtures under
+`testdata/fleet/`.
+
 ## Read-only commands
 
 ```bash
