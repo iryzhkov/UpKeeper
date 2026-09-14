@@ -18,7 +18,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import environment, huyang_lifecycle, release_assets, t3_lifecycle, worker_release
+from . import (
+    environment,
+    huyang_lifecycle,
+    release_assets,
+    t3_lifecycle,
+    worker_lifecycle,
+    worker_release,
+)
 from .config import FleetConfig, HostSpec
 from .constants import (
     EXIT_DEPLOYMENT,
@@ -53,6 +60,7 @@ from dev_fleet.release_assets import observe_environment, apply_environment
 from dev_fleet.worker_release import worker_projection
 from dev_fleet.t3_lifecycle import retire_updater, seed_t3_service
 from dev_fleet.huyang_lifecycle import bootstrap_huyang
+from dev_fleet.worker_lifecycle import WorkerRestartFailed, restart_persistent_worker
 
 PAYLOAD = json.loads(__PAYLOAD__)
 HOME = Path.home()
@@ -112,6 +120,11 @@ def sha256_file(path):
 
 def unit_active(unit):
     return run(["systemctl", "--user", "is-active", unit], timeout=10)["output"] == "active"
+
+
+def unit_loaded(unit):
+    result = run(["systemctl", "--user", "show", unit, "-p", "LoadState", "--value"], timeout=10)
+    return result["ok"] and result["output"] == "loaded"
 
 
 def git_head(checkout):
@@ -683,6 +696,11 @@ def apply_pinned_steward(spec, before, actions):
     actions.append("installed verified pinned steward " + spec["version"])
     if spec.get("session_hook_sha256"):
         actions.append("installed verified OpenCode caller hook; loaded by new OpenCode servers")
+    try:
+        restart_persistent_worker(binary, actions, run=run, must=must, unit_loaded=unit_loaded,
+                                  unit_active=unit_active, dry_run=DRY_RUN)
+    except WorkerRestartFailed as exc:
+        raise StepFailed(str(exc)) from None
     return "updated"
 
 
@@ -856,7 +874,7 @@ def _agent_program(payload: dict[str, Any]) -> str:
     literal = json.dumps(json.dumps(payload, sort_keys=True))
     # Supply audited stdlib modules in memory; targets never read this repository,
     # and a dry run does not create an import cache or a temporary checkout.
-    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release, t3_lifecycle, huyang_lifecycle)}
+    sources = {m.__name__: inspect.getsource(m) for m in (environment, release_assets, worker_release, t3_lifecycle, huyang_lifecycle, worker_lifecycle)}
     bootstrap = (
         "import sys, types\n"
         "package = types.ModuleType('dev_fleet'); package.__path__ = []\n"
