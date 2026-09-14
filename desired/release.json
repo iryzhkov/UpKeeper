@@ -1929,7 +1929,7 @@
         "make",
         "build"
       ],
-      "commit": "b6ba7746043bef30c2f73718ee2bd4bac8cf67fd",
+      "commit": "7c7218874dd9691093c2707bcea04139750faeb5",
       "kind": "git-checkout",
       "path": ".local/share/huyang",
       "probe": {
