@@ -1,0 +1,328 @@
+package fleet
+
+import (
+	"sort"
+	"strconv"
+)
+
+// ModelSets is what one host is authorized to run and, separately, what was
+// observed on it.
+//
+// Desired is always present, and an empty Desired means "no models are
+// authorized here". Observed is present only when something genuinely observed
+// that host. Collapsing those two answers is how "no route" became
+// unexplainable, so HasObservation is reported rather than inferred from an
+// empty map.
+type ModelSets struct {
+	Desired        map[string][]string
+	Observed       map[string][]string
+	HasObservation bool
+}
+
+// Models reports the desired and observed model sets of one host.
+//
+// It never computes an effective set. The effective set is the intersection of
+// authorization, installation, authentication, the host's advertised cache and
+// quota policy, and only the coordinator holds the accepted snapshot that
+// answer must come from.
+func (d *Document) Models(name string) (ModelSets, error) {
+	profile, err := d.Resolved(name)
+	if err != nil {
+		return ModelSets{}, err
+	}
+	sets := ModelSets{Desired: map[string][]string{}}
+	for instance, allowed := range profile.Models {
+		sets.Desired[instance] = sortedUnique(allowed)
+	}
+	observation, present := d.hostObservation(name)
+	if !present {
+		return sets, nil
+	}
+	sets.HasObservation = true
+	sets.Observed = map[string][]string{}
+	models, _ := observation["models"].(map[string]any)
+	for instance, value := range models {
+		values, err := stringList(value)
+		if err != nil {
+			continue
+		}
+		sets.Observed[instance] = sortedUnique(values)
+	}
+	return sets, nil
+}
+
+func (d *Document) hostObservation(name string) (map[string]any, bool) {
+	if d.observed == nil {
+		return nil, false
+	}
+	hosts, _ := d.observed["hosts"].(map[string]any)
+	entry, present := hosts[name].(map[string]any)
+	return entry, present
+}
+
+// Report renders the desired and observed sets of every declared host, with
+// the digest of each projection this document would produce for it.
+//
+// A host with no observation reports observed_models as nothing at all, which
+// is a different document from a host whose observed set is empty.
+func (d *Document) Report() (map[string]any, error) {
+	hosts := map[string]any{}
+	for _, name := range d.HostNames() {
+		sets, err := d.Models(name)
+		if err != nil {
+			return nil, err
+		}
+		worker, err := d.WorkerBytes(name)
+		if err != nil {
+			return nil, err
+		}
+		client, err := d.ClientBytes(name)
+		if err != nil {
+			return nil, err
+		}
+		profile, err := d.Resolved(name)
+		if err != nil {
+			return nil, err
+		}
+		entry := map[string]any{
+			"profile":         d.Hosts[name].Profile,
+			"cpu_class":       profile.CPUClass,
+			"executor_slots":  profile.ExecutorSlots,
+			"desired_models":  asAny(sets.Desired),
+			"observed_models": nil,
+			"worker_sha256":   Digest(worker),
+			"client_sha256":   Digest(client),
+		}
+		if sets.HasObservation {
+			entry["observed_models"] = asAny(sets.Observed)
+		}
+		hosts[name] = entry
+	}
+	catalog, err := d.CoordinatorBytes()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"coordinator_id":          d.Coordinator.ID,
+		"coordinator_host":        d.Coordinator.Host,
+		"hosts":                   hosts,
+		"proposed_catalog_sha256": Digest(catalog),
+	}, nil
+}
+
+// EnrollmentPlan renders what an enrollment would change, and nothing else.
+//
+// UpKeeper may produce this plan. It may not enroll: applying it is a
+// deliberate Steward admin operation with its own idempotency key and revision
+// fence, because an accidental re-enrollment invalidates in-flight offers on a
+// live fleet. The plan therefore always reports applied as false, and no code
+// path in this repository turns it into a request.
+//
+// previous is the document this proposal replaces, or nil when there is none;
+// against nil every authorization in the proposal is an addition, which is what
+// a first enrollment is.
+func (d *Document) EnrollmentPlan(previous *Document) (map[string]any, error) {
+	catalog, err := d.CoordinatorBytes()
+	if err != nil {
+		return nil, err
+	}
+	var previousDigest any
+	if previous != nil {
+		earlier, err := previous.CoordinatorBytes()
+		if err != nil {
+			return nil, err
+		}
+		previousDigest = Digest(earlier)
+	}
+	changes, err := d.authorizationDiff(previous)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"applied":                 false,
+		"coordinator_id":          d.Coordinator.ID,
+		"coordinator_host":        d.Coordinator.Host,
+		"previous_catalog_sha256": previousDigest,
+		"proposed_catalog_sha256": Digest(catalog),
+		"observed_catalog_sha256": d.observedCoordinator("catalog_sha256"),
+		"expected_revision":       d.observedCoordinator("revision"),
+		"authorization_changes":   asStrings(changes),
+		"note":                    "proposal only; enrollment is an explicit Steward operation",
+	}, nil
+}
+
+func (d *Document) observedCoordinator(key string) any {
+	if d.observed == nil {
+		return nil
+	}
+	coordinator, _ := d.observed["coordinator"].(map[string]any)
+	value, present := coordinator[key]
+	if !present {
+		return nil
+	}
+	return value
+}
+
+// authorizationDiff lists the authorization-relevant differences between the
+// previous document and this one, in a stable order. Only things that change
+// what a worker may be offered or may run are listed: this is the diff a human
+// has to read before enrolling, not a full document diff.
+func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
+	changes := []string{}
+	if previous != nil && previous.Coordinator.ID != d.Coordinator.ID {
+		changes = append(changes,
+			"coordinator identity "+previous.Coordinator.ID+" becomes "+d.Coordinator.ID)
+	}
+	for _, name := range d.HostNames() {
+		proposed, err := d.Models(name)
+		if err != nil {
+			return nil, err
+		}
+		if previous == nil {
+			changes = append(changes, "worker "+name+" is added")
+			changes = append(changes, modelChanges(name, nil, proposed.Desired)...)
+			continue
+		}
+		if _, known := previous.Hosts[name]; !known {
+			changes = append(changes, "worker "+name+" is added")
+			changes = append(changes, modelChanges(name, nil, proposed.Desired)...)
+			continue
+		}
+		earlier, err := previous.Models(name)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, modelChanges(name, earlier.Desired, proposed.Desired)...)
+		changes = append(changes, slotChanges(d, previous, name)...)
+	}
+	if previous != nil {
+		for _, name := range previous.HostNames() {
+			if _, kept := d.Hosts[name]; !kept {
+				changes = append(changes, "worker "+name+" is removed")
+			}
+		}
+	}
+	changes = append(changes, projectChanges(d, previous)...)
+	return changes, nil
+}
+
+func slotChanges(proposed, previous *Document, name string) []string {
+	now, err := proposed.Resolved(name)
+	if err != nil {
+		return nil
+	}
+	before, err := previous.Resolved(name)
+	if err != nil {
+		return nil
+	}
+	changes := []string{}
+	if before.ExecutorSlots != now.ExecutorSlots {
+		changes = append(changes, "worker "+name+" executor slots "+
+			strconv.Itoa(before.ExecutorSlots)+" becomes "+strconv.Itoa(now.ExecutorSlots))
+	}
+	for _, added := range difference(now.QuotaPools, before.QuotaPools) {
+		changes = append(changes, "worker "+name+" joins quota pool "+added)
+	}
+	for _, dropped := range difference(before.QuotaPools, now.QuotaPools) {
+		changes = append(changes, "worker "+name+" leaves quota pool "+dropped)
+	}
+	return changes
+}
+
+func projectChanges(proposed, previous *Document) []string {
+	changes := []string{}
+	for _, name := range proposed.ProjectNames() {
+		project := proposed.Projects[name]
+		if previous == nil {
+			changes = append(changes, "project "+name+" is added at "+project.Repository)
+			continue
+		}
+		earlier, known := previous.Projects[name]
+		if !known {
+			changes = append(changes, "project "+name+" is added at "+project.Repository)
+			continue
+		}
+		if earlier.Repository != project.Repository {
+			changes = append(changes, "project "+name+" repository "+
+				earlier.Repository+" becomes "+project.Repository)
+		}
+		if earlier.DefaultRef != project.DefaultRef {
+			changes = append(changes, "project "+name+" default ref "+
+				earlier.DefaultRef+" becomes "+project.DefaultRef)
+		}
+		for _, added := range difference(project.EligibleWorkers, earlier.EligibleWorkers) {
+			changes = append(changes, "project "+name+" becomes eligible for "+added)
+		}
+		for _, dropped := range difference(earlier.EligibleWorkers, project.EligibleWorkers) {
+			changes = append(changes, "project "+name+" stops being eligible for "+dropped)
+		}
+	}
+	if previous == nil {
+		return changes
+	}
+	for _, name := range previous.ProjectNames() {
+		if _, kept := proposed.Projects[name]; !kept {
+			changes = append(changes, "project "+name+" is removed")
+		}
+	}
+	return changes
+}
+
+func modelChanges(host string, before, now map[string][]string) []string {
+	changes := []string{}
+	instances := map[string]bool{}
+	for instance := range before {
+		instances[instance] = true
+	}
+	for instance := range now {
+		instances[instance] = true
+	}
+	names := make([]string, 0, len(instances))
+	for instance := range instances {
+		names = append(names, instance)
+	}
+	sort.Strings(names)
+	for _, instance := range names {
+		for _, added := range difference(now[instance], before[instance]) {
+			changes = append(changes,
+				"worker "+host+" is authorized for "+instance+" model "+added)
+		}
+		for _, dropped := range difference(before[instance], now[instance]) {
+			changes = append(changes,
+				"worker "+host+" loses authorization for "+instance+" model "+dropped)
+		}
+	}
+	return changes
+}
+
+// difference returns the sorted values of left that are not in right.
+func difference(left, right []string) []string {
+	present := make(map[string]bool, len(right))
+	for _, value := range right {
+		present[value] = true
+	}
+	missing := []string{}
+	for _, value := range left {
+		if !present[value] {
+			missing = append(missing, value)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func asAny(values map[string][]string) map[string]any {
+	converted := map[string]any{}
+	for key, value := range values {
+		converted[key] = asStrings(value)
+	}
+	return converted
+}
+
+func asStrings(values []string) []any {
+	converted := make([]any, 0, len(values))
+	for _, value := range values {
+		converted = append(converted, value)
+	}
+	return converted
+}
