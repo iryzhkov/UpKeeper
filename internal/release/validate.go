@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/failure"
+	"github.com/iryzhkov/UpKeeper/internal/fleet"
 	"github.com/iryzhkov/UpKeeper/internal/pyfmt"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
 )
@@ -105,6 +106,12 @@ func validateComponent(name string, component, components map[string]any) error 
 	case "worker-configuration":
 		if err := ValidateWorkers(component); err != nil {
 			return failure.Validation("invalid worker configuration: %s", err.Error())
+		}
+		return nil
+	case fleet.Component:
+		if err := ValidateFleetConfiguration(component); err != nil {
+			return failure.Validation(
+				"invalid steward fleet configuration: %s", err.Error())
 		}
 		return nil
 	case "t3":
@@ -349,8 +356,30 @@ func validationOrder(components map[string]any) []string {
 	return append(ordered, remaining...)
 }
 
+// isKnownComponentSet accepts the component set of a release this binary can
+// converge: the legacy set exactly, or the current set with any optional
+// component absent. A release that omits an optional component is not an
+// incomplete release; it is a release captured before that component existed,
+// and it must converge unchanged.
 func isKnownComponentSet(components map[string]any) bool {
-	return sameNameSet(components, LegacyComponentOrder) || sameNameSet(components, ComponentOrder)
+	if sameNameSet(components, LegacyComponentOrder) {
+		return true
+	}
+	known := make(map[string]bool, len(ComponentOrder))
+	for _, name := range ComponentOrder {
+		known[name] = true
+	}
+	for name := range components {
+		if !known[name] {
+			return false
+		}
+	}
+	for _, name := range ComponentOrder {
+		if _, present := components[name]; !present && !OptionalComponents[name] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameNameSet(components map[string]any, names []string) bool {

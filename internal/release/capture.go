@@ -9,6 +9,7 @@ import (
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
+	"github.com/iryzhkov/UpKeeper/internal/fleet"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/pyfmt"
 	"github.com/iryzhkov/UpKeeper/internal/pytime"
@@ -107,6 +108,11 @@ func Capture(
 		return Release{}, err
 	}
 	components, _ := manifest["components"].(map[string]any)
+	// Authored fleet intent is taken aside before anything is observed, and
+	// put back untouched at the end. Capture may record observations in the
+	// document's separate observed field; it may never infer authorization
+	// from what this one host happens to have.
+	authoredFleet, fleetPresent := components[fleet.Component]
 
 	huyang, _ := components["huyang"].(map[string]any)
 	huyang["ref"] = "main"
@@ -176,6 +182,9 @@ func Capture(
 				delete(components, name)
 			}
 		}
+	}
+	if err := preserveAuthoredFleetIntent(components, authoredFleet, fleetPresent); err != nil {
+		return Release{}, err
 	}
 	if now.IsZero() {
 		now = time.Now()

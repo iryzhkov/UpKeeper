@@ -22,18 +22,23 @@ const (
 // capture expects, with every external command answered from a table so that
 // the test never touches Git, npm or the network.
 type fixture struct {
-	root   string
-	home   string
-	calls  []string
-	envErr error
+	root string
+	home string
+	// huyangHead is what the controller's own Huyang checkout is on. It is a
+	// field rather than a constant so that a test can move the controller
+	// ahead of the release and watch what a capture does with that.
+	huyangHead string
+	calls      []string
+	envErr     error
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	base := t.TempDir()
 	subject := &fixture{
-		root: filepath.Join(base, "checkout"),
-		home: filepath.Join(base, "home"),
+		root:       filepath.Join(base, "checkout"),
+		home:       filepath.Join(base, "home"),
+		huyangHead: huyangCommit,
 	}
 	for _, directory := range []string{
 		filepath.Join(subject.home, ".local/share/omarchy-setup/.git"),
@@ -81,7 +86,7 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	case strings.Contains(joined, "omarchy-setup rev-parse HEAD"):
 		return procx.Result{Stdout: setupCommit + "\n"}
 	case strings.Contains(joined, "huyang rev-parse HEAD"):
-		return procx.Result{Stdout: huyangCommit + "\n"}
+		return procx.Result{Stdout: f.huyangHead + "\n"}
 	case strings.HasSuffix(joined, "fetch --quiet origin main"),
 		strings.Contains(joined, "merge-base --is-ancestor"):
 		return procx.Result{}

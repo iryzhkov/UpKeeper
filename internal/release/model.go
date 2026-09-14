@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/fleet"
 )
 
 // SchemaVersion is the only release schema this binary understands.
@@ -65,7 +66,14 @@ var ComponentOrder = []string{
 	"t3-steward",
 	"t3",
 	"worker-configuration",
+	fleet.Component,
 }
+
+// OptionalComponents may be absent from a current release. The Steward fleet
+// intent is optional because every release captured before it existed has to
+// keep loading, converging and rolling back exactly as it does now: adding a
+// component may not invalidate the releases already published.
+var OptionalComponents = map[string]bool{fleet.Component: true}
 
 // defaultManifest is the shape of a fresh manifest. Everything push captures is
 // null here, so that a manifest which was never captured cannot be mistaken for
@@ -196,11 +204,21 @@ func Describe(value Release) []string {
 	environmentFiles, _ := environment["files"].([]any)
 	workers, _ := components["worker-configuration"].(map[string]any)
 	workerHosts, _ := workers["hosts"].(map[string]any)
-	return append(lines,
+	lines = append(lines,
 		"t3 "+text(t3["version"]),
 		"agent-environment "+itoa(len(environmentFiles))+" owned files",
 		"worker-configuration "+itoa(len(workerHosts))+" hosts",
 	)
+	// The fleet intent is described only when the release carries it, so a
+	// release captured before it existed keeps the summary it always had.
+	intent, present := components[fleet.Component].(map[string]any)
+	if !present {
+		return lines
+	}
+	fleetHosts, _ := intent["hosts"].(map[string]any)
+	fleetProjects, _ := intent["projects"].(map[string]any)
+	return append(lines, fleet.Component+" "+itoa(len(fleetHosts))+" hosts, "+
+		itoa(len(fleetProjects))+" projects")
 }
 
 func shorten(value string, size int) string {
