@@ -10,6 +10,7 @@ package units
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/failure"
@@ -155,6 +156,32 @@ func verifyCheckout(root string, runner procx.Runner, expected, requiredHost str
 	return nil
 }
 
+// refuseWhenADropInOwnsIt stops the installer from rewriting a unit that a
+// canary drop-in is currently overriding.
+//
+// The two ways onto the binary are not composable. A drop-in leaves the
+// committed unit alone and is rolled back by deleting one file; the installer
+// writes the base unit with the binary's ExecStart baked in. A host that has
+// both would delete the drop-in, believe it had rolled back, and still run the
+// binary. Refusing keeps "delete one file" true wherever it was ever true.
+func refuseWhenADropInOwnsIt(destination, unit string) error {
+	directory := filepath.Join(destination, unit+".d")
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".conf") {
+			return failure.Validation(
+				"%s is overridden by a drop-in in %s; rolling that back is deleting "+
+					"the drop-in, and installing the unit here would make the rollback "+
+					"silently do nothing. Remove the drop-in first if you want the "+
+					"installed unit instead", unit, directory)
+		}
+	}
+	return nil
+}
+
 func install(
 	definitions []Definition, timer string, runner procx.Runner,
 ) ([]string, error) {
@@ -168,6 +195,11 @@ func install(
 	destination := filepath.Join(home, ".config", "systemd", "user")
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return nil, err
+	}
+	for _, definition := range definitions {
+		if err := refuseWhenADropInOwnsIt(destination, definition.Name); err != nil {
+			return nil, err
+		}
 	}
 	written := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
