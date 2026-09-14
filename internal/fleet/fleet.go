@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
@@ -38,12 +39,12 @@ const (
 	// is the same file worker-configuration v1 writes, on purpose: for a host
 	// whose intent has not changed the bytes are identical.
 	WorkerDestination = ".config/t3-steward/worker-bootstrap.json"
-	// ClientDestination and ClientKey name where the client projection belongs
-	// on a host. UpKeeper renders that projection and reports its digest; see
-	// docs/steward-fleet-configuration-v1.md for why it does not write the
-	// file itself.
-	ClientDestination = ".config/t3-steward/config.yaml"
-	ClientKey         = "backlog_v2.coordinator_client"
+	// ClientDestination is the host-relative path of the client projection. It
+	// is UpKeeper's own file rather than a section of the configuration
+	// t3-steward authors, so that one document never has two authors: the
+	// runtime reads this file the way it reads the worker bootstrap, and an
+	// explicit backlog_v2.coordinator_client block overrides it.
+	ClientDestination = ".config/t3-steward/coordinator-client.json"
 	// CoordinatorKind labels the proposed catalog input. It is a proposal: no
 	// UpKeeper code path applies it.
 	CoordinatorKind = "steward-coordinator-catalog-input"
@@ -57,6 +58,36 @@ const (
 var ComponentFields = []string{
 	"kind", "schema_version", "coordinator", "profiles", "hosts", "projects",
 }
+
+// ClientFields is the closed field set of the client projection. It is closed
+// for the same reason the worker bootstrap's is: a document that may carry
+// anything is a document a credential value can be smuggled into.
+var ClientFields = []string{
+	"schema_version",
+	"coordinator_id",
+	"address",
+	"connection",
+	"remote_command",
+	"credential_ref",
+	"request_timeout",
+	"message_limits",
+}
+
+// MessageLimitFields is the closed field set of a client's message limits.
+var MessageLimitFields = []string{"max_request_bytes", "max_response_bytes"}
+
+// DefaultMessageLimits are the limits a client endpoint gets when the authored
+// document does not state them. They are explicit values rather than "no
+// limit", because an unbounded client is one malformed response away from
+// exhausting the memory of whatever host ran the command.
+var DefaultMessageLimits = MessageLimits{
+	MaxRequestBytes:  1 << 20,
+	MaxResponseBytes: 8 << 20,
+}
+
+// maximumMessageBytes bounds an authored limit. A limit larger than this is
+// not a limit.
+const maximumMessageBytes = 1 << 30
 
 // ProfileFields, HostFields and ProjectFields are the keys every entry of that
 // kind must carry. Additional keys are preserved rather than refused, because
@@ -103,12 +134,19 @@ var (
 	commandPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,199}$`)
 )
 
+// MessageLimits bound what a client will send and accept.
+type MessageLimits struct {
+	MaxRequestBytes  int
+	MaxResponseBytes int
+}
+
 // ClientEndpoint is how a non-coordinator CLI reaches the coordinator.
 type ClientEndpoint struct {
 	Address        string
 	Connection     string
 	RemoteCommand  string
 	RequestTimeout int
+	MessageLimits  MessageLimits
 }
 
 // Coordinator is the fleet's single coordinator identity.
@@ -268,10 +306,17 @@ func (d *Document) parseCoordinator(value any) error {
 	if !ok {
 		return failure.Value("fleet coordinator client_endpoint must be an object")
 	}
+	// message_limits is optional so that a document authored against the
+	// frozen four-key shape still validates; an absent one takes the explicit
+	// default rather than meaning "unbounded".
 	if err := exactKeys(endpoint,
 		[]string{"address", "connection", "remote_command", "request_timeout"},
-		nil); err != nil {
+		[]string{"message_limits"}); err != nil {
 		return failure.Value("fleet client endpoint is missing %s", err.Error())
+	}
+	limits, err := parseMessageLimits(endpoint["message_limits"])
+	if err != nil {
+		return err
 	}
 	address, _ := endpoint["address"].(string)
 	command, _ := endpoint["remote_command"].(string)
@@ -297,9 +342,41 @@ func (d *Document) parseCoordinator(value any) error {
 			Connection:     "ssh",
 			RemoteCommand:  command,
 			RequestTimeout: timeout,
+			MessageLimits:  limits,
 		},
 	}
 	return nil
+}
+
+func parseMessageLimits(value any) (MessageLimits, error) {
+	if value == nil {
+		return DefaultMessageLimits, nil
+	}
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return MessageLimits{}, failure.Value("fleet client message_limits must be an object")
+	}
+	if err := exactKeys(entry, MessageLimitFields, nil); err != nil {
+		return MessageLimits{}, failure.Value(
+			"fleet client message_limits must name only %s",
+			strings.Join(MessageLimitFields, " and "))
+	}
+	limits := MessageLimits{}
+	for _, pair := range []struct {
+		key   string
+		store *int
+	}{
+		{"max_request_bytes", &limits.MaxRequestBytes},
+		{"max_response_bytes", &limits.MaxResponseBytes},
+	} {
+		size, numbered := intValue(entry[pair.key])
+		if !numbered || size < 1 || size > maximumMessageBytes {
+			return MessageLimits{}, failure.Value(
+				"fleet client %s must be 1 through %d bytes", pair.key, maximumMessageBytes)
+		}
+		*pair.store = size
+	}
+	return limits, nil
 }
 
 var hostAddressPattern = regexp.MustCompile(

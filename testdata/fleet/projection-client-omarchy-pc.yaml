@@ -1,8 +1,0 @@
-backlog_v2:
-  coordinator_client:
-    address: "normandy"
-    admin_credential_ref: "secretref:f03-admin/omarchy-pc"
-    connection: "ssh"
-    coordinator_id: "normandy-coordinator"
-    remote_command: "t3-steward coordinator serve --stdio"
-    request_timeout: 30

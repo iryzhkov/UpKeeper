@@ -45,7 +45,7 @@ they round-trip byte-for-byte and refused when they cannot.
 | Projection | Destination on the host | Rule |
 | --- | --- | --- |
 | worker | `~/.config/t3-steward/worker-bootstrap.json` | byte-identical to the `worker-configuration` v1 document whenever a host's intent is unchanged |
-| client | `~/.config/t3-steward/config.yaml` key `backlog_v2.coordinator_client` | rendered from `coordinator.client_endpoint` plus the host's `admin_credential_ref` |
+| client | `~/.config/t3-steward/coordinator-client.json`, mode 0600 | rendered from `coordinator.client_endpoint` plus the host's `admin_credential_ref`; an explicit `backlog_v2.coordinator_client` block in `config.yaml` overrides it |
 | coordinator | proposed catalog input for the coordinator host | never applied by UpKeeper; it is input to an explicit Steward enrollment operation |
 
 Rendering is deterministic: the same intent produces the same bytes on every host and every run.
@@ -63,7 +63,7 @@ may enroll as a side effect.
 
 `testdata/fleet/` holds the fixture set that both repositories carry with identical bytes:
 `fleet-intent.json`, `projection-worker-<host>.json`, `projection-coordinator.json` and
-`projection-client-<host>.yaml`. UpKeeper renders them; Steward parses them.
+`projection-client-<host>.json`. UpKeeper renders them; Steward parses them.
 
 The model identifiers in the fixture are illustrative. The fixture's worker projections are
 not: they are the exact bytes the current release publishes for `homelab` and `omarchy-pc`,
@@ -75,22 +75,31 @@ These record where the implementation is stricter than the contract, and where t
 left something open. They are notes about the implementation; the contract above is what was
 frozen.
 
-**The client projection is rendered but not written.** Its destination, the `backlog_v2`
-section of `~/.config/t3-steward/config.yaml`, is a file t3-steward also authors. Writing one
-key of it would give one document two authors, which is the failure the coordinator half of
-this component exists to avoid, and merging into it would require a YAML round-trip that
-preserves everything UpKeeper does not own. UpKeeper therefore renders the fragment
-deterministically, publishes it as a shared fixture and reports its digest during
-convergence. How the fragment reaches `config.yaml` is the open question this contract does
-not answer, and it is deliberately left to be settled with t3-steward rather than improvised
-here.
+**The client projection is UpKeeper's own file.** Its destination was originally a key inside
+`~/.config/t3-steward/config.yaml`, which t3-steward also authors; writing one key of that
+file would have given one document two authors, the failure the coordinator half of this
+component exists to avoid. The destination is therefore
+`~/.config/t3-steward/coordinator-client.json`, mode 0600, written the same way the worker
+bootstrap is and read the same way the runtime reads the worker bootstrap. An explicit
+`backlog_v2.coordinator_client` block in `config.yaml` overrides it, so a host can still be
+pinned by hand without UpKeeper and the hand-written value wins.
+
+Its field set is closed: `schema_version`, `coordinator_id`, `address`, `connection`,
+`remote_command`, `credential_ref`, `request_timeout` and `message_limits`. `credential_ref`
+is the host's `secretref:f03-admin/<host>`, a reference and never a value.
+
+`message_limits` carries `max_request_bytes` and `max_response_bytes`. It may be authored
+under `coordinator.client_endpoint`, and is optional there so that a document written against
+the frozen four-key endpoint shape still validates; an absent one takes the explicit default
+rather than meaning unbounded, because an unbounded client is one malformed response away from
+exhausting the memory of whatever host ran the command. The shape of this field was chosen by
+the implementation and must match what t3-steward parses.
 
 **A disagreement between the two components is refused.** Both `worker-configuration` v1 and
 this component project `~/.config/t3-steward/worker-bootstrap.json`, and this one converges
 second. When a release carries an entry for the same host in both, and the two documents are
 not byte-identical, convergence refuses instead of letting the later component silently
-rewrite the reviewed v1 entry. Changing a host's bootstrap therefore means editing both, or
-removing the host from `worker-configuration`.
+rewrite the reviewed v1 entry. The adoption hazard that follows from this is described below.
 
 **The component is optional in the accepted component set.** A release carries either the
 legacy component set exactly, or the current set with any optional component absent. That is
@@ -103,12 +112,48 @@ release that never carried the component does not gain one. Recording observatio
 permitted by the contract but is not implemented, because the controller has no observation
 of another host's models that it did not ask that host for.
 
-**Retention lives in its own directory.** The previous document is kept under
+**Retention lives in its own directory.** The documents a run replaces are kept under
 `~/.local/state/dev-fleet/fleet-config/<run-id>/prior.json`, alongside but not inside
 `worker-config/<run-id>/`, so that a run in which both components act cannot collide on one
-exclusively created directory. The retained record names its destination, and restoring it
-puts the host back to exactly what the run found, including having no document at all.
+exclusively created directory. Both owned documents are retained even when only one of them
+changes, so restoring a run puts the whole of what it found back rather than half of it. The
+retained record names each destination, and restoring it puts the host back to exactly what
+the run found, including having no document at all.
 
 **An exception must produce a valid profile.** Overriding a key the profile does not have is
 refused, and the merged result is validated as if it had been authored directly, so an
 exception cannot smuggle in a value the profile schema would have rejected.
+
+## Adoption hazard: two components, one bootstrap
+
+Adding `steward-fleet-configuration` for a host that already has a `worker-configuration` v1
+entry means that one file on that host now has two sources in one release. The two must agree
+byte-for-byte, and convergence refuses the host when they do not, with
+`fleet intent and worker-configuration disagree about this host's bootstrap`.
+
+The refusal is deliberate, and it is safe: the comparison happens before anything on the
+target is written, so a refused host keeps exactly the bootstrap it had. It is also visible in
+a dry run, so the disagreement can be found without changing a live host at all.
+
+What an operator does about it, in order:
+
+1. Add the host to fleet intent so that its rendered worker projection is byte-identical to
+   the `worker-configuration` entry it already has. Run `upkeeper fleet-plan` to see what the
+   intent authorizes, then
+   `upkeeper pull --hosts <host> --components steward-fleet-configuration --dry-run` to confirm
+   the host reports `converged` rather than a refusal. Commit that as one reviewed change; it
+   rewrites no worker bootstrap on the host.
+2. Change the host's bootstrap only after step 1 has landed, and change **both** components in
+   the same commit. A commit that edits one and not the other is the refusal above, and it is
+   better caught in review than at convergence.
+3. Remove the host from `worker-configuration` once fleet intent is the reviewed source for
+   it. From that commit on there is one author again and step 2 no longer applies. Do this as
+   its own commit, so that a rollback to the commit before it still finds a complete v1 entry.
+
+Do not resolve a refusal by deleting the fleet entry for the host mid-adoption, unless the
+`worker-configuration` entry is the one you want. The refusal says the two sources disagree,
+not which of them is right.
+
+The client projection has no such hazard: `coordinator-client.json` has one author, and a host
+that wants a different endpoint pins it with an explicit `backlog_v2.coordinator_client` block
+in `config.yaml`, which the runtime prefers over the file UpKeeper writes.

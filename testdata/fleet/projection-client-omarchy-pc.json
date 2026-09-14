@@ -1,0 +1,13 @@
+{
+  "address": "normandy",
+  "connection": "ssh",
+  "coordinator_id": "normandy-coordinator",
+  "credential_ref": "secretref:f03-admin/omarchy-pc",
+  "message_limits": {
+    "max_request_bytes": 1048576,
+    "max_response_bytes": 8388608
+  },
+  "remote_command": "t3-steward coordinator serve --stdio",
+  "request_timeout": 30,
+  "schema_version": 1
+}

@@ -39,8 +39,11 @@ See [the release guide](docs/upkeeper-push-pull.md) and
 The `steward-fleet-configuration` component holds the authored, non-secret intent for the
 whole Steward fleet: the coordinator and its client endpoint, reusable host profiles, one
 entry per worker host with its explicit exceptions, and the projects a worker may be offered.
-Three projections are rendered from that one source: the worker bootstrap, the client
-endpoint and the catalog input proposed to the coordinator.
+Three projections are rendered from that one source: the worker bootstrap
+(`~/.config/t3-steward/worker-bootstrap.json`), the coordinator client
+(`~/.config/t3-steward/coordinator-client.json`, which an explicit
+`backlog_v2.coordinator_client` block in `config.yaml` overrides) and the catalog input
+proposed to the coordinator, which UpKeeper never applies.
 
 `fleet-plan` only reads. It reaches no host, writes no file and never enrolls; exit code `0`
 means it reported, `2` is a malformed command line and `30` is a refusal. Applying a catalog

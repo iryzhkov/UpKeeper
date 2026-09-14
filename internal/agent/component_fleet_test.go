@@ -72,8 +72,10 @@ func TestFleetProjectionWithoutAnEntryForThisHost(t *testing.T) {
 	if err != nil || state != "converged" || len(actions) != 0 {
 		t.Fatalf("state = %q, error = %v, actions = %v", state, err, actions)
 	}
-	if _, err := os.Stat(context.Path(fleet.WorkerDestination)); err == nil {
-		t.Fatal("a host the fleet does not declare was given a bootstrap file")
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		if _, err := os.Stat(context.Path(destination)); err == nil {
+			t.Fatalf("a host the fleet does not declare was given %s", destination)
+		}
 	}
 }
 
@@ -97,21 +99,31 @@ func TestFleetProjectionStagesActivatesAndRetainsThePrevious(t *testing.T) {
 	if err != nil || state != "updated" {
 		t.Fatalf("state = %q, error = %v", state, err)
 	}
-	written, err := os.ReadFile(context.Path(fleet.WorkerDestination))
-	if err != nil {
-		t.Fatalf("bootstrap file: %v", err)
-	}
-	expected := fleetTestFixture(t, "projection-worker-"+fleetTestHost+".json")
-	if string(written) != string(expected) {
-		t.Errorf("the activated document is not the shared projection:\n%s", written)
-	}
-	info, err := os.Stat(context.Path(fleet.WorkerDestination))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v (%v), want 0600", info.Mode().Perm(), err)
+	// Both owned documents are activated, and each is the shared fixture.
+	for destination, name := range map[string]string{
+		fleet.WorkerDestination: "projection-worker-" + fleetTestHost + ".json",
+		fleet.ClientDestination: "projection-client-" + fleetTestHost + ".json",
+	} {
+		written, err := os.ReadFile(context.Path(destination))
+		if err != nil {
+			t.Fatalf("%s: %v", destination, err)
+		}
+		if string(written) != string(fleetTestFixture(t, name)) {
+			t.Errorf("%s is not the shared projection:\n%s", destination, written)
+		}
+		info, err := os.Stat(context.Path(destination))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v (%v), want 0600", destination, info.Mode().Perm(), err)
+		}
 	}
 	record, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))
-	if err != nil || !strings.Contains(string(record), `"existed": false`) {
+	if err != nil || strings.Count(string(record), `"existed": false`) != 2 {
 		t.Fatalf("retained record = %q (%v)", record, err)
+	}
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		if !strings.Contains(string(record), destination) {
+			t.Errorf("the retained record does not name %s", destination)
+		}
 	}
 
 	// Nothing is left staged, and a second run over the same intent changes
@@ -120,8 +132,9 @@ func TestFleetProjectionStagesActivatesAndRetainsThePrevious(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the destination directory: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("the destination directory holds %d entries, want only the document", len(entries))
+	if len(entries) != 2 {
+		t.Errorf("the destination directory holds %d entries, want the two documents",
+			len(entries))
 	}
 	context.RunID = "20260914T000001Z-second"
 	second := []string{}
@@ -301,13 +314,64 @@ func TestFleetRestoresTheRetainedDocument(t *testing.T) {
 	if err != nil || string(restored) != string(first) {
 		t.Fatalf("restored document = %q (%v)", restored, err)
 	}
+	// The client document was retained by that run too, and restoring it puts
+	// back exactly what the run found rather than deleting a file it never
+	// changed.
+	client, err := os.ReadFile(context.Path(fleet.ClientDestination))
+	if err != nil ||
+		string(client) != string(fleetTestFixture(t, "projection-client-"+fleetTestHost+".json")) {
+		t.Fatalf("restored client document = %q (%v)", client, err)
+	}
 
-	// Restoring the first run puts the host back to having no document at all,
-	// which is what that run found.
+	// Restoring the first run puts the host back to having no documents at
+	// all, which is what that run found.
 	if err := FleetRestorePrior(context.Home, firstRun); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if _, err := os.Stat(context.Path(fleet.WorkerDestination)); err == nil {
-		t.Error("restoring a run that found nothing left a document behind")
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		if _, err := os.Stat(context.Path(destination)); err == nil {
+			t.Errorf("restoring a run that found nothing left %s behind", destination)
+		}
+	}
+}
+
+// The client document has its own reason to change, and changing it must not
+// touch the worker bootstrap: rewriting a host's worker identity because its
+// coordinator timeout moved is exactly the coupling separate files avoid.
+func TestFleetRewritesOnlyTheDocumentThatChanged(t *testing.T) {
+	context := fleetTestPrepare(t)
+	actions := []string{}
+	if _, err := fleetApply(context, fleetTestComponent(t), nil, &actions); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	workerBefore, err := os.Stat(context.Path(fleet.WorkerDestination))
+	if err != nil {
+		t.Fatalf("bootstrap file: %v", err)
+	}
+
+	changed := fleetTestComponent(t)
+	coordinator, _ := changed["coordinator"].(map[string]any)
+	endpoint, _ := coordinator["client_endpoint"].(map[string]any)
+	endpoint["request_timeout"] = adapterTestNumber("45")
+	context.RunID = "20260914T000003Z-client"
+	state, err := fleetApply(context, changed, nil, &actions)
+	if err != nil || state != "updated" {
+		t.Fatalf("state = %q, error = %v", state, err)
+	}
+	client, err := os.ReadFile(context.Path(fleet.ClientDestination))
+	if err != nil || !strings.Contains(string(client), `"request_timeout": 45`) {
+		t.Fatalf("client document = %q (%v)", client, err)
+	}
+	workerAfter, err := os.Stat(context.Path(fleet.WorkerDestination))
+	if err != nil {
+		t.Fatalf("bootstrap file: %v", err)
+	}
+	if !workerAfter.ModTime().Equal(workerBefore.ModTime()) {
+		t.Error("a client-only change rewrote the worker bootstrap")
+	}
+	// Both documents are still retained, so restoring the run is whole.
+	record, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))
+	if err != nil || strings.Count(string(record), `"existed": true`) != 2 {
+		t.Fatalf("retained record = %q (%v)", record, err)
 	}
 }

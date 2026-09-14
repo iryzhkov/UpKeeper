@@ -4,8 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
@@ -79,56 +77,42 @@ func (d *Document) WorkerBytes(name string) ([]byte, error) {
 	return canonjson.MarshalFile(projection)
 }
 
-// ClientProjection renders the coordinator client one host's CLI talks to. The
-// host contributes only its own admin credential reference; everything else is
-// the fleet's single coordinator endpoint.
+// ClientProjection renders the coordinator client one host's CLI talks to.
+//
+// The host contributes only its own admin credential reference; everything else
+// is the fleet's single coordinator endpoint. The reference is opaque: the
+// value lives in the host's own 0600 secret store and is never read, copied or
+// carried here.
 func (d *Document) ClientProjection(name string) (map[string]any, error) {
 	host, present := d.Hosts[name]
 	if !present {
 		return nil, failure.Value("fleet host %s is not declared", name)
 	}
+	endpoint := d.Coordinator.Endpoint
 	return map[string]any{
-		"address":              d.Coordinator.Endpoint.Address,
-		"admin_credential_ref": host.AdminCredentialRef,
-		"connection":           d.Coordinator.Endpoint.Connection,
-		"coordinator_id":       d.Coordinator.ID,
-		"remote_command":       d.Coordinator.Endpoint.RemoteCommand,
-		"request_timeout":      d.Coordinator.Endpoint.RequestTimeout,
+		"schema_version":  SchemaVersion,
+		"coordinator_id":  d.Coordinator.ID,
+		"address":         endpoint.Address,
+		"connection":      endpoint.Connection,
+		"remote_command":  endpoint.RemoteCommand,
+		"credential_ref":  host.AdminCredentialRef,
+		"request_timeout": endpoint.RequestTimeout,
+		"message_limits": map[string]any{
+			"max_request_bytes":  endpoint.MessageLimits.MaxRequestBytes,
+			"max_response_bytes": endpoint.MessageLimits.MaxResponseBytes,
+		},
 	}, nil
 }
 
-// ClientBytes render the client projection as the YAML fragment that belongs
-// under backlog_v2.coordinator_client in a host's t3-steward configuration.
-//
-// The emitter handles exactly the shape this projection has, which is a map of
-// string and integer scalars: every string is written as a double-quoted
-// scalar, so no value can ever be reinterpreted as a YAML keyword, and the keys
-// are sorted, so the bytes are the same on every run.
+// ClientBytes are the exact bytes of the client projection on disk: the same
+// indented, key-sorted JSON encoding the worker bootstrap uses, so that the
+// runtime reads one document format and not two.
 func (d *Document) ClientBytes(name string) ([]byte, error) {
 	projection, err := d.ClientProjection(name)
 	if err != nil {
 		return nil, err
 	}
-	var out strings.Builder
-	out.WriteString("backlog_v2:\n  coordinator_client:\n")
-	keys := make([]string, 0, len(projection))
-	for key := range projection {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		out.WriteString("    " + key + ": ")
-		switch typed := projection[key].(type) {
-		case string:
-			out.WriteString(canonjson.EscapeASCII(typed))
-		case int:
-			out.WriteString(strconv.Itoa(typed))
-		default:
-			return nil, failure.Value("client projection carries an unrenderable value")
-		}
-		out.WriteString("\n")
-	}
-	return []byte(out.String()), nil
+	return canonjson.MarshalFile(projection)
 }
 
 // CoordinatorProjection renders the catalog input the coordinator is asked to

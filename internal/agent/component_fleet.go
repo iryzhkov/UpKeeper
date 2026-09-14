@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"syscall"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
@@ -25,13 +26,21 @@ func init() {
 var fleetAdminReferencePattern = regexp.MustCompile(
 	`^secretref:f03-admin/[a-z][a-z0-9-]{0,62}$`)
 
+// fleetDocument is one file this component owns on the host.
+type fleetDocument struct {
+	destination string
+	target      string
+	payload     []byte
+	before      []byte
+	changed     bool
+}
+
 // fleetProjection decides what this host's fleet intent means for it, and
-// writes the worker projection when it differs from what is there.
+// writes the documents that differ from what is there.
 //
-// Only the worker projection is written. The client projection's destination is
-// a file t3-steward also authors, so UpKeeper renders it and reports its digest
-// rather than giving one document two authors; the coordinator projection is a
-// proposal and is never written anywhere by this program.
+// Two files are owned: the worker bootstrap the runtime already reads, and the
+// coordinator client it reads the same way. The proposed catalog is a third
+// projection and is never written anywhere by this program.
 func fleetProjection(
 	c *Context, component map[string]any, host, runID string, dryRun bool,
 ) (map[string]any, error) {
@@ -42,43 +51,68 @@ func fleetProjection(
 	if _, declared := document.Hosts[host]; !declared {
 		return map[string]any{"state": "converged", "configured": false, "enrolled": false}, nil
 	}
-	payload, err := document.WorkerBytes(host)
+	worker, err := document.WorkerBytes(host)
 	if err != nil {
 		return nil, err
 	}
-	if err := fleetAgreesWithWorkerConfiguration(c, host, payload); err != nil {
+	if err := fleetAgreesWithWorkerConfiguration(c, host, worker); err != nil {
+		return nil, err
+	}
+	client, err := document.ClientBytes(host)
+	if err != nil {
 		return nil, err
 	}
 	if err := fleetResolveCredentials(c, document.Hosts[host]); err != nil {
 		return nil, err
 	}
-	target := c.Path(fleet.WorkerDestination)
-	if err := workerPathIsInHome(c.Home, target); err != nil {
+	documents, err := fleetPlanDocuments(c, worker, client)
+	if err != nil {
 		return nil, err
 	}
-	before, err := os.ReadFile(target)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
-		before = nil
+	changed := false
+	for _, planned := range documents {
+		changed = changed || planned.changed
 	}
-	changed := before == nil || !bytes.Equal(before, payload)
 	if changed && !dryRun {
-		if err := fleetWriteProjection(c, runID, target, payload, before); err != nil {
+		if err := fleetWriteProjection(c, runID, documents); err != nil {
 			return nil, err
 		}
 	}
-	return fleetResult(document, host, payload, changed)
+	return fleetResult(document, host, worker, client, changed)
+}
+
+// fleetPlanDocuments works out what each owned file would become, in a stable
+// order, before anything is written. Deciding first and writing second is what
+// lets an observation run exactly the code an apply does.
+func fleetPlanDocuments(c *Context, worker, client []byte) ([]*fleetDocument, error) {
+	documents := []*fleetDocument{
+		{destination: fleet.WorkerDestination, payload: worker},
+		{destination: fleet.ClientDestination, payload: client},
+	}
+	sort.Slice(documents, func(left, right int) bool {
+		return documents[left].destination < documents[right].destination
+	})
+	for _, planned := range documents {
+		planned.target = c.Path(planned.destination)
+		if err := workerPathIsInHome(c.Home, planned.target); err != nil {
+			return nil, err
+		}
+		before, err := os.ReadFile(planned.target)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+			before = nil
+		}
+		planned.before = before
+		planned.changed = before == nil || !bytes.Equal(before, planned.payload)
+	}
+	return documents, nil
 }
 
 func fleetResult(
-	document *fleet.Document, host string, payload []byte, changed bool,
+	document *fleet.Document, host string, worker, client []byte, changed bool,
 ) (map[string]any, error) {
-	client, err := document.ClientBytes(host)
-	if err != nil {
-		return nil, err
-	}
 	catalog, err := document.CoordinatorBytes()
 	if err != nil {
 		return nil, err
@@ -92,13 +126,14 @@ func fleetResult(
 		state = "updated"
 	}
 	result := map[string]any{
-		"state":          state,
-		"configured":     true,
-		"worker_sha256":  agentenv.Digest(payload),
-		"client_sha256":  agentenv.Digest(client),
-		"catalog_sha256": agentenv.Digest(catalog),
-		"credential_ref": document.Hosts[host].CredentialRef,
-		"desired_models": fleetModelMap(sets.Desired),
+		"state":                state,
+		"configured":           true,
+		"worker_sha256":        agentenv.Digest(worker),
+		"client_sha256":        agentenv.Digest(client),
+		"catalog_sha256":       agentenv.Digest(catalog),
+		"credential_ref":       document.Hosts[host].CredentialRef,
+		"admin_credential_ref": document.Hosts[host].AdminCredentialRef,
+		"desired_models":       fleetModelMap(sets.Desired),
 		// Convergence never enrolls. Applying a catalog is a deliberate
 		// Steward admin operation with its own idempotency key and revision
 		// fence, because an accidental re-enrollment invalidates in-flight
@@ -184,43 +219,59 @@ func fleetResolveAdminReference(home, reference string) (string, error) {
 	return path, nil
 }
 
-// fleetWriteProjection retains what was there, stages the new document beside
-// the target, validates the staged bytes, and only then activates it with one
-// rename. A reader therefore sees the previous document or the complete new
-// one, never a prefix and never something that does not parse.
-func fleetWriteProjection(c *Context, runID, target string, payload, before []byte) error {
-	if err := fleetRetainPrior(c, runID, before); err != nil {
+// fleetWriteProjection retains every owned document as it is now, stages each
+// new one beside its destination, validates the staged bytes, and only then
+// activates it with one rename. A reader therefore sees the previous document
+// or the complete new one, never a prefix and never something that does not
+// parse.
+//
+// Both documents are retained even when only one changes, so that restoring a
+// run puts the whole of what it found back rather than half of it.
+func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) error {
+	if err := fleetRetainPrior(c, runID, documents); err != nil {
 		return err
 	}
-	staged, err := fleetStage(target, payload)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(staged) }()
-	if err := fleetValidateStaged(staged, payload); err != nil {
-		return err
-	}
-	if err := os.Rename(staged, target); err != nil {
-		return err
-	}
-	_ = fsatomic.SyncDirectory(filepath.Dir(target))
-	written, err := os.ReadFile(target)
-	if err != nil || !bytes.Equal(written, payload) {
-		// The document that is live is not the one that was validated, so the
-		// retained document is put back rather than left to a later run.
-		if restoreErr := FleetRestorePrior(c.Home, runID); restoreErr != nil {
-			return RolledBackf(
-				"fleet projection failed verification and could not be restored: %v",
-				restoreErr)
+	for _, planned := range documents {
+		if !planned.changed {
+			continue
 		}
-		return RolledBackf("fleet projection failed verification; restored the previous document")
+		if err := fleetActivate(c, runID, planned); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// fleetRetainPrior records the document that is about to be replaced, under a
+func fleetActivate(c *Context, runID string, planned *fleetDocument) error {
+	staged, err := fleetStage(planned.target, planned.payload)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(staged) }()
+	if err := fleetValidateStaged(staged, planned); err != nil {
+		return err
+	}
+	if err := os.Rename(staged, planned.target); err != nil {
+		return err
+	}
+	_ = fsatomic.SyncDirectory(filepath.Dir(planned.target))
+	written, err := os.ReadFile(planned.target)
+	if err == nil && bytes.Equal(written, planned.payload) {
+		return nil
+	}
+	// The document that is live is not the one that was validated, so every
+	// document this run touched goes back rather than being left half applied.
+	if restoreErr := FleetRestorePrior(c.Home, runID); restoreErr != nil {
+		return RolledBackf(
+			"fleet projection failed verification and could not be restored: %v", restoreErr)
+	}
+	return RolledBackf(
+		"fleet projection failed verification; restored the previous documents")
+}
+
+// fleetRetainPrior records the documents that are about to be replaced, under a
 // directory created exclusively so that two runs never share one.
-func fleetRetainPrior(c *Context, runID string, before []byte) error {
+func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) error {
 	backup := c.Path(fleet.StateDirectory, runID)
 	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
 		return err
@@ -228,27 +279,39 @@ func fleetRetainPrior(c *Context, runID string, before []byte) error {
 	if err := os.Mkdir(backup, 0o700); err != nil {
 		return err
 	}
-	prior := map[string]any{
-		"existed":     before != nil,
-		"content":     nil,
-		"destination": fleet.WorkerDestination,
+	retained := make([]any, 0, len(documents))
+	for _, planned := range documents {
+		entry := map[string]any{
+			"destination": planned.destination,
+			"existed":     planned.before != nil,
+			"content":     nil,
+		}
+		if planned.before != nil {
+			entry["content"] = string(planned.before)
+		}
+		retained = append(retained, entry)
 	}
-	if before != nil {
-		prior["content"] = string(before)
-	}
-	record, err := agentenv.Canonical(prior)
+	record, err := agentenv.Canonical(map[string]any{"documents": retained})
 	if err != nil {
 		return err
 	}
 	return agentenv.AtomicWrite(filepath.Join(backup, "prior.json"), record, 0o600)
 }
 
-// FleetRestorePrior puts back the document a run replaced.
+// fleetOwnedDestinations are the only paths a retained record may name. A
+// record is replayed by the restore path, so the paths in it are checked again
+// rather than trusted because this program wrote them.
+var fleetOwnedDestinations = map[string]bool{
+	fleet.WorkerDestination: true,
+	fleet.ClientDestination: true,
+}
+
+// FleetRestorePrior puts back the documents a run replaced.
 //
 // It is the rollback path for this component, and it is exercised rather than
 // assumed: the run that replaced a document is named, its retained record is
-// read, and the destination goes back to exactly what that run found, up to and
-// including not existing at all.
+// read, and every destination goes back to exactly what that run found, up to
+// and including not existing at all.
 func FleetRestorePrior(home, runID string) error {
 	record, err := os.ReadFile(filepath.Join(home, fleet.StateDirectory, runID, "prior.json"))
 	if err != nil {
@@ -258,22 +321,39 @@ func FleetRestorePrior(home, runID string) error {
 	if err != nil {
 		return err
 	}
-	destination, _ := prior["destination"].(string)
-	if destination != fleet.WorkerDestination {
+	documents, ok := prior["documents"].([]any)
+	if !ok || len(documents) == 0 {
+		return errors.New("retained fleet record names no documents")
+	}
+	for _, item := range documents {
+		entry, isObject := item.(map[string]any)
+		if !isObject {
+			return errors.New("retained fleet record is malformed")
+		}
+		if err := fleetRestoreDocument(home, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fleetRestoreDocument(home string, entry map[string]any) error {
+	destination, _ := entry["destination"].(string)
+	if !fleetOwnedDestinations[destination] {
 		return errors.New("retained fleet record names an unexpected destination")
 	}
 	target := filepath.Join(home, destination)
 	if err := workerPathIsInHome(home, target); err != nil {
 		return err
 	}
-	existed, _ := prior["existed"].(bool)
+	existed, _ := entry["existed"].(bool)
 	if !existed {
 		if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		return nil
 	}
-	content, ok := prior["content"].(string)
+	content, ok := entry["content"].(string)
 	if !ok {
 		return errors.New("retained fleet record has no content to restore")
 	}
@@ -281,7 +361,7 @@ func FleetRestorePrior(home, runID string) error {
 }
 
 // fleetStage writes the candidate document beside its destination, so that the
-// activation below is a rename within one directory and therefore atomic.
+// activation above is a rename within one directory and therefore atomic.
 func fleetStage(target string, payload []byte) (string, error) {
 	directory := filepath.Dir(target)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -292,20 +372,19 @@ func fleetStage(target string, payload []byte) (string, error) {
 		return "", err
 	}
 	name := handle.Name()
-	if err := handle.Chmod(0o600); err != nil {
+	abandon := func(cause error) (string, error) {
 		_ = handle.Close()
 		_ = os.Remove(name)
-		return "", err
+		return "", cause
+	}
+	if err := handle.Chmod(0o600); err != nil {
+		return abandon(err)
 	}
 	if _, err := handle.Write(payload); err != nil {
-		_ = handle.Close()
-		_ = os.Remove(name)
-		return "", err
+		return abandon(err)
 	}
 	if err := handle.Sync(); err != nil {
-		_ = handle.Close()
-		_ = os.Remove(name)
-		return "", err
+		return abandon(err)
 	}
 	if err := handle.Close(); err != nil {
 		_ = os.Remove(name)
@@ -315,23 +394,32 @@ func fleetStage(target string, payload []byte) (string, error) {
 }
 
 // fleetValidateStaged reads back what is actually on disk and checks that it is
-// the document that was meant to be written and that it still satisfies the
-// bootstrap contract. Validating the bytes rather than the intention is what
+// the document that was meant to be written and that it still satisfies its
+// own closed contract. Validating the bytes rather than the intention is what
 // makes a truncated or tampered staging file impossible to activate.
-func fleetValidateStaged(staged string, payload []byte) error {
+func fleetValidateStaged(staged string, planned *fleetDocument) error {
 	written, err := os.ReadFile(staged)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(written, payload) {
+	if !bytes.Equal(written, planned.payload) {
 		return errors.New("staged fleet projection does not match what was rendered")
 	}
 	entry, err := canonjson.DecodeObject(written)
 	if err != nil {
 		return errors.New("staged fleet projection is not a JSON object")
 	}
-	if !workerSameFields(entry, workerEntryFields) {
-		return errors.New("staged fleet projection is not a worker bootstrap document")
+	switch planned.destination {
+	case fleet.WorkerDestination:
+		if !workerSameFields(entry, workerEntryFields) {
+			return errors.New("staged fleet projection is not a worker bootstrap document")
+		}
+	case fleet.ClientDestination:
+		if !workerSameFields(entry, fleet.ClientFields) {
+			return errors.New("staged fleet projection is not a coordinator client document")
+		}
+	default:
+		return errors.New("staged fleet projection has no owned destination")
 	}
 	return nil
 }
@@ -351,7 +439,8 @@ func fleetApply(
 	}
 	if configured, _ := result["configured"].(bool); configured {
 		*actions = append(*actions,
-			"fleet worker projection applied; enrollment stays an explicit Steward operation")
+			"fleet worker and client projections applied; "+
+				"enrollment stays an explicit Steward operation")
 	}
 	state, _ := result["state"].(string)
 	return state, nil

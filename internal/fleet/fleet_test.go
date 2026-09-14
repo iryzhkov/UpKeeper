@@ -84,8 +84,8 @@ func TestTheSharedFixtureIsCanonicalAndSelfContained(t *testing.T) {
 		"projection-worker-homelab.json",
 		"projection-worker-omarchy-pc.json",
 		"projection-coordinator.json",
-		"projection-client-homelab.yaml",
-		"projection-client-omarchy-pc.yaml",
+		"projection-client-homelab.json",
+		"projection-client-omarchy-pc.json",
 	} {
 		body := string(fixture(t, name))
 		for _, forbidden := range []string{"/home/", "/Users/", "/root/"} {
@@ -110,7 +110,7 @@ func TestRenderingIsDeterministicAndMatchesTheSharedFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s client projection: %v", host, err)
 		}
-		if string(client) != string(fixture(t, "projection-client-"+host+".yaml")) {
+		if string(client) != string(fixture(t, "projection-client-"+host+".json")) {
 			t.Errorf("%s client projection is not the shared fixture:\n%s", host, client)
 		}
 	}
@@ -195,6 +195,61 @@ func TestExceptionsOverrideTheProfileAndNothingElse(t *testing.T) {
 	}
 	if standard.ExecutorSlots != 2 {
 		t.Errorf("a host without exceptions resolved to %d slots", standard.ExecutorSlots)
+	}
+}
+
+// The client projection is UpKeeper's own document on the host, so its field
+// set is closed for the same reason the worker bootstrap's is: a document that
+// may carry anything is a document a credential value can be smuggled into.
+func TestTheClientProjectionIsAClosedSetOfReferences(t *testing.T) {
+	document := parsed(t)
+	projection, err := document.ClientProjection("homelab")
+	if err != nil {
+		t.Fatalf("client projection: %v", err)
+	}
+	if len(projection) != len(fleet.ClientFields) {
+		t.Fatalf("the projection has %d fields, want %d", len(projection), len(fleet.ClientFields))
+	}
+	for _, field := range fleet.ClientFields {
+		if _, present := projection[field]; !present {
+			t.Errorf("the projection is missing %s", field)
+		}
+	}
+	if projection["credential_ref"] != "secretref:f03-admin/homelab" {
+		t.Errorf("credential_ref is %v", projection["credential_ref"])
+	}
+	// The admin client and the worker protocol use different namespaces, so
+	// that distributing one never distributes the other.
+	worker, err := document.WorkerProjection("homelab")
+	if err != nil {
+		t.Fatalf("worker projection: %v", err)
+	}
+	if worker["credential_ref"] == projection["credential_ref"] {
+		t.Error("the client and the worker share one credential reference")
+	}
+	body := string(fixture(t, "projection-client-homelab.json"))
+	if strings.Count(body, "secretref:") != 1 {
+		t.Errorf("the client fixture carries %d references", strings.Count(body, "secretref:"))
+	}
+}
+
+// An endpoint authored against the frozen four-key shape still validates, and
+// gets explicit limits rather than an unbounded client.
+func TestAbsentMessageLimitsTakeTheExplicitDefault(t *testing.T) {
+	document, err := fleet.Parse(edit(t, func(d map[string]any) {
+		delete(object(t, d, "coordinator", "client_endpoint"), "message_limits")
+	}))
+	if err != nil {
+		t.Fatalf("an endpoint without message limits was refused: %v", err)
+	}
+	projection, err := document.ClientProjection("homelab")
+	if err != nil {
+		t.Fatalf("client projection: %v", err)
+	}
+	limits, _ := projection["message_limits"].(map[string]any)
+	if limits["max_request_bytes"] != fleet.DefaultMessageLimits.MaxRequestBytes ||
+		limits["max_response_bytes"] != fleet.DefaultMessageLimits.MaxResponseBytes {
+		t.Errorf("limits are %v, want the explicit default", limits)
 	}
 }
 
@@ -289,6 +344,47 @@ func TestParseRefusals(t *testing.T) {
 			name:      "the required profiles must exist",
 			change:    func(d map[string]any) { delete(d["profiles"].(map[string]any), "build") },
 			errorText: "must define build",
+		},
+		{
+			name: "message limits are a closed set",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
+					map[string]any{
+						"max_request_bytes":  json.Number("1024"),
+						"max_response_bytes": json.Number("1024"),
+						"max_everything":     json.Number("1024"),
+					}
+			},
+			errorText: "message_limits must name only",
+		},
+		{
+			name: "a message limit of zero is not a limit",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
+					map[string]any{
+						"max_request_bytes":  json.Number("0"),
+						"max_response_bytes": json.Number("1024"),
+					}
+			},
+			errorText: "max_request_bytes must be 1 through",
+		},
+		{
+			name: "an unbounded response limit is refused",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
+					map[string]any{
+						"max_request_bytes":  json.Number("1024"),
+						"max_response_bytes": json.Number("1073741825"),
+					}
+			},
+			errorText: "max_response_bytes must be 1 through",
+		},
+		{
+			name: "the client endpoint takes no invented keys",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["credential"] = "hunter2"
+			},
+			errorText: "client endpoint is missing credential",
 		},
 		{
 			name: "an observation may not name an undeclared host",
