@@ -81,9 +81,10 @@ The plan carries no catalog digest. An enrollment is fenced against a catalog re
 coordinator computes over data UpKeeper does not hold, so any digest rendered here would be a
 number the coordinator will always reject, and printing one that merely looks like a fence
 invites somebody to pass it and then to distrust the refusal. The plan reports the last
-observed coordinator revision when there is one, and otherwise names the command that takes
-the real fence: `t3-steward worker enroll --catalog-revision <revision>`. This replaces the
-original wording, which promised previous and proposed catalog digests.
+observed coordinator revision when there is one, and names where the real fence comes from:
+read it with `t3-steward backlog workers --json`, which reports each worker's catalog
+revision, and pass it to `t3-steward worker enroll --catalog-revision <revision>`. This
+replaces the original wording, which promised previous and proposed catalog digests.
 
 ## Shared fixtures
 

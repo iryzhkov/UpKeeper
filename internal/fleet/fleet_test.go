@@ -712,8 +712,9 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 		}
 	}
 	advice, _ := plan["fence"].(string)
-	if !strings.Contains(advice, "worker enroll --catalog-revision") {
-		t.Errorf("the plan does not name the command that yields the fence: %q", advice)
+	if !strings.Contains(advice, "backlog workers --json") ||
+		!strings.Contains(advice, "worker enroll --catalog-revision") {
+		t.Errorf("the plan does not name how to read and pass the fence: %q", advice)
 	}
 	changes, _ := plan["authorization_changes"].([]any)
 	if len(changes) == 0 {

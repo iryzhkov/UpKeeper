@@ -19,7 +19,7 @@ const CoordinatorPurpose = "review artifact; no binary consumes it today"
 // then to distrust the refusal. The plan names the command that takes the real
 // one instead.
 const FenceAdvice = "UpKeeper cannot compute the coordinator's catalog revision; " +
-	"take it from the coordinator and pass it to " +
+	"read it from `t3-steward backlog workers --json` and pass it to " +
 	"`t3-steward worker enroll --catalog-revision <revision>`"
 
 // ModelSets is what one host is authorized to run and, separately, what was
