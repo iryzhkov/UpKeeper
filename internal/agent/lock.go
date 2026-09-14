@@ -47,23 +47,28 @@ func (c *Context) acquireLock() (map[string]any, error) {
 	}
 	payload, err := json.Marshal(c.Payload.Lock)
 	if err != nil {
-		_ = os.Remove(c.lockDirectory)
+		c.discardLockDirectory()
 		return nil, err
 	}
 	generic, err := canonjson.Decode(payload)
 	if err != nil {
-		_ = os.Remove(c.lockDirectory)
+		c.discardLockDirectory()
 		return nil, err
 	}
 	owner, err := canonjson.MarshalSpaced(generic)
 	if err != nil {
-		_ = os.Remove(c.lockDirectory)
+		c.discardLockDirectory()
 		return nil, err
 	}
 	if err := os.WriteFile(
 		filepath.Join(c.lockDirectory, "owner.json"), append(owner, '\n'), 0o600,
 	); err != nil {
-		_ = os.Remove(c.lockDirectory)
+		// Remove the owner record before the directory. A partial write leaves
+		// the file behind, rmdir then fails with ENOTEMPTY, and every later run
+		// finds a lock directory whose owner cannot be decoded and reports
+		// contention against "unknown" until somebody clears it by hand. The
+		// Python implementation unlinked in this order for the same reason.
+		c.discardLockDirectory()
 		return nil, err
 	}
 	c.lockOwned = true
@@ -75,7 +80,13 @@ func (c *Context) releaseLock() {
 	if !c.lockOwned {
 		return
 	}
+	c.discardLockDirectory()
+	c.lockOwned = false
+}
+
+// discardLockDirectory removes the lock this run created, owner record first
+// so that the directory can actually go.
+func (c *Context) discardLockDirectory() {
 	_ = os.Remove(filepath.Join(c.lockDirectory, "owner.json"))
 	_ = os.Remove(c.lockDirectory)
-	c.lockOwned = false
 }
