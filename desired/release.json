@@ -1955,7 +1955,8 @@
           "credential_ref": "secretref:f02-protocol/homelab",
           "provider_routes": [
             "claudeAgent",
-            "codex"
+            "codex",
+            "opencode"
           ],
           "schema_version": 1,
           "transport": "ssh",
