@@ -42,6 +42,10 @@ type Streams struct {
 func Main(program string, argv []string, streams Streams) int {
 	program = filepath.Base(program)
 	parsed, err := parse(argv, release.ComponentOrder)
+	if requested, ok := err.(*helpRequest); ok {
+		fmt.Fprint(streams.Out, helpText(program, requested.command))
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(streams.Err, "usage: %s COMMAND [OPTIONS]\n", program)
 		fmt.Fprintf(streams.Err, "%s: error: %s\n", program, err.Error())

@@ -64,12 +64,30 @@ var Commands = []string{
 const agentCommand = "__agent"
 const probeCommand = "__probe"
 
+// isCommand reports whether a token names a subcommand. The machine-facing
+// halves are deliberately excluded: they have no help to print and a
+// controller never asks for it.
+func isCommand(token string) bool {
+	for _, command := range Commands {
+		if command == token {
+			return true
+		}
+	}
+	return false
+}
+
 func parse(argv []string, componentChoices []string) (*arguments, error) {
 	if len(argv) == 0 {
 		return nil, usagef("the following arguments are required: command")
 	}
+	if isHelpFlag(argv[0]) {
+		return nil, &helpRequest{}
+	}
 	parsed := &arguments{command: argv[0], probeTimeout: 20, pullTimeout: 1800}
 	rest := argv[1:]
+	if containsHelpFlag(rest) && isCommand(parsed.command) {
+		return nil, &helpRequest{command: parsed.command}
+	}
 	switch parsed.command {
 	case "doctor", "status":
 		return parsed, parseProbeCommand(parsed, rest)
