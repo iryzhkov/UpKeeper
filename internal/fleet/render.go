@@ -98,8 +98,8 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 		"credential_ref":  host.AdminCredentialRef,
 		"request_timeout": endpoint.RequestTimeout,
 		"message_limits": map[string]any{
-			"max_request_bytes":  endpoint.MessageLimits.MaxRequestBytes,
-			"max_response_bytes": endpoint.MessageLimits.MaxResponseBytes,
+			"max_bytes":          endpoint.MessageLimits.MaxBytes,
+			"max_artifact_bytes": endpoint.MessageLimits.MaxArtifactBytes,
 		},
 	}, nil
 }

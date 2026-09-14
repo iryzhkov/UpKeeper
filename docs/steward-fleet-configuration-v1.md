@@ -88,12 +88,20 @@ Its field set is closed: `schema_version`, `coordinator_id`, `address`, `connect
 `remote_command`, `credential_ref`, `request_timeout` and `message_limits`. `credential_ref`
 is the host's `secretref:f03-admin/<host>`, a reference and never a value.
 
-`message_limits` carries `max_request_bytes` and `max_response_bytes`. It may be authored
-under `coordinator.client_endpoint`, and is optional there so that a document written against
-the frozen four-key endpoint shape still validates; an absent one takes the explicit default
-rather than meaning unbounded, because an unbounded client is one malformed response away from
-exhausting the memory of whatever host ran the command. The shape of this field was chosen by
-the implementation and must match what t3-steward parses.
+`message_limits` carries `max_bytes` and `max_artifact_bytes`, with defaults `4194304` and
+`1073741824`. It may be authored under `coordinator.client_endpoint`, and is optional there so
+that a document written against the frozen four-key endpoint shape still validates; an absent
+one takes those defaults rather than meaning unbounded, because an unbounded client is one
+malformed response away from exhausting the memory of whatever host ran the command. An
+authored value is bounded to 1 byte through 1 GiB.
+
+**These names are t3-steward's, not UpKeeper's to change.** The document is consumed as that
+runtime's `V2MessageLimits`, whose vocabulary is `max_bytes`, `max_files` and
+`max_artifact_bytes`. Renaming them here would give one concept two names across the two
+repositories, which is the drift this whole component exists to remove. UpKeeper does not
+author `max_files`, so the runtime's own default of `1000` applies to it; because the key set
+is closed, authoring `max_files` in fleet intent is refused rather than quietly ignored, and
+adding it means teaching this validator about it first.
 
 **A disagreement between the two components is refused.** Both `worker-configuration` v1 and
 this component project `~/.config/t3-steward/worker-bootstrap.json`, and this one converges

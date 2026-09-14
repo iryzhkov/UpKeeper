@@ -74,15 +74,20 @@ var ClientFields = []string{
 }
 
 // MessageLimitFields is the closed field set of a client's message limits.
-var MessageLimitFields = []string{"max_request_bytes", "max_response_bytes"}
+//
+// The names are t3-steward's, not UpKeeper's to choose: this document is read
+// as that runtime's V2MessageLimits, and giving one concept two names across
+// the two repositories is exactly the drift this component exists to remove.
+var MessageLimitFields = []string{"max_bytes", "max_artifact_bytes"}
 
 // DefaultMessageLimits are the limits a client endpoint gets when the authored
-// document does not state them. They are explicit values rather than "no
-// limit", because an unbounded client is one malformed response away from
-// exhausting the memory of whatever host ran the command.
+// document does not state them, and they are t3-steward's own defaults. They
+// are explicit values rather than "no limit", because an unbounded client is
+// one malformed response away from exhausting the memory of whatever host ran
+// the command.
 var DefaultMessageLimits = MessageLimits{
-	MaxRequestBytes:  1 << 20,
-	MaxResponseBytes: 8 << 20,
+	MaxBytes:         4194304,
+	MaxArtifactBytes: 1073741824,
 }
 
 // maximumMessageBytes bounds an authored limit. A limit larger than this is
@@ -134,10 +139,12 @@ var (
 	commandPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,199}$`)
 )
 
-// MessageLimits bound what a client will send and accept.
+// MessageLimits bound what a client will send and accept. t3-steward's
+// vocabulary also carries max_files; UpKeeper does not author it, so the
+// runtime's own default applies to it.
 type MessageLimits struct {
-	MaxRequestBytes  int
-	MaxResponseBytes int
+	MaxBytes         int
+	MaxArtifactBytes int
 }
 
 // ClientEndpoint is how a non-coordinator CLI reaches the coordinator.
@@ -366,8 +373,8 @@ func parseMessageLimits(value any) (MessageLimits, error) {
 		key   string
 		store *int
 	}{
-		{"max_request_bytes", &limits.MaxRequestBytes},
-		{"max_response_bytes", &limits.MaxResponseBytes},
+		{"max_bytes", &limits.MaxBytes},
+		{"max_artifact_bytes", &limits.MaxArtifactBytes},
 	} {
 		size, numbered := intValue(entry[pair.key])
 		if !numbered || size < 1 || size > maximumMessageBytes {

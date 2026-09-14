@@ -247,9 +247,16 @@ func TestAbsentMessageLimitsTakeTheExplicitDefault(t *testing.T) {
 		t.Fatalf("client projection: %v", err)
 	}
 	limits, _ := projection["message_limits"].(map[string]any)
-	if limits["max_request_bytes"] != fleet.DefaultMessageLimits.MaxRequestBytes ||
-		limits["max_response_bytes"] != fleet.DefaultMessageLimits.MaxResponseBytes {
+	if limits["max_bytes"] != fleet.DefaultMessageLimits.MaxBytes ||
+		limits["max_artifact_bytes"] != fleet.DefaultMessageLimits.MaxArtifactBytes {
 		t.Errorf("limits are %v, want the explicit default", limits)
+	}
+	// The names belong to t3-steward's V2MessageLimits vocabulary. One concept
+	// with two names across the two repositories is the drift this component
+	// exists to remove, so the spelling is pinned here.
+	if fleet.DefaultMessageLimits.MaxBytes != 4194304 ||
+		fleet.DefaultMessageLimits.MaxArtifactBytes != 1073741824 {
+		t.Errorf("the defaults are not t3-steward's: %#v", fleet.DefaultMessageLimits)
 	}
 }
 
@@ -350,8 +357,8 @@ func TestParseRefusals(t *testing.T) {
 			change: func(d map[string]any) {
 				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
 					map[string]any{
-						"max_request_bytes":  json.Number("1024"),
-						"max_response_bytes": json.Number("1024"),
+						"max_bytes":          json.Number("1024"),
+						"max_artifact_bytes": json.Number("1024"),
 						"max_everything":     json.Number("1024"),
 					}
 			},
@@ -362,22 +369,22 @@ func TestParseRefusals(t *testing.T) {
 			change: func(d map[string]any) {
 				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
 					map[string]any{
-						"max_request_bytes":  json.Number("0"),
-						"max_response_bytes": json.Number("1024"),
+						"max_bytes":          json.Number("0"),
+						"max_artifact_bytes": json.Number("1024"),
 					}
 			},
-			errorText: "max_request_bytes must be 1 through",
+			errorText: "max_bytes must be 1 through",
 		},
 		{
-			name: "an unbounded response limit is refused",
+			name: "an unbounded artifact limit is refused",
 			change: func(d map[string]any) {
 				object(t, d, "coordinator", "client_endpoint")["message_limits"] =
 					map[string]any{
-						"max_request_bytes":  json.Number("1024"),
-						"max_response_bytes": json.Number("1073741825"),
+						"max_bytes":          json.Number("1024"),
+						"max_artifact_bytes": json.Number("1073741825"),
 					}
 			},
-			errorText: "max_response_bytes must be 1 through",
+			errorText: "max_artifact_bytes must be 1 through",
 		},
 		{
 			name: "the client endpoint takes no invented keys",
