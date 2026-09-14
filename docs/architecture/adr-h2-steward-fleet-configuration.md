@@ -92,9 +92,20 @@ Releases without the new component load unchanged and converge unchanged. Releas
 refused by a binary too old to understand it, rather than partially applied: the component
 carries its own `schema_version`, and an unknown version fails closed.
 
-Unknown or newer fields inside a known version are preserved when they can be round-tripped
-byte-for-byte, and refused when preservation cannot be guaranteed. Silently dropping a field
-that a newer controller wrote is the one behaviour that turns a rollback into data loss.
+Amendment, 2026-09-14, after review: the key sets are closed at every level, not only at the top.
+An unknown field anywhere in the component is refused by name.
+
+The original wording said unknown fields would be preserved when they round-trip and refused
+otherwise. Review showed the round-trip test could not fail, because every input already comes
+from the canonical JSON decoder, so the guard was decoration. Worse, open nested key sets meant a
+secret value could be authored into `hosts.<host>.api_token`, published in the manifest and
+shipped to every host — with nothing in the component able to refuse it. A field set that is
+closed only at the top cannot enforce "references only".
+
+So forward compatibility comes from `schema_version` and nothing else. A newer controller that
+needs a new field raises the version; an older binary refuses that version whole rather than
+applying part of it. That is a worse experience than silent preservation and a much better
+failure mode than distributing an unreviewed secret.
 
 Staging is deterministic: render, diff, stage to a temporary path, validate, then activate
 atomically, with the previous document retained privately under the run's state directory the
