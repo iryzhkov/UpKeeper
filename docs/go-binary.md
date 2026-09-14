@@ -83,8 +83,18 @@ Git, OpenSSH and systemd are inside the product boundary by design.
 
 Each step is independently reversible and leaves the Python path installed.
 
-1. Install the released binary at `~/.local/bin/upkeeper`. Nothing references it
-   yet. Rollback: delete the file.
+1. Install the released binary at `~/.local/bin/upkeeper`.
+
+   On a host that has been managed for a while this path is not empty: it is
+   already a symlink to `scripts/upkeeper` inside the checkout, so installing
+   the binary here is what makes the interactive `upkeeper` command the Go one.
+   Nothing scheduled goes through this path — the timers name their
+   `ExecStart` in full — but a person typing `upkeeper status` does.
+
+   Record what the path holds before replacing it, for example with
+   `readlink -f ~/.local/bin/upkeeper`, because rollback is restoring that
+   symlink and not merely deleting the file. Deleting it on a host where the
+   symlink was the Python entry point removes the Python entry point too.
 2. Run `upkeeper doctor` and `upkeeper status` by hand and compare them with the
    Python output. Both commands write nothing, so a difference costs nothing.
 3. Run `upkeeper push --no-commit` on a scratch clone and compare
