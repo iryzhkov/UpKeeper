@@ -48,18 +48,33 @@ func preserveAuthoredFleetIntent(components map[string]any, authored any, presen
 		delete(components, fleet.Component)
 		return nil
 	}
-	restored, err := canonjson.Decode(mustCompact(authored))
+	encoded, err := canonjson.Compact(authored)
 	if err != nil {
-		return failure.Capture("cannot preserve the authored fleet intent")
+		return failure.Capture("cannot preserve the authored fleet intent: %v", err)
+	}
+	restored, err := canonjson.Decode(encoded)
+	if err != nil {
+		return failure.Capture("cannot preserve the authored fleet intent: %v", err)
 	}
 	components[fleet.Component] = restored
 	return nil
 }
 
-func mustCompact(value any) []byte {
-	encoded, err := canonjson.Compact(value)
-	if err != nil {
-		return []byte("null")
+// RefuseAuthoredCapture rejects a capture that names a component nothing
+// observes.
+//
+// `push --components steward-fleet-configuration` looks like it captures the
+// fleet intent and cannot: the document is authored by hand, reviewed as a
+// diff, and deliberately never inferred from a host. Accepting the selection
+// and doing nothing would exit 0 and read as success, which is worse than not
+// offering it, so the selection is refused and says where the edit belongs.
+func RefuseAuthoredCapture(only []string) error {
+	for _, name := range only {
+		if name == fleet.Component {
+			return failure.Capture(
+				"%s is authored, not captured; edit it in %s and review the diff",
+				fleet.Component, File)
+		}
 	}
-	return encoded
+	return nil
 }

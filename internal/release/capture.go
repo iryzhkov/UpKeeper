@@ -82,6 +82,9 @@ func Capture(
 			return Release{}, failure.Capture(
 				"unknown component(s): %s", strings.Join(sortedUnique(unknown), ", "))
 		}
+		if err := RefuseAuthoredCapture(only); err != nil {
+			return Release{}, err
+		}
 		existing, err := ExistingOrDefault(root)
 		if err != nil {
 			return Release{}, err

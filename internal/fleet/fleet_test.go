@@ -391,7 +391,7 @@ func TestParseRefusals(t *testing.T) {
 			change: func(d map[string]any) {
 				object(t, d, "coordinator", "client_endpoint")["credential"] = "hunter2"
 			},
-			errorText: "client endpoint is missing credential",
+			errorText: `fleet client endpoint carries an unknown field "credential"`,
 		},
 		{
 			name: "an observation may not name an undeclared host",
@@ -413,36 +413,81 @@ func TestParseRefusals(t *testing.T) {
 	}
 }
 
-// A field this binary does not know is kept, not dropped: silently losing what
-// a newer controller wrote is what turns a rollback into data loss.
-func TestUnknownNestedFieldsArePreserved(t *testing.T) {
-	document := edit(t, func(d map[string]any) {
-		host := d["hosts"].(map[string]any)["homelab"].(map[string]any)
-		host["future_field"] = "kept"
-	})
-	before, err := canonjson.MarshalFile(document)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+// Every nested key set is closed, and this is why: a field nothing validates is
+// a field a credential value can be authored into, and this component is
+// published in the release manifest and distributed to every host. Forward
+// compatibility is schema_version's job, not an open field set's.
+func TestUnknownNestedFieldsAreRefused(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(document map[string]any)
+	}{
+		{
+			name: "in a host",
+			change: func(d map[string]any) {
+				object(t, d, "hosts", "homelab")["admin_token"] = "a-real-secret"
+			},
+		},
+		{
+			name: "in a profile",
+			change: func(d map[string]any) {
+				object(t, d, "profiles", "standard")["api_key"] = "a-real-secret"
+			},
+		},
+		{
+			name: "in a project",
+			change: func(d map[string]any) {
+				object(t, d, "projects", "upkeeper")["deploy_key"] = "a-real-secret"
+			},
+		},
+		{
+			name: "in an observation",
+			change: func(d map[string]any) {
+				d["observed"] = map[string]any{"hosts": map[string]any{
+					"homelab": map[string]any{"session_token": "a-real-secret"},
+				}}
+			},
+		},
 	}
-	parsedDocument, err := fleet.Parse(document)
-	if err != nil {
-		t.Fatalf("an unknown nested field was refused: %v", err)
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			document := edit(t, test.change)
+			_, err := fleet.Parse(document)
+			if err == nil {
+				t.Fatal("an unvalidated field was accepted into fleet intent")
+			}
+			// The refusal names the offending key and says why the set is
+			// closed, so that nobody reads it as an incomplete document.
+			if !strings.Contains(err.Error(), "carries an unknown field") ||
+				!strings.Contains(err.Error(), "references only") {
+				t.Fatalf("the refusal does not explain itself: %v", err)
+			}
+			if !strings.Contains(err.Error(), "token") &&
+				!strings.Contains(err.Error(), "key") {
+				t.Errorf("the refusal does not name the offending key: %v", err)
+			}
+			if strings.Contains(err.Error(), "a-real-secret") {
+				t.Error("the refusal quotes the value it refused")
+			}
+		})
 	}
-	after, err := canonjson.MarshalFile(parsedDocument.Raw())
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+}
+
+// A missing key and an invented one are different mistakes, and reporting one
+// as the other sends the reader looking for the wrong thing.
+func TestAMissingKeyAndAnInventedKeyReadDifferently(t *testing.T) {
+	_, invented := fleet.Parse(edit(t, func(d map[string]any) {
+		object(t, d, "coordinator", "client_endpoint")["credential"] = "hunter2"
+	}))
+	if invented == nil ||
+		!strings.Contains(invented.Error(), `carries an unknown field "credential"`) {
+		t.Fatalf("an invented key reads as %v", invented)
 	}
-	if string(before) != string(after) {
-		t.Error("an unknown nested field did not round-trip byte-for-byte")
-	}
-	// It is preserved, and it is still not authorization: the projections are
-	// unchanged by it.
-	worker, err := parsedDocument.WorkerBytes("homelab")
-	if err != nil {
-		t.Fatalf("worker projection: %v", err)
-	}
-	if string(worker) != string(fixture(t, "projection-worker-homelab.json")) {
-		t.Error("an unknown field leaked into the worker projection")
+	_, absent := fleet.Parse(edit(t, func(d map[string]any) {
+		delete(object(t, d, "coordinator", "client_endpoint"), "address")
+	}))
+	if absent == nil || !strings.Contains(absent.Error(), "is missing address") {
+		t.Fatalf("an absent key reads as %v", absent)
 	}
 }
 

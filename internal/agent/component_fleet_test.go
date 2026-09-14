@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -164,7 +165,17 @@ func TestFleetConvergenceNeverEnrollsOrWritesACatalog(t *testing.T) {
 	if result["enrolled"] != false {
 		t.Errorf("the adapter reported enrolled=%v", result["enrolled"])
 	}
-	catalog := fleetTestFixture(t, "projection-coordinator.json")
+	// The catalog is checked as the renderer produces it, not as a fixture
+	// file happens to read: the renderer is what a convergence would hand to
+	// an enrollment, and a fixture can drift from it.
+	document, err := fleet.Parse(fleetTestComponent(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	catalog, err := document.CoordinatorBytes()
+	if err != nil {
+		t.Fatalf("coordinator projection: %v", err)
+	}
 	err = filepath.WalkDir(context.Home, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
@@ -224,6 +235,17 @@ func TestFleetRefusesToDisagreeWithWorkerConfiguration(t *testing.T) {
 	_, err = fleetObserve(context, fleetTestComponent(t))
 	if err == nil || !strings.Contains(err.Error(), "disagree about this host's bootstrap") {
 		t.Fatalf("want a disagreement refusal, got %v", err)
+	}
+	actions := []string{}
+	if _, err := fleetApply(context, fleetTestComponent(t), nil, &actions); err == nil {
+		t.Fatal("an apply went ahead despite the disagreement")
+	}
+	// The refusal happens before anything on the host is touched, which is what
+	// makes the adoption hazard safe to run into.
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		if _, err := os.Stat(context.Path(destination)); err == nil {
+			t.Errorf("a refused projection still wrote %s", destination)
+		}
 	}
 }
 
@@ -288,8 +310,8 @@ func TestFleetRestoresTheRetainedDocument(t *testing.T) {
 		t.Fatalf("bootstrap file: %v", err)
 	}
 
-	// The intent changes: this host moves to the build profile, which adds a
-	// provider route, so the projected document changes too.
+	// The intent changes: this host's profile gains a provider instance, so its
+	// projected provider routes change and the document does too.
 	changed := fleetTestComponent(t)
 	profiles, _ := changed["profiles"].(map[string]any)
 	standard, _ := profiles["standard"].(map[string]any)
@@ -335,6 +357,117 @@ func TestFleetRestoresTheRetainedDocument(t *testing.T) {
 	}
 }
 
+// A run that owns two documents must not be able to leave one of them applied
+// and the other not. The failure is injected on the second document, after the
+// first has already been activated, which is the shape every real cause has:
+// a full disk, a read-only filesystem, an exhausted quota.
+func TestAFailureOnTheSecondDocumentRestoresTheFirst(t *testing.T) {
+	context := fleetTestPrepare(t)
+	document, err := fleet.Parse(fleetTestComponent(t))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	client, err := document.ClientBytes(fleetTestHost)
+	if err != nil {
+		t.Fatalf("client projection: %v", err)
+	}
+	const stale = "{\"stale\": true}\n"
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		adapterTestWrite(t, context.Path(destination), stale)
+	}
+
+	// The second document is handed a payload that does not satisfy the
+	// contract of its own destination, so its activation fails after the first
+	// document has been renamed into place.
+	documents := []*fleetDocument{
+		{
+			destination: fleet.ClientDestination,
+			target:      context.Path(fleet.ClientDestination),
+			payload:     client,
+			before:      []byte(stale),
+			changed:     true,
+		},
+		{
+			destination: fleet.WorkerDestination,
+			target:      context.Path(fleet.WorkerDestination),
+			payload:     client,
+			before:      []byte(stale),
+			changed:     true,
+		},
+	}
+	err = fleetWriteProjection(context, context.RunID, documents)
+	if err == nil {
+		t.Fatal("an unactivatable document was reported as applied")
+	}
+	var rolled *RolledBack
+	if !errors.As(err, &rolled) {
+		t.Fatalf("a half-applied run reported %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), fleet.WorkerDestination) ||
+		!strings.Contains(err.Error(), "left consistent") {
+		t.Errorf("the refusal does not say what state the host is in: %v", err)
+	}
+
+	// Both documents are back to what the run found, including the one that
+	// was successfully activated before the failure.
+	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
+		body, err := os.ReadFile(context.Path(destination))
+		if err != nil || string(body) != stale {
+			t.Errorf("%s is %q (%v), want what the run found", destination, body, err)
+		}
+	}
+	// Nothing is left staged in the destination directory either.
+	entries, err := os.ReadDir(filepath.Dir(context.Path(fleet.WorkerDestination)))
+	if err != nil {
+		t.Fatalf("read the destination directory: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("the destination directory holds %d entries, want the two documents",
+			len(entries))
+	}
+}
+
+// A convergence is retried after a transport failure often enough that the
+// retention must not refuse the second attempt, and the record the first
+// attempt took is the one that says what the run found.
+func TestRetainingTwiceUnderOneRunIDIsIdempotent(t *testing.T) {
+	context := fleetTestPrepare(t)
+	actions := []string{}
+	if _, err := fleetApply(context, fleetTestComponent(t), nil, &actions); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	first, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))
+	if err != nil {
+		t.Fatalf("retained record: %v", err)
+	}
+
+	// The same run retried: the documents now exist, so a second retention
+	// under this run ID must neither refuse nor overwrite the record that says
+	// the run found nothing.
+	documents, err := fleetPlanDocuments(context, []byte("{}\n"), []byte("{}\n"))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if err := fleetRetainPrior(context, context.RunID, documents); err != nil {
+		t.Fatalf("a retried retention was refused: %v", err)
+	}
+	second, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))
+	if err != nil || string(second) != string(first) {
+		t.Error("a retry overwrote the record of what the run originally found")
+	}
+
+	// A directory that exists without a record is a genuine collision and is
+	// diagnosed rather than silently reused.
+	const other = "20260914T000009Z-collision"
+	if err := os.MkdirAll(context.Path(fleet.StateDirectory, other), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = fleetRetainPrior(context, other, documents)
+	if err == nil || !strings.Contains(err.Error(), "without a retained record") {
+		t.Fatalf("a collision produced %v", err)
+	}
+}
+
 // The client document has its own reason to change, and changing it must not
 // touch the worker bootstrap: rewriting a host's worker identity because its
 // coordinator timeout moved is exactly the coupling separate files avoid.
@@ -344,7 +477,7 @@ func TestFleetRewritesOnlyTheDocumentThatChanged(t *testing.T) {
 	if _, err := fleetApply(context, fleetTestComponent(t), nil, &actions); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
-	workerBefore, err := os.Stat(context.Path(fleet.WorkerDestination))
+	workerBefore, err := os.ReadFile(context.Path(fleet.WorkerDestination))
 	if err != nil {
 		t.Fatalf("bootstrap file: %v", err)
 	}
@@ -362,12 +495,12 @@ func TestFleetRewritesOnlyTheDocumentThatChanged(t *testing.T) {
 	if err != nil || !strings.Contains(string(client), `"request_timeout": 45`) {
 		t.Fatalf("client document = %q (%v)", client, err)
 	}
-	workerAfter, err := os.Stat(context.Path(fleet.WorkerDestination))
+	workerAfter, err := os.ReadFile(context.Path(fleet.WorkerDestination))
 	if err != nil {
 		t.Fatalf("bootstrap file: %v", err)
 	}
-	if !workerAfter.ModTime().Equal(workerBefore.ModTime()) {
-		t.Error("a client-only change rewrote the worker bootstrap")
+	if string(workerAfter) != string(workerBefore) {
+		t.Errorf("a client-only change rewrote the worker bootstrap:\n%s", workerAfter)
 	}
 	// Both documents are still retained, so restoring the run is whole.
 	record, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))

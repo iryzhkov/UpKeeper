@@ -37,8 +37,17 @@ Lists are sorted and unique. Host and worker identity must agree with each other
 inventory. A model allowlist is authorization only; it is never evidence that a model is installed,
 authenticated or advertised.
 
-An unknown `schema_version` fails closed. Unknown fields inside a known version are preserved when
-they round-trip byte-for-byte and refused when they cannot.
+An unknown `schema_version` fails closed, and so does an unknown field inside a known version.
+Every key set in this component is closed, at the top level and in every nested object.
+
+This amends the original wording, which said unknown fields were preserved when they could be
+round-tripped. A field nothing validates is a field a credential value can be authored into,
+and this component is published in the release manifest and distributed to every host, so
+carrying one silently would ship a secret to the whole fleet one commit after somebody typed
+it. Forward compatibility is `schema_version`'s job: a controller that needs a new field ships
+a new version, and an older binary refuses that version outright rather than carrying fields it
+cannot check. Refusals name the offending key and say that this component carries references
+only.
 
 ## Projections
 
@@ -120,13 +129,29 @@ release that never carried the component does not gain one. Recording observatio
 permitted by the contract but is not implemented, because the controller has no observation
 of another host's models that it did not ask that host for.
 
+`push --components steward-fleet-configuration` is refused rather than accepted as a no-op.
+The selection reads as "capture the fleet intent", nothing can capture it, and a run that
+exits 0 having done nothing is read as success by whoever ran it. The refusal says the
+component is authored, not captured, and names the file to edit.
+
 **Retention lives in its own directory.** The documents a run replaces are kept under
 `~/.local/state/dev-fleet/fleet-config/<run-id>/prior.json`, alongside but not inside
 `worker-config/<run-id>/`, so that a run in which both components act cannot collide on one
 exclusively created directory. Both owned documents are retained even when only one of them
 changes, so restoring a run puts the whole of what it found back rather than half of it. The
 retained record names each destination, and restoring it puts the host back to exactly what
-the run found, including having no document at all.
+the run found, including having no document at all. A retry of the same run ID reuses the
+record the first attempt took rather than refusing or overwriting it; a directory that exists
+without a record is diagnosed as a collision.
+
+**What the retained document is for, and what it is not.** It is the within-run repair: when
+one of the two documents cannot be activated, every document that run touched is put back
+before the host reports, so a failed convergence never leaves a host half applied. There is no
+operator command that replays it, and there should not be one — an operator who wants a host
+back on an earlier bootstrap converges an earlier release, which is reviewed, committed and
+the same mechanism every other component uses. The retained record is evidence and a repair
+buffer, not a rollback interface. An earlier draft of this document called rollback
+"re-applying the retained document"; that was never the operator path.
 
 **An exception must produce a valid profile.** Overriding a key the profile does not have is
 refused, and the merged result is validated as if it had been authored directly, so an

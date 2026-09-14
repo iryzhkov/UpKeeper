@@ -3,6 +3,7 @@ package publish_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -89,18 +90,43 @@ func TestCaptureNeverOverwritesAuthoredFleetIntent(t *testing.T) {
 			authored, captured)
 	}
 
-	// It also survives a capture that names other components, and a capture
-	// that names this one: neither observes authorization into existence.
-	for _, selection := range [][]string{{"t3-steward"}, {fleet.Component}} {
-		options := captureOnly(subject)
-		options.Components = selection
-		if _, err := publish.Release(subject.root, options); err != nil {
-			t.Fatalf("capture %v: %v", selection, err)
-		}
-		captured := capturedComponent(t, subject.root, fleet.Component)
-		if string(captured) != string(authored) {
-			t.Errorf("capture %v rewrote the authored fleet intent:\n%s", selection, captured)
-		}
+	// It also survives a capture that names other components.
+	options := captureOnly(subject)
+	options.Components = []string{"t3-steward"}
+	if _, err := publish.Release(subject.root, options); err != nil {
+		t.Fatalf("selective capture: %v", err)
+	}
+	if captured := capturedComponent(t, subject.root, fleet.Component); string(captured) != string(authored) {
+		t.Errorf("a selective capture rewrote the authored fleet intent:\n%s", captured)
+	}
+}
+
+// Asking to capture the fleet intent is refused rather than quietly doing
+// nothing. A selection that exits 0 without capturing anything reads as
+// success, and the operator who ran it believes their host was consulted.
+func TestCapturingTheFleetIntentIsRefused(t *testing.T) {
+	subject := newFixture(t)
+	if _, err := publish.Release(subject.root, captureOnly(subject)); err != nil {
+		t.Fatalf("first capture: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(subject.root, release.File))
+	if err != nil {
+		t.Fatalf("published manifest: %v", err)
+	}
+
+	options := captureOnly(subject)
+	options.Components = []string{fleet.Component}
+	_, err = publish.Release(subject.root, options)
+	if err == nil {
+		t.Fatal("capturing authored fleet intent was accepted")
+	}
+	if !strings.Contains(err.Error(), "authored, not captured") ||
+		!strings.Contains(err.Error(), release.File) {
+		t.Errorf("the refusal does not say where the edit belongs: %v", err)
+	}
+	after, err := os.ReadFile(filepath.Join(subject.root, release.File))
+	if err != nil || string(after) != string(before) {
+		t.Error("a refused capture still rewrote the manifest")
 	}
 }
 

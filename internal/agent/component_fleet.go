@@ -235,14 +235,41 @@ func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) 
 		if !planned.changed {
 			continue
 		}
-		if err := fleetActivate(c, runID, planned); err != nil {
-			return err
+		activationErr := fleetActivate(planned)
+		if activationErr == nil {
+			continue
 		}
+		// Any failure on any document leaves the host with some of this run
+		// applied and some of it not, whether the cause was a full disk, a
+		// read-only filesystem or a document that did not survive its own
+		// rename. All of them are put back, and all of them report as a
+		// rollback rather than as a bare error, because "failed" and "failed
+		// and half applied" are different things to wake up to.
+		if restoreErr := FleetRestorePrior(c.Home, runID); restoreErr != nil {
+			// Not a rollback: the machine is not back in the state the run
+			// found it in. The "rollback failed" prefix is what the agent
+			// classifies as rollback-failed, which is the loudest outcome a
+			// host can report, and it is the honest one here.
+			return Failf(
+				"rollback failed: %s could not be activated (%v) and the previous "+
+					"documents could not be restored (%v); this host is in a mixed "+
+					"state and needs the retained record under %s",
+				planned.destination, activationErr, restoreErr,
+				filepath.Join(fleet.StateDirectory, runID))
+		}
+		return RolledBackf(
+			"%s could not be activated (%v); every document this run touched was "+
+				"restored, so the host is left consistent with what it had before",
+			planned.destination, activationErr)
 	}
 	return nil
 }
 
-func fleetActivate(c *Context, runID string, planned *fleetDocument) error {
+// fleetActivate stages one document, validates the bytes that are on disk, and
+// publishes them with a single rename. It reports a failure and never repairs
+// one: repairing is the caller's job, because a repair has to put back every
+// document this run touched and not only this one.
+func fleetActivate(planned *fleetDocument) error {
 	staged, err := fleetStage(planned.target, planned.payload)
 	if err != nil {
 		return err
@@ -256,27 +283,43 @@ func fleetActivate(c *Context, runID string, planned *fleetDocument) error {
 	}
 	_ = fsatomic.SyncDirectory(filepath.Dir(planned.target))
 	written, err := os.ReadFile(planned.target)
-	if err == nil && bytes.Equal(written, planned.payload) {
-		return nil
+	if err != nil {
+		return err
 	}
-	// The document that is live is not the one that was validated, so every
-	// document this run touched goes back rather than being left half applied.
-	if restoreErr := FleetRestorePrior(c.Home, runID); restoreErr != nil {
-		return RolledBackf(
-			"fleet projection failed verification and could not be restored: %v", restoreErr)
+	if !bytes.Equal(written, planned.payload) {
+		return errors.New("the activated document is not the one that was validated")
 	}
-	return RolledBackf(
-		"fleet projection failed verification; restored the previous documents")
+	return nil
 }
 
 // fleetRetainPrior records the documents that are about to be replaced, under a
-// directory created exclusively so that two runs never share one.
+// directory created exclusively so that two different runs never share one.
+//
+// A retry of the same run is not a different run. Convergence is retried after
+// a transport failure often enough that an exclusive create alone would turn
+// the second attempt into an immediate refusal, so an existing directory that
+// already holds this run's record is accepted and the record is left exactly as
+// the first attempt wrote it: that record, not a later one, says what the run
+// found. An existing directory with no record is a real collision and is
+// diagnosed rather than overwritten.
 func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) error {
 	backup := c.Path(fleet.StateDirectory, runID)
 	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
 		return err
 	}
-	if err := os.Mkdir(backup, 0o700); err != nil {
+	recordPath := filepath.Join(backup, "prior.json")
+	switch err := os.Mkdir(backup, 0o700); {
+	case err == nil:
+	case errors.Is(err, fs.ErrExist):
+		info, statErr := os.Stat(recordPath)
+		if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return nil
+		}
+		return errors.New(
+			"fleet retention directory " + filepath.Join(fleet.StateDirectory, runID) +
+				" exists without a retained record; inspect it before retrying, " +
+				"because another run may already own this run ID")
+	default:
 		return err
 	}
 	retained := make([]any, 0, len(documents))
@@ -295,7 +338,10 @@ func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) erro
 	if err != nil {
 		return err
 	}
-	return agentenv.AtomicWrite(filepath.Join(backup, "prior.json"), record, 0o600)
+	// The retention is written at least as durably as the activation it
+	// protects: its directory entry is flushed too, so a power loss cannot
+	// leave the new projection on disk and lose the document it replaced.
+	return fsatomic.WritePrivateFile(recordPath, record)
 }
 
 // fleetOwnedDestinations are the only paths a retained record may name. A
@@ -357,7 +403,21 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 	if !ok {
 		return errors.New("retained fleet record has no content to restore")
 	}
-	return agentenv.AtomicWrite(target, []byte(content), 0o600)
+	// The same staging discipline as the forward path, and for a reason the
+	// forward path does not have: worker-bootstrap.json is also written by
+	// worker-configuration v1, whose helper stages through one fixed temporary
+	// name created with O_EXCL. A crash that leaves that name behind would
+	// block both v1 convergence and this restore until somebody removed it by
+	// hand. A unique temporary name cannot be blocked by a corpse.
+	staged, err := fleetStage(target, []byte(content))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(staged) }()
+	if err := os.Rename(staged, target); err != nil {
+		return err
+	}
+	return fsatomic.SyncDirectory(filepath.Dir(target))
 }
 
 // fleetStage writes the candidate document beside its destination, so that the

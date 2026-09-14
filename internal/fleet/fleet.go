@@ -21,9 +21,9 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
-	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 )
 
@@ -94,10 +94,16 @@ var DefaultMessageLimits = MessageLimits{
 // not a limit.
 const maximumMessageBytes = 1 << 30
 
-// ProfileFields, HostFields and ProjectFields are the keys every entry of that
-// kind must carry. Additional keys are preserved rather than refused, because
-// silently dropping a field a newer controller wrote turns a rollback into
-// data loss; see roundTrips for the condition preservation depends on.
+// ProfileFields, HostFields and ProjectFields are the complete key set of an
+// entry of that kind.
+//
+// Every one of them is closed. A key nobody validates is a key a credential
+// value can be authored into, and this component is published in the release
+// manifest and distributed to every host, so an unvalidated field is a secret
+// one commit away from the whole fleet. Forward compatibility comes from
+// schema_version: a newer controller that needs a new field ships a new
+// version, and an older binary refuses that version outright instead of
+// carrying fields it cannot check.
 var (
 	ProfileFields = []string{
 		"cpu_class", "executor_slots", "capabilities",
@@ -210,11 +216,6 @@ type Document struct {
 	observed    map[string]any
 }
 
-// Raw returns the component exactly as it was authored, so that a caller which
-// has to write the manifest back preserves every field this binary does not
-// understand.
-func (d *Document) Raw() map[string]any { return d.raw }
-
 // HostNames, ProfileNames and ProjectNames are sorted, so that every report and
 // every projection this package renders is in one deterministic order.
 func (d *Document) HostNames() []string    { return sortedKeys(d.Hosts) }
@@ -240,10 +241,6 @@ func Parse(component map[string]any) (*Document, error) {
 	if component == nil {
 		return nil, failure.Value("steward fleet configuration is missing")
 	}
-	if !roundTrips(component) {
-		return nil, failure.Value(
-			"steward fleet configuration cannot be preserved byte-for-byte")
-	}
 	if component["kind"] != Component {
 		return nil, failure.Value("steward fleet configuration has the wrong kind")
 	}
@@ -252,9 +249,13 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, failure.Value(
 			"unsupported steward-fleet-configuration schema_version")
 	}
-	if err := exactKeys(component, ComponentFields, []string{"observed"}); err != nil {
+	if missing, unknown := checkKeys(component, ComponentFields, []string{"observed"}); unknown != "" {
 		return nil, failure.Value(
-			"steward fleet configuration carries an unknown top-level field")
+			"steward fleet configuration carries an unknown top-level field %s; %s",
+			strconv.Quote(unknown), referencesOnly)
+	} else if missing != "" {
+		return nil, failure.Value(
+			"steward fleet configuration is missing %s", missing)
 	}
 	document := &Document{raw: component}
 	if err := document.parseCoordinator(component["coordinator"]); err != nil {
@@ -300,9 +301,10 @@ func (d *Document) parseCoordinator(value any) error {
 	if !ok {
 		return failure.Value("fleet coordinator must be an object")
 	}
-	if err := exactKeys(entry,
-		[]string{"coordinator_id", "host", "client_endpoint"}, nil); err != nil {
-		return failure.Value("fleet coordinator is missing %s", err.Error())
+	missing, unknown := checkKeys(entry,
+		[]string{"coordinator_id", "host", "client_endpoint"}, nil)
+	if missing != "" || unknown != "" {
+		return fieldError("fleet coordinator", missing, unknown)
 	}
 	identity, _ := entry["coordinator_id"].(string)
 	host, _ := entry["host"].(string)
@@ -316,10 +318,11 @@ func (d *Document) parseCoordinator(value any) error {
 	// message_limits is optional so that a document authored against the
 	// frozen four-key shape still validates; an absent one takes the explicit
 	// default rather than meaning "unbounded".
-	if err := exactKeys(endpoint,
+	endpointMissing, endpointUnknown := checkKeys(endpoint,
 		[]string{"address", "connection", "remote_command", "request_timeout"},
-		[]string{"message_limits"}); err != nil {
-		return failure.Value("fleet client endpoint is missing %s", err.Error())
+		[]string{"message_limits"})
+	if endpointMissing != "" || endpointUnknown != "" {
+		return fieldError("fleet client endpoint", endpointMissing, endpointUnknown)
 	}
 	limits, err := parseMessageLimits(endpoint["message_limits"])
 	if err != nil {
@@ -363,7 +366,7 @@ func parseMessageLimits(value any) (MessageLimits, error) {
 	if !ok {
 		return MessageLimits{}, failure.Value("fleet client message_limits must be an object")
 	}
-	if err := exactKeys(entry, MessageLimitFields, nil); err != nil {
+	if missing, unknown := checkKeys(entry, MessageLimitFields, nil); missing != "" || unknown != "" {
 		return MessageLimits{}, failure.Value(
 			"fleet client message_limits must name only %s",
 			strings.Join(MessageLimitFields, " and "))
@@ -401,8 +404,8 @@ func (d *Document) parseProfiles(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet profile name")
 		}
-		if err := exactKeys(entry, ProfileFields, anyKey); err != nil {
-			return failure.Value("fleet profile %s is missing %s", name, err.Error())
+		if missing, unknown := checkKeys(entry, ProfileFields, nil); missing != "" || unknown != "" {
+			return fieldError("fleet profile "+name, missing, unknown)
 		}
 		profile, err := parseProfileBody(name, entry)
 		if err != nil {
@@ -502,8 +505,9 @@ func (d *Document) parseHosts(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet host")
 		}
-		if err := exactKeys(entry, HostFields, anyKey); err != nil {
-			return failure.Value("fleet host %s is missing %s", name, err.Error())
+		missing, unknown := checkKeys(entry, HostFields, []string{"exceptions"})
+		if missing != "" || unknown != "" {
+			return fieldError("fleet host "+name, missing, unknown)
 		}
 		host, err := d.parseHostBody(name, entry)
 		if err != nil {
@@ -593,8 +597,8 @@ func (d *Document) parseProjects(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet project name")
 		}
-		if err := exactKeys(entry, ProjectFields, anyKey); err != nil {
-			return failure.Value("fleet project %s is missing %s", name, err.Error())
+		if missing, unknown := checkKeys(entry, ProjectFields, nil); missing != "" || unknown != "" {
+			return fieldError("fleet project "+name, missing, unknown)
 		}
 		repository, _ := entry["repository"].(string)
 		if !repositoryPattern.MatchString(repository) {
@@ -642,71 +646,76 @@ func (d *Document) parseObserved(component map[string]any) error {
 	if !ok {
 		return failure.Value("fleet observed must be an object")
 	}
-	if err := exactKeys(entry, nil, []string{"hosts", "coordinator"}); err != nil {
-		return failure.Value("fleet observed carries an unknown field")
+	if _, unknown := checkKeys(entry, nil, []string{"hosts", "coordinator"}); unknown != "" {
+		return fieldError("fleet observed", "", unknown)
+	}
+	if coordinator, present := entry["coordinator"].(map[string]any); present {
+		if _, unknown := checkKeys(
+			coordinator, nil, []string{"catalog_sha256", "revision"}); unknown != "" {
+			return fieldError("fleet observed coordinator", "", unknown)
+		}
 	}
 	hosts, _ := entry["hosts"].(map[string]any)
 	for _, name := range sortedKeys(hosts) {
 		if _, declared := d.Hosts[name]; !declared {
 			return failure.Value("fleet observed names an undeclared host: %s", name)
 		}
-		if _, isObject := hosts[name].(map[string]any); !isObject {
+		observation, isObject := hosts[name].(map[string]any)
+		if !isObject {
 			return failure.Value("fleet observation for %s must be an object", name)
+		}
+		// An observation is shipped in the manifest like everything else here,
+		// so its key set is closed for the same reason the authored ones are.
+		if _, unknown := checkKeys(
+			observation, nil, []string{"models", "observed_at"}); unknown != "" {
+			return fieldError("fleet observation for "+name, "", unknown)
 		}
 	}
 	d.observed = entry
 	return nil
 }
 
-// roundTrips reports whether a value survives the canonical encoding unchanged.
-// Unknown fields are preserved only when this holds; anything else is refused,
-// because a field that cannot be written back byte-for-byte cannot be rolled
-// back to either.
-func roundTrips(value any) bool {
-	encoded, err := canonjson.Compact(value)
-	if err != nil {
-		return false
-	}
-	decoded, err := canonjson.Decode(encoded)
-	if err != nil {
-		return false
-	}
-	again, err := canonjson.Compact(decoded)
-	if err != nil {
-		return false
-	}
-	return string(encoded) == string(again)
-}
+// referencesOnly is the second half of every unknown-field refusal. It says
+// why the set is closed rather than only that it is, because an operator who
+// knows the reason does not try to work around it.
+const referencesOnly = "this component carries references only"
 
-// anyKey marks a field set that accepts additional keys beyond the required
-// ones. It is distinguishable from an empty optional list, which accepts none.
-var anyKey = []string{"*"}
-
-// exactKeys checks that every required key is present and that any other key
-// is either explicitly optional or allowed by anyKey. The error names the
-// first missing key, which is what the caller reports.
-func exactKeys(value map[string]any, required, optional []string) error {
-	for _, key := range required {
-		if _, present := value[key]; !present {
-			return failure.Value("%s", key)
-		}
-	}
-	if len(optional) == 1 && optional[0] == "*" {
-		return nil
-	}
-	allowed := map[string]bool{}
+// checkKeys reports what is wrong with an object's key set: the first required
+// key that is absent, and the first key nobody knows about.
+//
+// The two are returned separately because they are different mistakes. A
+// missing key is an incomplete document; an unknown key is a field nothing
+// validates, in a component that is published to every host. Reporting one as
+// the other sends the reader looking for the wrong thing, which is exactly what
+// the earlier single-error version did.
+func checkKeys(value map[string]any, required, optional []string) (missing, unknown string) {
+	allowed := make(map[string]bool, len(required)+len(optional))
 	for _, key := range required {
 		allowed[key] = true
+		if _, present := value[key]; !present && missing == "" {
+			missing = key
+		}
 	}
 	for _, key := range optional {
 		allowed[key] = true
 	}
 	for _, key := range sortedKeys(value) {
 		if !allowed[key] {
-			return failure.Value("%s", key)
+			return missing, key
 		}
 	}
-	return nil
+	return missing, ""
+}
+
+// fieldError renders a key-set refusal for one named entry. An unknown key is
+// reported first: a document that both invents a field and omits one is a
+// document whose invented field is the more dangerous half.
+func fieldError(context, missing, unknown string) error {
+	if unknown != "" {
+		return failure.Value("%s carries an unknown field %s; %s",
+			context, strconv.Quote(unknown), referencesOnly)
+	}
+	return failure.Value("%s is missing %s", context, missing)
 }
 
 func identifierList(value any, context string) ([]string, error) {
