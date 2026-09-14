@@ -110,6 +110,51 @@ def test_capture_reads_the_controller_and_round_trips(tmp_path: Path) -> None:
     assert json.loads((root / "desired/release.json").read_text())["captured_from"] == "normandy"
 
 
+def test_capture_of_selected_components_leaves_the_rest_as_published(tmp_path: Path) -> None:
+    """A capture asked for one component must not carry another along.
+
+    Capture reads the whole machine, so a controller whose local checkout of an
+    unrelated component is ahead of the release proposes that newer commit every
+    time. Without a way to scope the capture an operator has to notice and revert
+    it by hand on every release.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+
+    baseline = capture_release(root, controller="normandy", home=home, runner=machine)
+    # The release published a huyang the controller is no longer running, which is
+    # what happens once a checkout moves ahead of its pin.
+    manifest = json.loads(json.dumps(baseline.manifest))
+    older = "c" * 40
+    manifest["components"]["huyang"]["commit"] = older
+    write_release(root, validate_release(manifest))
+    published = load_release(root).components
+
+    everything = capture_release(root, controller="normandy", home=home, runner=machine)
+    assert everything.components["huyang"]["commit"] == COMMIT_A
+
+    scoped = capture_release(
+        root, controller="normandy", home=home, runner=machine, only=["agent-environment"]
+    )
+    assert scoped.components["huyang"] == published["huyang"]
+    assert scoped.components["huyang"]["commit"] == older
+    assert scoped.components["omarchy-setup"] == published["omarchy-setup"]
+    assert scoped.components["t3-steward"] == published["t3-steward"]
+    assert scoped.components["agent-environment"] == everything.components["agent-environment"]
+
+
+def test_capture_rejects_an_unknown_component_name(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    with pytest.raises(CaptureError, match="unknown component"):
+        capture_release(
+            root, controller="normandy", home=home, runner=FakeMachine(), only=["huyangg"]
+        )
+
+
 def test_capture_refuses_dirty_checkouts_and_local_builds(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()

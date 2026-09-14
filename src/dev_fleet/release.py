@@ -10,11 +10,12 @@ fragment on a target.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -405,9 +406,28 @@ def capture_release(
     home: Path | None = None,
     runner: Runner = default_runner,
     now: datetime | None = None,
+    only: Sequence[str] | None = None,
 ) -> Release:
-    """Read the controller's own machine into a validated release manifest."""
+    """Read the controller's own machine into a validated release manifest.
+
+    Capture reads the whole machine, because the components are not independent:
+    the T3 pin is derived from the installed steward, and the agent environment
+    is a set of files rather than a version. When ``only`` is given, every component
+    outside it is restored to exactly what the existing manifest published, so a
+    capture asked for one component cannot carry another along.
+
+    Without that, a controller whose local checkout of some unrelated component
+    is ahead of the release proposes that newer commit on every capture, and the
+    operator has to notice and revert it by hand each time.
+    """
     home = (home or Path.home()).resolve()
+    selected = None if only is None else set(only)
+    published: dict[str, Any] = {}
+    if selected is not None:
+        unknown = sorted(selected - set(COMPONENT_ORDER))
+        if unknown:
+            raise CaptureError("unknown component(s): " + ", ".join(unknown))
+        published = copy.deepcopy(_existing_or_default(root)["components"])
     if _git(runner, root, "status", "--porcelain"):
         raise CaptureError("release repository has uncommitted changes; commit before capture")
     manifest = _existing_or_default(root)
@@ -440,6 +460,14 @@ def capture_release(
     components["agent-config"]["files"] = []
     components["omarchy-setup"]["modules"] = ["28-scripts"]
     components.setdefault("worker-configuration", {"kind": "worker-configuration", "hosts": {}})
+    if selected is not None:
+        for name in list(manifest["components"]):
+            if name in selected:
+                continue
+            if name in published:
+                manifest["components"][name] = published[name]
+            else:
+                del manifest["components"][name]
     manifest["captured_at"] = (
         (now or datetime.now(UTC)).astimezone(UTC).isoformat().replace("+00:00", "Z")
     )

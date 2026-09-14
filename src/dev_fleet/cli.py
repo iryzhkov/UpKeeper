@@ -77,6 +77,10 @@ def _parser() -> argparse.ArgumentParser:
     push.add_argument(
         "remotes", nargs="*", metavar="REMOTE", help="git remotes to push to (default: all)"
     )
+    push.add_argument(
+        "--components", nargs="+", choices=COMPONENT_ORDER,
+        help="capture only these; every other component keeps what the release already published",
+    )
     push.add_argument("--no-commit", action="store_true", help="write the manifest only")
     push.add_argument("--no-push", action="store_true", help="commit but do not push")
     push.add_argument("--json", action="store_true", dest="as_json")
@@ -189,6 +193,7 @@ def _run_push(arguments: argparse.Namespace) -> int:
         remotes=remotes,
         commit=not arguments.no_commit,
         push=not (arguments.no_commit or arguments.no_push),
+        components=arguments.components,
     )
     if arguments.as_json:
         _print_json(report)

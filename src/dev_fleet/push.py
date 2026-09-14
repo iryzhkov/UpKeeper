@@ -9,6 +9,7 @@ and recoverable from another controller.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +50,11 @@ def push_release(
     push: bool = True,
     home: Path | None = None,
     runner: Runner = default_runner,
+    components: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    release = capture_release(root, controller=controller, home=home, runner=runner)
+    release = capture_release(
+        root, controller=controller, home=home, runner=runner, only=components
+    )
     write_release(root, release)
     report: dict[str, Any] = {
         "schema_version": 1,
