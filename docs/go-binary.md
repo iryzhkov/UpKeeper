@@ -115,3 +115,10 @@ Python reference gate. Both run in CI; the Go gate is a release blocker on its
 own.
 
 `upkeeper version` prints the exact source commit the binary was built from.
+
+Release artifacts are built with `-trimpath`, which keeps the absolute path of
+the checkout out of the binary. Without it, two clean checkouts of the same
+commit produce different bytes and a published checksum can only be reproduced
+by someone who happened to build in the same directory. With it, any clean
+checkout of the commit reproduces the published checksum exactly, which is what
+makes the checksum evidence rather than decoration.
