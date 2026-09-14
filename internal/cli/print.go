@@ -7,6 +7,7 @@ import (
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/redact"
+	"github.com/iryzhkov/UpKeeper/internal/safety"
 )
 
 // printJSON writes a report the way every machine consumer expects it:
@@ -72,6 +73,62 @@ func printPush(out io.Writer, report map[string]any) {
 	for _, pushed := range stringList(report["pushed"]) {
 		fmt.Fprintf(out, "pushed %s\n", pushed)
 	}
+}
+
+// printFleetPlan renders the plan for a person.
+//
+// Desired and observed are printed as separate lines, and a host with no
+// observation says so rather than printing an empty set: collapsing those two
+// answers is how an unroutable host became unexplainable.
+func printFleetPlan(out io.Writer, report map[string]any) {
+	fmt.Fprintf(out, "coordinator %s on %s\n",
+		text(report["coordinator_id"]), text(report["coordinator_host"]))
+	hosts, _ := report["hosts"].(map[string]any)
+	for _, name := range safety.SortedKeys(hosts) {
+		host, _ := hosts[name].(map[string]any)
+		fmt.Fprintf(out, "%s: profile=%s slots=%s worker=%s\n",
+			name, text(host["profile"]), scalar(host["executor_slots"]),
+			shorten(text(host["worker_sha256"]), 12))
+		fmt.Fprintf(out, "  desired  %s\n", modelSummary(host["desired_models"]))
+		observed, present := host["observed_models"]
+		if !present || observed == nil {
+			fmt.Fprintln(out, "  observed not observed")
+			continue
+		}
+		fmt.Fprintf(out, "  observed %s\n", modelSummary(observed))
+	}
+	plan, _ := report["enrollment_plan"].(map[string]any)
+	fmt.Fprintf(out, "proposed catalog %s (previous %s)\n",
+		shorten(text(plan["proposed_catalog_sha256"]), 12),
+		shortenOrNone(text(plan["previous_catalog_sha256"])))
+	if revision := plan["expected_revision"]; revision != nil {
+		fmt.Fprintf(out, "fenced against coordinator revision %s\n", scalar(revision))
+	}
+	for _, change := range stringList(plan["authorization_changes"]) {
+		fmt.Fprintf(out, "  %s\n", change)
+	}
+	fmt.Fprintln(out, "not enrolled; applying this is an explicit Steward operation")
+}
+
+// modelSummary renders one host's allowlists as instance=model,model.
+func modelSummary(value any) string {
+	models, _ := value.(map[string]any)
+	if len(models) == 0 {
+		return "none"
+	}
+	summaries := []string{}
+	for _, instance := range safety.SortedKeys(models) {
+		summaries = append(summaries,
+			instance+"="+join(stringList(models[instance]), ","))
+	}
+	return join(summaries, " ")
+}
+
+func shortenOrNone(value string) string {
+	if value == "" {
+		return "none"
+	}
+	return shorten(value, 12)
 }
 
 func printPull(out io.Writer, report map[string]any) {

@@ -40,6 +40,7 @@ var commandSummaries = [][2]string{
 	{"push", "capture this machine as the release manifest, commit it and push the branch"},
 	{"pull", "converge hosts on an exact release manifest"},
 	{"rollback", "converge hosts on an exact release manifest"},
+	{"fleet-plan", "report the Steward fleet intent and what enrolling it would change"},
 	{"self-pull", "refresh the gated release and converge this machine only"},
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
@@ -64,6 +65,8 @@ func helpText(program, command string) string {
 		return pullHelp(program)
 	case "rollback":
 		return rollbackHelp(program)
+	case "fleet-plan":
+		return fleetPlanHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
 	default:
@@ -129,6 +132,24 @@ func rollbackHelp(program string) string {
 		describe("  --all", "every inventory host") +
 		convergeOptions() +
 		componentChoices()
+}
+
+// fleetPlanHelp documents a command that only reads. Saying so in the help is
+// part of the contract: the one thing an operator must be able to trust about
+// this command is that running it cannot enroll anything.
+func fleetPlanHelp(program string) string {
+	return "usage: " + program + " fleet-plan [-h] [--previous RELEASE-COMMIT] [--json]\n\n" +
+		"Report the Steward fleet intent this release carries: each host's desired\n" +
+		"model allowlist, the models observed on it where an observation exists, the\n" +
+		"digest of every projection, and the enrollment this release proposes.\n\n" +
+		"It writes nothing, reaches no host and never enrolls. Applying a catalog is\n" +
+		"a deliberate Steward admin operation with its own revision fence.\n\n" +
+		"options:\n" + helpOption + "\n" +
+		describe("  --previous RELEASE-COMMIT",
+			"diff the authorization against the release at this commit") +
+		describe("  --json", "") +
+		"\nexit codes: 0 reported, 2 malformed command line, 30 refused\n" +
+		"\nexample:\n  " + program + " fleet-plan --previous 6bcd2f8 --json\n"
 }
 
 func scheduledHelp(program, command string) string {

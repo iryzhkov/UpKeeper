@@ -21,6 +21,7 @@ func TestHelpPrintsOnStdoutAndSucceeds(t *testing.T) {
 		{"push", "--help"},
 		{"pull", "--help"},
 		{"rollback", "--help"},
+		{"fleet-plan", "--help"},
 		{"self-pull", "--help"},
 		{"scheduled-pull", "--help"},
 		{"install-self-timer", "--help"},

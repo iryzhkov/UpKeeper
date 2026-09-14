@@ -50,13 +50,16 @@ type arguments struct {
 
 	// self-pull and scheduled-pull
 	convergeOnly bool
+
+	// fleet-plan
+	previousRelease string
 }
 
 // Commands are the subcommands `upkeeper` accepts. The two names beginning
 // with underscores are the machine-facing halves a controller invokes on a
 // target; they are deliberately undocumented in help output.
 var Commands = []string{
-	"doctor", "status", "push", "pull", "rollback",
+	"doctor", "status", "push", "pull", "rollback", "fleet-plan",
 	"self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
 	"version",
 }
@@ -95,6 +98,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parsePush(parsed, rest, componentChoices)
 	case "pull", "rollback":
 		return parsed, parsePull(parsed, rest, componentChoices)
+	case "fleet-plan":
+		return parsed, parseFleetPlan(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
 	case "install-self-timer", "install-pull-timer", agentCommand, probeCommand, "version":
@@ -251,6 +256,28 @@ func parsePull(parsed *arguments, argv []string, choices []string) error {
 	}
 	if group[0] == "--hosts" && len(parsed.hosts) == 0 {
 		return usagef("argument --hosts: expected at least one argument")
+	}
+	return nil
+}
+
+// parseFleetPlan reads the options of a command that only reports. It takes no
+// host selector on purpose: a plan describes the fleet, and describing half of
+// it would hide the authorization it is meant to expose.
+func parseFleetPlan(parsed *arguments, argv []string) error {
+	for index := 0; index < len(argv); index++ {
+		switch argv[index] {
+		case "--json":
+			parsed.asJSON = true
+		case "--previous":
+			value, next, err := takeValue(argv, index, "--previous")
+			if err != nil {
+				return err
+			}
+			parsed.previousRelease = value
+			index = next
+		default:
+			return unrecognized(argv[index])
+		}
 	}
 	return nil
 }

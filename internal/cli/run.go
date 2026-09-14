@@ -13,6 +13,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/converge"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
+	"github.com/iryzhkov/UpKeeper/internal/fleet"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/probe"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
@@ -88,6 +89,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runPush(parsed, streams)
 	case "pull", "rollback":
 		return runConvergence(parsed, streams)
+	case "fleet-plan":
+		return runFleetPlan(parsed, streams)
 	case "self-pull":
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":
@@ -192,6 +195,89 @@ func runPush(parsed *arguments, streams Streams) (int, error) {
 		printPush(streams.Out, document)
 	}
 	return exitcode.Success, nil
+}
+
+// runFleetPlan reports the Steward fleet intent and the enrollment it proposes.
+//
+// It reads the release and the inventory, and that is all it does: no host is
+// reached, no file is written and nothing is enrolled. A plan is the document
+// somebody reads before deciding, which is only useful if producing it cannot
+// itself change anything.
+func runFleetPlan(parsed *arguments, streams Streams) (int, error) {
+	root, err := ConfigRoot()
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	config, err := inventory.Load(root)
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	value, err := release.Load(root)
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	document, present, err := value.FleetIntent()
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	if !present {
+		return exitcode.Preflight, failure.Validation(
+			"this release carries no %s component", fleet.Component)
+	}
+	if err := document.CheckInventory(config.KnownHosts()); err != nil {
+		return exitcode.Preflight, err
+	}
+	previous, err := previousFleetIntent(parsed)
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	documentReport, err := document.Report()
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	plan, err := document.EnrollmentPlan(previous)
+	if err != nil {
+		return exitcode.Preflight, err
+	}
+	documentReport["schema_version"] = exitcode.SchemaVersion
+	documentReport["command"] = "fleet-plan"
+	documentReport["release_sha256"] = value.Digest()
+	documentReport["enrollment_plan"] = plan
+	if parsed.asJSON {
+		if err := printJSON(streams.Out, documentReport); err != nil {
+			return 1, err
+		}
+	} else {
+		printFleetPlan(streams.Out, documentReport)
+	}
+	return exitcode.Success, nil
+}
+
+// previousFleetIntent reads the release a plan is compared against out of Git
+// history, so that the diff is against what was committed rather than against
+// whatever the working tree currently holds.
+func previousFleetIntent(parsed *arguments) (*fleet.Document, error) {
+	if parsed.previousRelease == "" {
+		return nil, nil
+	}
+	root, err := CheckoutRoot()
+	if err != nil {
+		return nil, err
+	}
+	value, _, _, err := release.LoadHistorical(root, parsed.previousRelease, procx.Run)
+	if err != nil {
+		return nil, err
+	}
+	document, present, err := value.FleetIntent()
+	if err != nil {
+		return nil, err
+	}
+	if !present {
+		return nil, failure.Validation(
+			"the release at %s carries no %s component",
+			parsed.previousRelease, fleet.Component)
+	}
+	return document, nil
 }
 
 func runConvergence(parsed *arguments, streams Streams) (int, error) {

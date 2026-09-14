@@ -101,7 +101,7 @@ func TestUsageErrors(t *testing.T) {
 			"an unknown command",
 			[]string{"converge"},
 			`argument command: invalid choice: "converge" (choose from "doctor", ` +
-				`"status", "push", "pull", "rollback", "self-pull", "scheduled-pull", ` +
+				`"status", "push", "pull", "rollback", "fleet-plan", "self-pull", "scheduled-pull", ` +
 				`"install-self-timer", "install-pull-timer", "version")`,
 		},
 		{
