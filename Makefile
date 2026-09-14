@@ -22,7 +22,13 @@ gate: lint test syntax check-mode redaction
 # The Go binary is the production path. The Python gate above stays as the
 # reference implementation and the rollback path until the canary has passed.
 
-GO_LDFLAGS = -X github.com/iryzhkov/UpKeeper/internal/buildinfo.Commit=$(shell git rev-parse HEAD)
+# A build at a tag names that tag; anything else keeps the development version.
+# A released artifact that calls itself 0.0.0-dev is not evidence of a release.
+GO_VERSION = $(shell git describe --tags --exact-match 2>/dev/null || echo 0.0.0-dev)
+
+GO_LDFLAGS = \
+	-X github.com/iryzhkov/UpKeeper/internal/buildinfo.Commit=$(shell git rev-parse HEAD) \
+	-X github.com/iryzhkov/UpKeeper/internal/buildinfo.Version=$(GO_VERSION)
 
 # A release artifact is built without cgo so that one binary runs on every host
 # the fleet has. A dynamically linked build picks up the glibc of the machine
