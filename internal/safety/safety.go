@@ -117,15 +117,34 @@ func ValidateHomeRelativePath(value string, roots map[string]bool) (string, erro
 		return "", failure.Validation(
 			"path must be a normalized home-relative path: %s", pyfmt.Repr(value))
 	}
-	parts := strings.Split(value, "/")
+	// PurePosixPath, which the Python validator built first, drops "."
+	// components before any of the checks below run. A path containing one is
+	// therefore refused as unnormalized rather than as traversal, and the
+	// refusal strings are part of the contract.
+	parts := make([]string, 0, strings.Count(value, "/")+1)
+	for _, part := range strings.Split(value, "/") {
+		if part != "." {
+			parts = append(parts, part)
+		}
+	}
 	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
+		if part == "" || part == ".." {
 			return "", failure.Validation("path traversal is forbidden: %s", pyfmt.Repr(value))
 		}
+	}
+	if len(parts) == 0 {
+		// Nothing but "." components. Python indexed parts[0] here and raised
+		// IndexError, which escaped as an unexpected failure; refusing gives
+		// the same answer without the traceback.
+		return "", failure.Validation(
+			"path must stay below %s: %s", strings.Join(SortedKeys(allowed), ", "), pyfmt.Repr(value))
 	}
 	if !allowed[parts[0]] {
 		return "", failure.Validation(
 			"path must stay below %s: %s", strings.Join(SortedKeys(allowed), ", "), pyfmt.Repr(value))
+	}
+	if strings.Join(parts, "/") != value {
+		return "", failure.Validation("path is not normalized: %s", pyfmt.Repr(value))
 	}
 	return value, nil
 }
