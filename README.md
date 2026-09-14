@@ -42,8 +42,9 @@ entry per worker host with its explicit exceptions, and the projects a worker ma
 Three projections are rendered from that one source: the worker bootstrap
 (`~/.config/t3-steward/worker-bootstrap.json`), the coordinator client
 (`~/.config/t3-steward/coordinator-client.json`, which an explicit
-`backlog_v2.coordinator_client` block in `config.yaml` overrides) and the catalog input
-proposed to the coordinator, which UpKeeper never applies.
+`backlog_v2.coordinator_client` block in `config.yaml` overrides, and which the coordinator's
+own host is never given) and the fleet's authorization as one reviewable document, which no
+binary consumes and UpKeeper never applies.
 
 `fleet-plan` only reads. It reaches no host, writes no file and never enrolls; exit code `0`
 means it reported, `2` is a malformed command line and `30` is a refusal. Applying a catalog

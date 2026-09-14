@@ -113,8 +113,19 @@ func TestFleetPlanReportsAndWritesNothing(t *testing.T) {
 	if plan["applied"] != false {
 		t.Errorf("the plan reports applied=%v", plan["applied"])
 	}
-	if plan["proposed_catalog_sha256"] == nil {
-		t.Error("the plan proposes no catalog")
+	// A plan carries no digest that could be mistaken for the revision the
+	// coordinator fences an enrollment against; it names the command that
+	// yields the real one instead.
+	if _, present := plan["proposed_catalog_sha256"]; present {
+		t.Error("the plan carries a digest no coordinator would accept")
+	}
+	if advice, _ := plan["fence"].(string); !strings.Contains(
+		advice, "worker enroll --catalog-revision") {
+		t.Errorf("the plan does not name the command that yields the fence: %q", advice)
+	}
+	artifact, _ := report["coordinator_projection"].(map[string]any)
+	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "review artifact") {
+		t.Errorf("the coordinator projection is not labelled a review artifact: %q", purpose)
 	}
 	hosts, _ := report["hosts"].(map[string]any)
 	homelab, _ := hosts["homelab"].(map[string]any)

@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 )
@@ -94,6 +95,14 @@ var DefaultMessageLimits = MessageLimits{
 // not a limit.
 const maximumMessageBytes = 1 << 30
 
+// MinimumRequestTimeout and MaximumRequestTimeout bound the client endpoint
+// timeout. The rendered form is a duration string, because that is what the
+// runtime reading this document parses.
+const (
+	MinimumRequestTimeout = time.Second
+	MaximumRequestTimeout = time.Hour
+)
+
 // ProfileFields, HostFields and ProjectFields are the complete key set of an
 // entry of that kind.
 //
@@ -142,7 +151,10 @@ var (
 	// option or carry anything but a repository path.
 	repositoryPattern = regexp.MustCompile(
 		`^(?:https|ssh)://(?:git@)?[A-Za-z0-9.-]+(?::[0-9]{1,5})?/[A-Za-z0-9][A-Za-z0-9._/-]*\.git$`)
-	commandPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,199}$`)
+	// commandPattern is a bare program name: no spaces, no arguments and no
+	// path. The runtime passes it to ssh as a single argv element and appends
+	// its own subcommand and operation after it.
+	commandPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
 // MessageLimits bound what a client will send and accept. t3-steward's
@@ -155,10 +167,12 @@ type MessageLimits struct {
 
 // ClientEndpoint is how a non-coordinator CLI reaches the coordinator.
 type ClientEndpoint struct {
-	Address        string
-	Connection     string
-	RemoteCommand  string
-	RequestTimeout int
+	Address       string
+	Connection    string
+	RemoteCommand string
+	// RequestTimeout is projected as a duration string, which is the form the
+	// runtime that reads the document parses.
+	RequestTimeout time.Duration
 	MessageLimits  MessageLimits
 }
 
@@ -324,25 +338,30 @@ func (d *Document) parseCoordinator(value any) error {
 	if endpointMissing != "" || endpointUnknown != "" {
 		return fieldError("fleet client endpoint", endpointMissing, endpointUnknown)
 	}
-	limits, err := parseMessageLimits(endpoint["message_limits"])
-	if err != nil {
-		return err
+	limits, limitsErr := parseMessageLimits(endpoint["message_limits"])
+	if limitsErr != nil {
+		return limitsErr
 	}
 	address, _ := endpoint["address"].(string)
 	command, _ := endpoint["remote_command"].(string)
-	timeout, numbered := intValue(endpoint["request_timeout"])
 	if !namePattern.MatchString(address) && !hostAddressPattern.MatchString(address) {
 		return failure.Value("invalid fleet client endpoint address")
 	}
 	if endpoint["connection"] != "ssh" {
 		return failure.Value("fleet client endpoint connection must be ssh")
 	}
+	// The value is passed to ssh as one argv element, after which the runtime
+	// appends its own words, so it is the name of a program and nothing else.
+	// A pattern that allowed spaces is what let a shell-looking string with
+	// subcommands and flags into the fixture in the first place.
 	if !commandPattern.MatchString(command) {
-		return failure.Value("invalid fleet client endpoint remote_command")
-	}
-	if !numbered || timeout <= 0 || timeout > 3600 {
 		return failure.Value(
-			"fleet client endpoint request_timeout must be 1 through 3600 seconds")
+			"fleet client endpoint remote_command must be a bare program name " +
+				"with no spaces, arguments or path")
+	}
+	timeout, err := parseRequestTimeout(endpoint["request_timeout"])
+	if err != nil {
+		return err
 	}
 	d.Coordinator = Coordinator{
 		ID:   identity,
@@ -356,6 +375,34 @@ func (d *Document) parseCoordinator(value any) error {
 		},
 	}
 	return nil
+}
+
+// parseRequestTimeout reads the endpoint timeout as a duration string.
+//
+// It is a string, not a number of seconds, because the runtime that reads this
+// document parses it with time.ParseDuration and refuses a number outright.
+// That refusal happens while the runtime loads its configuration, so a number
+// here does not degrade one request: it stops the worker daemon and both
+// exchange commands on that host from starting at all.
+func parseRequestTimeout(value any) (time.Duration, error) {
+	text, ok := value.(string)
+	if !ok {
+		return 0, failure.Value(
+			"fleet client endpoint request_timeout must be a duration string " +
+				"such as \"30s\", not a number")
+	}
+	timeout, err := time.ParseDuration(text)
+	if err != nil {
+		return 0, failure.Value(
+			"fleet client endpoint request_timeout is not a duration: %s",
+			strconv.Quote(text))
+	}
+	if timeout < MinimumRequestTimeout || timeout > MaximumRequestTimeout {
+		return 0, failure.Value(
+			"fleet client endpoint request_timeout must be %s through %s",
+			MinimumRequestTimeout, MaximumRequestTimeout)
+	}
+	return timeout, nil
 }
 
 func parseMessageLimits(value any) (MessageLimits, error) {
@@ -650,8 +697,10 @@ func (d *Document) parseObserved(component map[string]any) error {
 		return fieldError("fleet observed", "", unknown)
 	}
 	if coordinator, present := entry["coordinator"].(map[string]any); present {
-		if _, unknown := checkKeys(
-			coordinator, nil, []string{"catalog_sha256", "revision"}); unknown != "" {
+		// Only the revision is recordable. A digest of the coordinator's own
+		// catalog is computed over data this side does not hold, so carrying
+		// one here would be a number nobody could check against anything.
+		if _, unknown := checkKeys(coordinator, nil, []string{"revision"}); unknown != "" {
 			return fieldError("fleet observed coordinator", "", unknown)
 		}
 	}

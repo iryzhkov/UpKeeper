@@ -357,6 +357,96 @@ func TestFleetRestoresTheRetainedDocument(t *testing.T) {
 	}
 }
 
+// The coordinator administers itself over its own local socket and refuses to
+// start while a remote client endpoint is configured. Writing the client
+// document there would produce advice the operator cannot follow, because the
+// file it tells them to remove is one UpKeeper puts back.
+func TestTheCoordinatorHostIsGivenNoClientDocument(t *testing.T) {
+	context := fleetTestPrepare(t)
+	component := fleetTestComponent(t)
+	coordinator, _ := component["coordinator"].(map[string]any)
+	coordinator["host"] = fleetTestHost
+	endpoint, _ := coordinator["client_endpoint"].(map[string]any)
+	endpoint["address"] = fleetTestHost
+
+	// A document left over from when this host was only a worker is removed.
+	adapterTestWrite(t, context.Path(fleet.ClientDestination), "{\"stale\": true}\n")
+	actions := []string{}
+	state, err := fleetApply(context, component, nil, &actions)
+	if err != nil || state != "updated" {
+		t.Fatalf("state = %q, error = %v", state, err)
+	}
+	if _, err := os.Stat(context.Path(fleet.ClientDestination)); err == nil {
+		t.Error("the coordinator was given a client document")
+	}
+	if _, err := os.ReadFile(context.Path(fleet.WorkerDestination)); err != nil {
+		t.Errorf("the coordinator lost its worker bootstrap: %v", err)
+	}
+	// The removal is retained, so restoring the run puts the file back.
+	if err := FleetRestorePrior(context.Home, context.RunID); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if body, err := os.ReadFile(context.Path(fleet.ClientDestination)); err != nil ||
+		string(body) != "{\"stale\": true}\n" {
+		t.Errorf("the removed document was not retained: %q (%v)", body, err)
+	}
+
+	// A second run finds nothing to do.
+	context.RunID = "20260914T000004Z-coordinator"
+	if _, err := fleetApply(context, component, nil, &actions); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if _, err := os.Stat(context.Path(fleet.ClientDestination)); err == nil {
+		t.Error("the coordinator was given a client document on the second run")
+	}
+	context.RunID = "20260914T000005Z-coordinator"
+	state, err = fleetApply(context, component, nil, &actions)
+	if err != nil || state != "converged" {
+		t.Fatalf("state = %q, error = %v, want converged", state, err)
+	}
+}
+
+// A stat that follows links approves the target's mode and owner while the
+// runtime, which opens with O_NOFOLLOW, refuses the link. The host would
+// converge clean and fail at first use, so the link is refused here too.
+func TestFleetRefusesASymlinkedSecret(t *testing.T) {
+	for _, reference := range []string{
+		"f02-protocol/" + fleetTestHost,
+		"f03-admin/" + fleetTestHost,
+	} {
+		t.Run(reference, func(t *testing.T) {
+			context := fleetTestPrepare(t)
+			path := context.Path(workerSecretRoot, reference)
+			elsewhere := filepath.Join(context.Home, "real-secret")
+			adapterTestWrite(t, elsewhere, "credential-not-for-records")
+			if err := os.Chmod(elsewhere, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(elsewhere, path); err != nil {
+				t.Fatal(err)
+			}
+			_, err := fleetObserve(context, fleetTestComponent(t))
+			if err == nil {
+				t.Fatal("a symlinked secret was accepted")
+			}
+			if !strings.Contains(err.Error(), "symlink") &&
+				!strings.Contains(err.Error(), "escapes") {
+				t.Errorf("the refusal does not say why: %v", err)
+			}
+			for _, destination := range []string{
+				fleet.WorkerDestination, fleet.ClientDestination,
+			} {
+				if _, err := os.Stat(context.Path(destination)); err == nil {
+					t.Errorf("a refused projection still wrote %s", destination)
+				}
+			}
+		})
+	}
+}
+
 // A run that owns two documents must not be able to leave one of them applied
 // and the other not. The failure is injected on the second document, after the
 // first has already been activated, which is the shape every real cause has:
@@ -485,14 +575,14 @@ func TestFleetRewritesOnlyTheDocumentThatChanged(t *testing.T) {
 	changed := fleetTestComponent(t)
 	coordinator, _ := changed["coordinator"].(map[string]any)
 	endpoint, _ := coordinator["client_endpoint"].(map[string]any)
-	endpoint["request_timeout"] = adapterTestNumber("45")
+	endpoint["request_timeout"] = "45s"
 	context.RunID = "20260914T000003Z-client"
 	state, err := fleetApply(context, changed, nil, &actions)
 	if err != nil || state != "updated" {
 		t.Fatalf("state = %q, error = %v", state, err)
 	}
 	client, err := os.ReadFile(context.Path(fleet.ClientDestination))
-	if err != nil || !strings.Contains(string(client), `"request_timeout": 45`) {
+	if err != nil || !strings.Contains(string(client), `"request_timeout": "45s"`) {
 		t.Fatalf("client document = %q (%v)", client, err)
 	}
 	workerAfter, err := os.ReadFile(context.Path(fleet.WorkerDestination))

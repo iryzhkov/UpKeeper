@@ -5,6 +5,23 @@ import (
 	"strconv"
 )
 
+// CoordinatorPurpose labels the coordinator projection wherever it is reported.
+// It is a review artifact: no binary parses this shape today, and output that
+// implied otherwise would invite somebody to wire a path that does not exist.
+const CoordinatorPurpose = "review artifact; no binary consumes it today"
+
+// FenceAdvice is what an enrollment plan says instead of a digest.
+//
+// An enrollment is fenced against a catalog revision the coordinator computes
+// over data UpKeeper does not hold, so any digest rendered here would be a
+// number the coordinator will always reject. Printing one that merely looks
+// like a fence is worse than printing none: it invites somebody to pass it and
+// then to distrust the refusal. The plan names the command that takes the real
+// one instead.
+const FenceAdvice = "UpKeeper cannot compute the coordinator's catalog revision; " +
+	"take it from the coordinator and pass it to " +
+	"`t3-steward worker enroll --catalog-revision <revision>`"
+
 // ModelSets is what one host is authorized to run and, separately, what was
 // observed on it.
 //
@@ -76,10 +93,6 @@ func (d *Document) Report() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		client, err := d.ClientBytes(name)
-		if err != nil {
-			return nil, err
-		}
 		profile, err := d.Resolved(name)
 		if err != nil {
 			return nil, err
@@ -91,7 +104,16 @@ func (d *Document) Report() (map[string]any, error) {
 			"desired_models":  asAny(sets.Desired),
 			"observed_models": nil,
 			"worker_sha256":   Digest(worker),
-			"client_sha256":   Digest(client),
+			"client_sha256":   nil,
+		}
+		if d.NeedsClientProjection(name) {
+			client, err := d.ClientBytes(name)
+			if err != nil {
+				return nil, err
+			}
+			entry["client_sha256"] = Digest(client)
+		} else {
+			entry["client"] = "not written; the coordinator administers itself locally"
 		}
 		if sets.HasObservation {
 			entry["observed_models"] = asAny(sets.Observed)
@@ -103,10 +125,16 @@ func (d *Document) Report() (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"coordinator_id":          d.Coordinator.ID,
-		"coordinator_host":        d.Coordinator.Host,
-		"hosts":                   hosts,
-		"proposed_catalog_sha256": Digest(catalog),
+		"coordinator_id":   d.Coordinator.ID,
+		"coordinator_host": d.Coordinator.Host,
+		"hosts":            hosts,
+		// The digest is of UpKeeper's own rendered review artifact. It is not
+		// the revision the coordinator fences an enrollment against, and it is
+		// named so that it cannot be mistaken for one.
+		"coordinator_projection": map[string]any{
+			"purpose": CoordinatorPurpose,
+			"sha256":  Digest(catalog),
+		},
 	}, nil
 }
 
@@ -122,35 +150,24 @@ func (d *Document) Report() (map[string]any, error) {
 // against nil every authorization in the proposal is an addition, which is what
 // a first enrollment is.
 func (d *Document) EnrollmentPlan(previous *Document) (map[string]any, error) {
-	catalog, err := d.CoordinatorBytes()
-	if err != nil {
-		return nil, err
-	}
-	var previousDigest any
-	if previous != nil {
-		earlier, err := previous.CoordinatorBytes()
-		if err != nil {
-			return nil, err
-		}
-		previousDigest = Digest(earlier)
-	}
 	changes, err := d.authorizationDiff(previous)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"applied":                 false,
-		"coordinator_id":          d.Coordinator.ID,
-		"coordinator_host":        d.Coordinator.Host,
-		"previous_catalog_sha256": previousDigest,
-		"proposed_catalog_sha256": Digest(catalog),
-		"observed_catalog_sha256": d.observedCoordinator("catalog_sha256"),
-		"expected_revision":       d.observedCoordinator("revision"),
-		"authorization_changes":   asStrings(changes),
-		"note":                    "proposal only; enrollment is an explicit Steward operation",
+		"applied":               false,
+		"coordinator_id":        d.Coordinator.ID,
+		"coordinator_host":      d.Coordinator.Host,
+		"expected_revision":     d.observedCoordinator("revision"),
+		"authorization_changes": asStrings(changes),
+		"fence":                 FenceAdvice,
+		"note":                  "proposal only; enrollment is an explicit Steward operation",
 	}, nil
 }
 
+// observedCoordinator reads one field of what capture recorded about the
+// coordinator. Only the revision is carried: a digest of the coordinator's
+// catalog is not something this side can compute or check.
 func (d *Document) observedCoordinator(key string) any {
 	if d.observed == nil {
 		return nil

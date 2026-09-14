@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
@@ -26,11 +27,13 @@ func init() {
 var fleetAdminReferencePattern = regexp.MustCompile(
 	`^secretref:f03-admin/[a-z][a-z0-9-]{0,62}$`)
 
-// fleetDocument is one file this component owns on the host.
+// fleetDocument is one file this component owns on the host. A document with no
+// payload is one this host must not have: it is removed rather than written.
 type fleetDocument struct {
 	destination string
 	target      string
 	payload     []byte
+	remove      bool
 	before      []byte
 	changed     bool
 }
@@ -58,11 +61,19 @@ func fleetProjection(
 	if err := fleetAgreesWithWorkerConfiguration(c, host, worker); err != nil {
 		return nil, err
 	}
-	client, err := document.ClientBytes(host)
-	if err != nil {
-		return nil, err
+	// The coordinator administers itself over its own local socket, and its
+	// runtime refuses to start while a remote client endpoint is configured.
+	// It gets its worker bootstrap like any other host and no client document,
+	// and one left over from when it was only a worker is removed.
+	var client []byte
+	if document.NeedsClientProjection(host) {
+		rendered, err := document.ClientBytes(host)
+		if err != nil {
+			return nil, err
+		}
+		client = rendered
 	}
-	if err := fleetResolveCredentials(c, document.Hosts[host]); err != nil {
+	if err := fleetResolveCredentials(c, document.Hosts[host], client != nil); err != nil {
 		return nil, err
 	}
 	documents, err := fleetPlanDocuments(c, worker, client)
@@ -87,7 +98,7 @@ func fleetProjection(
 func fleetPlanDocuments(c *Context, worker, client []byte) ([]*fleetDocument, error) {
 	documents := []*fleetDocument{
 		{destination: fleet.WorkerDestination, payload: worker},
-		{destination: fleet.ClientDestination, payload: client},
+		{destination: fleet.ClientDestination, payload: client, remove: client == nil},
 	}
 	sort.Slice(documents, func(left, right int) bool {
 		return documents[left].destination < documents[right].destination
@@ -105,6 +116,10 @@ func fleetPlanDocuments(c *Context, worker, client []byte) ([]*fleetDocument, er
 			before = nil
 		}
 		planned.before = before
+		if planned.remove {
+			planned.changed = before != nil
+			continue
+		}
 		planned.changed = before == nil || !bytes.Equal(before, planned.payload)
 	}
 	return documents, nil
@@ -126,19 +141,30 @@ func fleetResult(
 		state = "updated"
 	}
 	result := map[string]any{
-		"state":                state,
-		"configured":           true,
-		"worker_sha256":        agentenv.Digest(worker),
-		"client_sha256":        agentenv.Digest(client),
-		"catalog_sha256":       agentenv.Digest(catalog),
-		"credential_ref":       document.Hosts[host].CredentialRef,
-		"admin_credential_ref": document.Hosts[host].AdminCredentialRef,
-		"desired_models":       fleetModelMap(sets.Desired),
+		"state":          state,
+		"configured":     true,
+		"worker_sha256":  agentenv.Digest(worker),
+		"client_sha256":  nil,
+		"credential_ref": document.Hosts[host].CredentialRef,
+		"desired_models": fleetModelMap(sets.Desired),
+		// The coordinator projection is a review artifact. Its digest is
+		// reported under a name that cannot be read as the revision an
+		// enrollment is fenced against, because nothing consumes this shape.
+		"coordinator_projection": map[string]any{
+			"purpose": fleet.CoordinatorPurpose,
+			"sha256":  agentenv.Digest(catalog),
+		},
 		// Convergence never enrolls. Applying a catalog is a deliberate
 		// Steward admin operation with its own idempotency key and revision
 		// fence, because an accidental re-enrollment invalidates in-flight
 		// offers on a live fleet.
 		"enrolled": false,
+	}
+	if client != nil {
+		result["client_sha256"] = agentenv.Digest(client)
+		result["admin_credential_ref"] = document.Hosts[host].AdminCredentialRef
+	} else {
+		result["client"] = "not written; the coordinator administers itself locally"
 	}
 	// A host with no observation and a host observed to have nothing are
 	// different answers, so the absent case is absent rather than empty.
@@ -187,33 +213,69 @@ func fleetAgreesWithWorkerConfiguration(c *Context, host string, payload []byte)
 	return nil
 }
 
-// fleetResolveCredentials proves both of this host's credential references
-// resolve to a file the runtime may use. It reads metadata only: neither value
-// nor a hash of one may ever reach a run record.
-func fleetResolveCredentials(c *Context, host fleet.Host) error {
-	if _, err := workerResolveSecretReference(c.Home, host.CredentialRef); err != nil {
+// fleetResolveCredentials proves this host's credential references resolve to
+// files the runtime may use. It reads metadata only: neither value nor a hash
+// of one may ever reach a run record.
+//
+// The admin reference is checked only for a host that is given a client
+// document. The coordinator has no remote client, so requiring it to hold an
+// admin credential for itself would refuse a host that is configured correctly.
+func fleetResolveCredentials(c *Context, host fleet.Host, client bool) error {
+	if _, err := fleetResolveSecretReference(
+		c.Home, host.CredentialRef, workerReferencePattern); err != nil {
 		return err
 	}
-	_, err := fleetResolveAdminReference(c.Home, host.AdminCredentialRef)
+	if !client {
+		return nil
+	}
+	_, err := fleetResolveSecretReference(
+		c.Home, host.AdminCredentialRef, fleetAdminReferencePattern)
 	return err
 }
 
-func fleetResolveAdminReference(home, reference string) (string, error) {
-	if !fleetAdminReferencePattern.MatchString(reference) {
-		return "", errors.New("invalid f03-admin reference")
+// fleetResolveSecretReference resolves a credential reference to the file that
+// holds it and proves that file is safe to hand to the runtime.
+//
+// The check refuses a symlink outright rather than following one. A stat that
+// follows links approves the target's mode and owner while the runtime, which
+// opens with O_NOFOLLOW, refuses the link: the host would converge clean and
+// then fail at first use, which is the worst place to find out. The file is
+// opened to prove the path that was checked is the path that would be used,
+// and its content is never read.
+func fleetResolveSecretReference(
+	home, reference string, pattern *regexp.Regexp,
+) (string, error) {
+	if !pattern.MatchString(reference) {
+		return "", errors.New("invalid secret reference for this credential namespace")
 	}
 	root := filepath.Join(home, workerSecretRoot)
-	path := filepath.Join(root, reference[len("secretref:"):])
+	path := filepath.Join(root, strings.TrimPrefix(reference, "secretref:"))
 	if err := workerPathIsContained(root, path); err != nil {
 		return "", err
 	}
-	info, err := os.Stat(path)
+	linked, err := os.Lstat(path)
 	if err != nil {
 		return "", err
 	}
-	system, described := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || !described ||
-		int(system.Uid) != os.Getuid() || info.Mode().Perm() != 0o600 || info.Size() == 0 {
+	if !linked.Mode().IsRegular() {
+		return "", errors.New(
+			"secret reference must be a regular file, not a symlink or a device")
+	}
+	handle, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", errors.New("secret reference could not be opened without following a link")
+	}
+	defer func() { _ = handle.Close() }()
+	opened, err := handle.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !os.SameFile(linked, opened) {
+		return "", errors.New("secret reference changed while it was being checked")
+	}
+	system, described := opened.Sys().(*syscall.Stat_t)
+	if !opened.Mode().IsRegular() || !described ||
+		int(system.Uid) != os.Getuid() || opened.Mode().Perm() != 0o600 || opened.Size() == 0 {
 		return "", errors.New("secret reference requires a nonempty owner-only 0600 file")
 	}
 	return path, nil
@@ -270,6 +332,12 @@ func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) 
 // one: repairing is the caller's job, because a repair has to put back every
 // document this run touched and not only this one.
 func fleetActivate(planned *fleetDocument) error {
+	if planned.remove {
+		if err := os.Remove(planned.target); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return fsatomic.SyncDirectory(filepath.Dir(planned.target))
+	}
 	staged, err := fleetStage(planned.target, planned.payload)
 	if err != nil {
 		return err

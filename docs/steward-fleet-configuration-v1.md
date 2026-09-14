@@ -13,6 +13,16 @@ to `ComponentOrder` after `worker-configuration`, and carries exactly these keys
 `coordinator`: `coordinator_id`, `host`, and `client_endpoint` with `address`, `connection`
 (`ssh`), `remote_command`, `request_timeout`.
 
+`remote_command` is a bare program name, `t3-steward`. The runtime passes it to `ssh` as a
+single argv element and appends its own subcommand and operation after it, so a value with
+spaces, arguments or a path is not a command it can run. The pattern forbids all three.
+
+`request_timeout` is a duration string such as `"30s"`, not a number of seconds. The runtime
+parses it with `time.ParseDuration` while it loads its configuration, so a number does not
+degrade one request: it stops that host's worker daemon and both exchange commands from
+starting at all. Authored values are bounded to 1s through 1h and normalized, so one intent
+renders one spelling however it was written.
+
 `profiles`: named reusable host profiles, at least `standard` and `build`. Each carries
 `cpu_class`, `executor_slots`, `capabilities`, `provider_instances`, `models` (a map from
 provider instance to its explicit desired model allowlist) and `quota_pools`.
@@ -55,7 +65,7 @@ only.
 | --- | --- | --- |
 | worker | `~/.config/t3-steward/worker-bootstrap.json` | byte-identical to the `worker-configuration` v1 document whenever a host's intent is unchanged |
 | client | `~/.config/t3-steward/coordinator-client.json`, mode 0600 | rendered from `coordinator.client_endpoint` plus the host's `admin_credential_ref`; an explicit `backlog_v2.coordinator_client` block in `config.yaml` overrides it |
-| coordinator | proposed catalog input for the coordinator host | never applied by UpKeeper; it is input to an explicit Steward enrollment operation |
+| coordinator | a review artifact | no binary consumes this shape today; it is the reviewable statement of what the fleet intends to authorize, and UpKeeper never applies it |
 
 Rendering is deterministic: the same intent produces the same bytes on every host and every run.
 Staging writes to a temporary path in the destination directory, validates, then renames
@@ -64,9 +74,16 @@ atomically, retaining the previous document under the run's private state direct
 
 ## Enrollment planning
 
-`upkeeper` may render an enrollment plan showing the authorization-relevant diff, the previous and
-proposed catalog digests and the expected revisions. It may not enroll, and no convergence path
-may enroll as a side effect.
+`upkeeper` may render an enrollment plan showing the authorization-relevant diff. It may not
+enroll, and no convergence path may enroll as a side effect.
+
+The plan carries no catalog digest. An enrollment is fenced against a catalog revision the
+coordinator computes over data UpKeeper does not hold, so any digest rendered here would be a
+number the coordinator will always reject, and printing one that merely looks like a fence
+invites somebody to pass it and then to distrust the refusal. The plan reports the last
+observed coordinator revision when there is one, and otherwise names the command that takes
+the real fence: `t3-steward worker enroll --catalog-revision <revision>`. This replaces the
+original wording, which promised previous and proposed catalog digests.
 
 ## Shared fixtures
 
@@ -77,6 +94,13 @@ may enroll as a side effect.
 The model identifiers in the fixture are illustrative. The fixture's worker projections are
 not: they are the exact bytes the current release publishes for `homelab` and `omarchy-pc`,
 which is what makes the compatibility property testable.
+
+Both repositories must feed these bytes to their own code. The first version of this component
+shipped a client projection with a number where the runtime required a duration string and a
+shell-shaped `remote_command`, and nothing caught it, because "both repositories carry
+identical bytes" was true of the bytes and false of the tests: only the producing side ever
+parsed them. A fixture that is not parsed by its consumer is a fixture that agrees with
+itself.
 
 ## Implementation notes
 
@@ -96,6 +120,14 @@ pinned by hand without UpKeeper and the hand-written value wins.
 Its field set is closed: `schema_version`, `coordinator_id`, `address`, `connection`,
 `remote_command`, `credential_ref`, `request_timeout` and `message_limits`. `credential_ref`
 is the host's `secretref:f03-admin/<host>`, a reference and never a value.
+
+**The coordinator's own host is never given this document.** It administers itself over its
+own local socket, and its runtime refuses to start while a remote client endpoint is
+configured, with advice to remove the block. If UpKeeper owned that file the advice would be
+impossible to follow, so the coordinator host is skipped: it gets its worker bootstrap like
+any other host, it is not required to hold an `f03-admin` credential for itself, and a client
+document left over from when it was only a worker is removed and retained like any other
+change. A coordinator that is also a worker is a supported configuration, not a refusal.
 
 `message_limits` carries `max_bytes` and `max_artifact_bytes`, with defaults `4194304` and
 `1073741824`. It may be authored under `coordinator.client_endpoint`, and is optional there so
@@ -152,6 +184,14 @@ back on an earlier bootstrap converges an earlier release, which is reviewed, co
 the same mechanism every other component uses. The retained record is evidence and a repair
 buffer, not a rollback interface. An earlier draft of this document called rollback
 "re-applying the retained document"; that was never the operator path.
+
+**Secret references are checked the way the runtime opens them.** The reference is resolved
+with `Lstat`, a symlink is refused rather than followed, the file is opened with `O_NOFOLLOW`
+and the opened file is compared against what was checked. A check that followed links would
+approve a symlink whose target has the right owner and mode while the runtime, which does not
+follow links, refuses it: the host would converge clean and fail at first use. The file is
+opened to prove the path checked is the path that would be used, and its content is never
+read.
 
 **An exception must produce a valid profile.** Overriding a key the profile does not have is
 refused, and the merged result is validated as if it had been authored directly, so an

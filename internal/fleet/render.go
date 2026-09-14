@@ -88,6 +88,10 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 	if !present {
 		return nil, failure.Value("fleet host %s is not declared", name)
 	}
+	if !d.NeedsClientProjection(name) {
+		return nil, failure.Value(
+			"fleet host %s is the coordinator and administers itself locally", name)
+	}
 	endpoint := d.Coordinator.Endpoint
 	return map[string]any{
 		"schema_version":  SchemaVersion,
@@ -96,12 +100,25 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 		"connection":      endpoint.Connection,
 		"remote_command":  endpoint.RemoteCommand,
 		"credential_ref":  host.AdminCredentialRef,
-		"request_timeout": endpoint.RequestTimeout,
+		"request_timeout": endpoint.RequestTimeout.String(),
 		"message_limits": map[string]any{
 			"max_bytes":          endpoint.MessageLimits.MaxBytes,
 			"max_artifact_bytes": endpoint.MessageLimits.MaxArtifactBytes,
 		},
 	}, nil
+}
+
+// NeedsClientProjection reports whether a host should be given the coordinator
+// client document.
+//
+// The coordinator must not be: it administers itself over its own local socket,
+// and the runtime there refuses to start while a remote client endpoint is
+// configured. That refusal tells the operator to remove a file UpKeeper owns,
+// which is advice nobody can act on, so the file is never written there in the
+// first place. A coordinator that is also a worker still gets its worker
+// bootstrap; only the client document is withheld.
+func (d *Document) NeedsClientProjection(name string) bool {
+	return name != d.Coordinator.Host
 }
 
 // ClientBytes are the exact bytes of the client projection on disk: the same
@@ -115,14 +132,19 @@ func (d *Document) ClientBytes(name string) ([]byte, error) {
 	return canonjson.MarshalFile(projection)
 }
 
-// CoordinatorProjection renders the catalog input the coordinator is asked to
-// accept.
+// CoordinatorProjection renders the fleet's authorization as one document.
 //
-// It is a proposal and nothing else. UpKeeper never applies it: the coordinator
-// owns the accepted catalog, and giving one document two authors is how a
-// reload that failed validation would leave the fleet's authorization state
-// ambiguous. Credential references stay out of it, because a catalog is
-// authorization and a reference is host-local distribution.
+// It is a review artifact. No binary reads it today: the coordinator's own
+// catalog is built from data UpKeeper does not hold, and nothing in the Steward
+// runtime parses this shape. What it is good for is reading, diffing and
+// reviewing what the fleet intends to authorize before somebody enrolls it by
+// hand, which is exactly what was missing when the catalog was live state that
+// nobody owned.
+//
+// It is deliberately not presented as an input. UpKeeper never applies it, and
+// output that names it says what it is, so that nobody mistakes it for a wired
+// path. Credential references stay out of it, because authorization and
+// host-local distribution are different things.
 func (d *Document) CoordinatorProjection() (map[string]any, error) {
 	workers := map[string]any{}
 	for _, name := range d.HostNames() {

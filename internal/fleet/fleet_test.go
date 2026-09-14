@@ -387,6 +387,51 @@ func TestParseRefusals(t *testing.T) {
 			errorText: "max_artifact_bytes must be 1 through",
 		},
 		{
+			name: "a timeout in seconds is not a duration",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["request_timeout"] =
+					json.Number("30")
+			},
+			errorText: "must be a duration string",
+		},
+		{
+			name: "a timeout that is not a duration at all",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["request_timeout"] = "soon"
+			},
+			errorText: "is not a duration",
+		},
+		{
+			name: "a timeout below the bound",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["request_timeout"] = "500ms"
+			},
+			errorText: "request_timeout must be 1s through 1h0m0s",
+		},
+		{
+			name: "a timeout above the bound",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["request_timeout"] = "2h"
+			},
+			errorText: "request_timeout must be 1s through 1h0m0s",
+		},
+		{
+			name: "a remote command with arguments is not a program name",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["remote_command"] =
+					"t3-steward coordinator serve --stdio"
+			},
+			errorText: "must be a bare program name",
+		},
+		{
+			name: "a remote command with a path is not a program name",
+			change: func(d map[string]any) {
+				object(t, d, "coordinator", "client_endpoint")["remote_command"] =
+					"/home/igor/.local/bin/t3-steward"
+			},
+			errorText: "must be a bare program name",
+		},
+		{
 			name: "the client endpoint takes no invented keys",
 			change: func(d map[string]any) {
 				object(t, d, "coordinator", "client_endpoint")["credential"] = "hunter2"
@@ -491,6 +536,93 @@ func TestAMissingKeyAndAnInventedKeyReadDifferently(t *testing.T) {
 	}
 }
 
+// The timeout is rendered as a duration string because the runtime that reads
+// the document parses it with time.ParseDuration, inside its configuration
+// load. A number there does not degrade one request: it stops that host's
+// worker daemon and both exchange commands from starting at all.
+func TestTheClientTimeoutIsRenderedAsADurationString(t *testing.T) {
+	projection, err := parsed(t).ClientProjection("homelab")
+	if err != nil {
+		t.Fatalf("client projection: %v", err)
+	}
+	if projection["request_timeout"] != "30s" {
+		t.Fatalf("request_timeout is %#v, want the string \"30s\"", projection["request_timeout"])
+	}
+	// An authored duration is normalized, so one intent renders one spelling
+	// however it was written.
+	normalized, err := fleet.Parse(edit(t, func(d map[string]any) {
+		object(t, d, "coordinator", "client_endpoint")["request_timeout"] = "1m"
+	}))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	renormalized, err := normalized.ClientProjection("homelab")
+	if err != nil {
+		t.Fatalf("client projection: %v", err)
+	}
+	if renormalized["request_timeout"] != "1m0s" {
+		t.Errorf("request_timeout is %#v", renormalized["request_timeout"])
+	}
+}
+
+// A coordinator administers itself over its own local socket and refuses to
+// start while a remote client endpoint is configured. It may still be a worker,
+// so it gets a worker bootstrap and no client document.
+func TestTheCoordinatorHostGetsNoClientDocument(t *testing.T) {
+	document, err := fleet.Parse(edit(t, func(d map[string]any) {
+		coordinator := object(t, d, "coordinator")
+		coordinator["host"] = "homelab"
+		object(t, d, "coordinator", "client_endpoint")["address"] = "homelab"
+	}))
+	if err != nil {
+		t.Fatalf("a coordinator that is also a worker was refused: %v", err)
+	}
+	if document.NeedsClientProjection("homelab") {
+		t.Error("the coordinator host would be given a client document")
+	}
+	if !document.NeedsClientProjection("omarchy-pc") {
+		t.Error("a plain worker was denied its client document")
+	}
+	if _, err := document.ClientProjection("homelab"); err == nil ||
+		!strings.Contains(err.Error(), "administers itself locally") {
+		t.Fatalf("rendering the coordinator's client produced %v", err)
+	}
+	// It is still a worker.
+	if _, err := document.WorkerBytes("homelab"); err != nil {
+		t.Errorf("the coordinator lost its worker bootstrap: %v", err)
+	}
+	report, err := document.Report()
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	homelab := object(t, report, "hosts", "homelab")
+	if homelab["client_sha256"] != nil {
+		t.Error("the report claims a client document for the coordinator")
+	}
+	if text, _ := homelab["client"].(string); !strings.Contains(text, "administers itself") {
+		t.Errorf("the report does not say why: %q", text)
+	}
+}
+
+// The coordinator projection is a review artifact. Reporting it as anything
+// else invites somebody to wire a path that does not exist.
+func TestTheCoordinatorProjectionIsReportedAsAReviewArtifact(t *testing.T) {
+	report, err := parsed(t).Report()
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if _, present := report["proposed_catalog_sha256"]; present {
+		t.Error("the report names a proposed catalog digest nothing would accept")
+	}
+	artifact, _ := report["coordinator_projection"].(map[string]any)
+	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "review artifact") {
+		t.Errorf("the coordinator projection is not labelled: %q", purpose)
+	}
+	if digest, _ := artifact["sha256"].(string); len(digest) != 64 {
+		t.Errorf("the review artifact has no digest: %q", digest)
+	}
+}
+
 func TestInventoryDisagreementIsRefused(t *testing.T) {
 	document := parsed(t)
 	if err := document.CheckInventory(nil); err != nil {
@@ -568,15 +700,20 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 	if plan["applied"] != false {
 		t.Fatalf("a plan reported applied=%v", plan["applied"])
 	}
-	if plan["previous_catalog_sha256"] != nil {
-		t.Error("a first enrollment claimed a previous catalog")
+	// A plan carries no digest of its own that could be mistaken for the
+	// revision the coordinator fences an enrollment against: that revision is
+	// computed over data this side does not hold, so any number rendered here
+	// would always be rejected. It names the command that takes the real one.
+	for _, invented := range []string{
+		"previous_catalog_sha256", "proposed_catalog_sha256", "observed_catalog_sha256",
+	} {
+		if _, present := plan[invented]; present {
+			t.Errorf("the plan carries %s, which no coordinator would accept", invented)
+		}
 	}
-	catalog, err := proposed.CoordinatorBytes()
-	if err != nil {
-		t.Fatalf("catalog: %v", err)
-	}
-	if plan["proposed_catalog_sha256"] != fleet.Digest(catalog) {
-		t.Error("the plan does not name the digest it proposes")
+	advice, _ := plan["fence"].(string)
+	if !strings.Contains(advice, "worker enroll --catalog-revision") {
+		t.Errorf("the plan does not name the command that yields the fence: %q", advice)
 	}
 	changes, _ := plan["authorization_changes"].([]any)
 	if len(changes) == 0 {
@@ -584,7 +721,7 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 	}
 
 	// Against a previous document only the authorization-relevant difference
-	// is reported, and the previous digest is named so the change is fenced.
+	// is reported.
 	previous, err := fleet.Parse(edit(t, func(d map[string]any) {
 		object(t, d, "profiles", "standard")["models"].(map[string]any)["claudeAgent"] =
 			[]any{"claude-sonnet-4-5"}
@@ -595,9 +732,6 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 	plan, err = proposed.EnrollmentPlan(previous)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
-	}
-	if plan["previous_catalog_sha256"] == nil {
-		t.Error("a plan against a previous catalog did not name its digest")
 	}
 	changes, _ = plan["authorization_changes"].([]any)
 	if len(changes) != 1 ||
@@ -611,15 +745,12 @@ func TestTheExpectedRevisionComesFromAnObservationOrIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	if plan["expected_revision"] != nil || plan["observed_catalog_sha256"] != nil {
+	if plan["expected_revision"] != nil {
 		t.Error("a plan invented a revision nobody observed")
 	}
 	withObservation, err := fleet.Parse(edit(t, func(d map[string]any) {
 		d["observed"] = map[string]any{
-			"coordinator": map[string]any{
-				"catalog_sha256": strings.Repeat("a", 64),
-				"revision":       json.Number("41"),
-			},
+			"coordinator": map[string]any{"revision": json.Number("41")},
 		}
 	}))
 	if err != nil {
@@ -629,7 +760,17 @@ func TestTheExpectedRevisionComesFromAnObservationOrIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	if plan["expected_revision"] == nil || plan["observed_catalog_sha256"] == nil {
+	if plan["expected_revision"] == nil {
 		t.Error("a plan dropped the observation it is fenced against")
+	}
+	// A digest of the coordinator's own catalog is not something this side can
+	// compute, so it is not part of the observation vocabulary either.
+	_, err = fleet.Parse(edit(t, func(d map[string]any) {
+		d["observed"] = map[string]any{
+			"coordinator": map[string]any{"catalog_sha256": strings.Repeat("a", 64)},
+		}
+	}))
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("an uncheckable catalog digest was accepted: %v", err)
 	}
 }

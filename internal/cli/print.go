@@ -97,15 +97,18 @@ func printFleetPlan(out io.Writer, report map[string]any) {
 		}
 		fmt.Fprintf(out, "  observed %s\n", modelSummary(observed))
 	}
+	artifact, _ := report["coordinator_projection"].(map[string]any)
+	fmt.Fprintf(out, "coordinator projection %s (%s)\n",
+		shorten(text(artifact["sha256"]), 12), text(artifact["purpose"]))
 	plan, _ := report["enrollment_plan"].(map[string]any)
-	fmt.Fprintf(out, "proposed catalog %s (previous %s)\n",
-		shorten(text(plan["proposed_catalog_sha256"]), 12),
-		shortenOrNone(text(plan["previous_catalog_sha256"])))
 	if revision := plan["expected_revision"]; revision != nil {
-		fmt.Fprintf(out, "fenced against coordinator revision %s\n", scalar(revision))
+		fmt.Fprintf(out, "last observed coordinator revision %s\n", scalar(revision))
 	}
 	for _, change := range stringList(plan["authorization_changes"]) {
 		fmt.Fprintf(out, "  %s\n", change)
+	}
+	if advice := text(plan["fence"]); advice != "" {
+		fmt.Fprintf(out, "%s\n", advice)
 	}
 	fmt.Fprintln(out, "not enrolled; applying this is an explicit Steward operation")
 }
@@ -122,13 +125,6 @@ func modelSummary(value any) string {
 			instance+"="+join(stringList(models[instance]), ","))
 	}
 	return join(summaries, " ")
-}
-
-func shortenOrNone(value string) string {
-	if value == "" {
-		return "none"
-	}
-	return shorten(value, 12)
 }
 
 func printPull(out io.Writer, report map[string]any) {
