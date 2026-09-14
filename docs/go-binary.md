@@ -65,19 +65,46 @@ installing it there first; self-convergence does not.
 
 ## What a host still needs
 
-Compiling the CLI does not remove these, and the migration does not claim to:
+Compiling the CLI removes the interpreter from UpKeeper itself. It does not
+make a host empty, and the migration does not claim to. This is the complete
+set of programs the binary executes, established by reading every process it
+starts rather than by recalling the design.
 
-1. **A Git checkout per host.** `pull --self` and `rollback` read release intent
-   out of Git history, and the inventory and desired state are files in that
-   checkout.
-2. **`gh`.** The self-refresh gate asks GitHub whether a candidate commit's CI
-   actually passed before the checkout moves.
-3. **`feed`.** The scheduled controller convergence posts its outcome to the
-   fleet feed.
-4. **The omarchy-setup bootstrap seam**, which lives in another repository and
-   still installs python3, git and uv on a new host.
+On a controller, for `doctor`, `status`, `push`, `pull`, `rollback` and the
+timers:
 
-Git, OpenSSH and systemd are inside the product boundary by design.
+1. **A Git checkout per host**, and `git`. `pull --self` and `rollback` read
+   release intent out of Git history, and the inventory and desired state are
+   files in that checkout.
+2. **`ssh`**, for every host that is not this one.
+3. **`npm`**, for the T3 component of a capture. A `push` fails without it.
+4. **The installed `t3-steward` binary**, which a capture asks for its version
+   and its compatibility range.
+5. **`gh`**, for `self-pull` only: the refresh gate asks GitHub whether a
+   candidate commit's CI actually passed before the checkout moves.
+6. **`feed`**, for `scheduled-pull` only, which posts its outcome to the fleet
+   feed.
+7. **`systemctl`, `loginctl`, `uname`**, for observation and for the timers.
+
+On a target, additionally, for the component adapters:
+
+8. **`bash`**, to run the omarchy-setup installer, which is the seam that still
+   installs python3, git and uv on a new host.
+9. **`go`, `make` and `git`**, to build Huyang from source; **`bin/huyang`**
+   itself, which the probe starts as an MCP client.
+10. **`npm`**, and `mise` when present, for T3.
+11. **Outbound HTTPS to github.com**, for Steward release artifacts.
+12. **A running systemd user session with lingering.**
+
+Git, OpenSSH and systemd are inside the product boundary by design; the rest
+are the components' own requirements, not UpKeeper's.
+
+**`python3` and `ansible` are still observed, and `doctor` still fails a host
+that has neither.** Those two checks are part of `doctor`'s frozen report and
+were ported unchanged, so a host cannot actually drop its Python until they are
+retired. Convergence does not need them: a host without Python reports nulls in
+`status` and converges normally. Retiring the checks is a report-contract
+change and is deliberately not part of this migration.
 
 ## Moving a host onto the binary, and back
 
@@ -116,6 +143,36 @@ Each step is independently reversible and leaves the Python path installed.
 A host that has the binary and its checkout can install its own timer with
 `upkeeper install-self-timer`, which writes the unit text embedded in the
 binary. The controller timer on normandy is `upkeeper install-pull-timer`.
+
+The two routes are alternatives, not layers. The drop-in overrides the
+committed unit and is rolled back by deleting one file; the installer writes
+the base unit with the binary's `ExecStart` already in it, so deleting a
+drop-in on a host that has also run the installer would roll back nothing. The
+installer refuses when a drop-in is present, so that "delete one file" stays
+true wherever it was ever true.
+
+## What the binary does not carry over
+
+Two things are deliberately absent, and a reader comparing the two
+implementations will notice them.
+
+`src/dev_fleet/upkeeper.py` holds a second, richer record store: frozen intent,
+a hash-chained event journal, `expected_revision` fences and orphan recovery.
+No command in the CLI ever reached it — it belongs to the Ansible backend and
+the foundation observer — so it was not ported. The records the fleet actually
+writes are `src/dev_fleet/records.py`, which `internal/runstore` reproduces
+field for field; they are crash-safe by atomic rename and have no fence to
+preserve. If the Ansible backend is ever revived on the Go path, that store has
+to be ported with it.
+
+`self-pull` no longer re-executes itself after a refresh. The Python launcher
+*was* the checkout, so refreshing and re-executing guaranteed that the gated
+code ran; a binary is not the checkout, and re-executing it restores nothing.
+The invariant is checked instead: after a refresh, the binary compares its own
+source commit against the refreshed checkout and refuses to converge when the
+program differs, naming the commit whose artifact the host needs. A binary
+older than the checkout is normal and allowed, because main advances on every
+release capture without the Go program changing.
 
 ## Gates
 
