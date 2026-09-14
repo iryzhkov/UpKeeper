@@ -1903,7 +1903,7 @@
         "make",
         "build"
       ],
-      "commit": "b6ba7746043bef30c2f73718ee2bd4bac8cf67fd",
+      "commit": "7c7218874dd9691093c2707bcea04139750faeb5",
       "kind": "git-checkout",
       "path": ".local/share/huyang",
       "probe": {
@@ -1915,7 +1915,7 @@
       "source": "https://github.com/iryzhkov/huyang.git"
     },
     "omarchy-setup": {
-      "commit": "cc9f7a6b674f7651af9abc6162ccc955d0a74298",
+      "commit": "cfafb95e5f8a21c78a76faf79c980a7906472314",
       "kind": "git-checkout",
       "modules": [
         "28-scripts"
