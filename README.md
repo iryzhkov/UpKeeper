@@ -48,6 +48,20 @@ Exit codes are stable: `0` is healthy/converged, `10` is drift, `20` is partial/
 `30` is a doctor/preflight failure, `40` is a future deployment failure, `50` is a future
 rollback failure, and `60` is lock contention.
 
+## The compiled binary
+
+The same command surface is being migrated to a single Go binary, `cmd/upkeeper`,
+so that a supported host needs no Python, no `uv` and no Ansible. The Python
+package stays as the reference implementation and the rollback path until a host
+has been canaried onto the binary. See [the binary guide](docs/go-binary.md) for
+the package boundaries, the transport change, what a host still needs, and how
+to move a host onto the binary and back.
+
+```bash
+make go-gate                                 # format, vet, tests, race, cross-builds
+make go-build && ./bin/upkeeper version      # the binary names its own source commit
+```
+
 ## Environment
 
 Python 3.11 is the supported floor because `homelab` runs Debian 12. The CLI itself is
@@ -70,6 +84,7 @@ are reported as findings.
 - `desired/components.yml`: schema and immutable discovered component pins.
 - `docs/discovery-2026-09-09.md`: redacted live evidence, decisions, and blockers.
 - `docs/architecture.md`: command boundaries and JSON schema.
+- `docs/go-binary.md`: the compiled binary, its transport, and the cutover.
 - `docs/threat-model.md`: security boundaries.
 - `docs/recovery.md`: Forgejo-independent recovery design.
 
