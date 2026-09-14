@@ -3,13 +3,12 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agent"
 	"github.com/iryzhkov/UpKeeper/internal/buildinfo"
+
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/converge"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
@@ -358,13 +357,16 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		return reportScheduledFailure(streams, "self-schedule", err)
 	}
 	if !parsed.dryRun && !parsed.convergeOnly {
-		if _, err := selfconv.Refresh(root, procx.Run); err != nil {
+		refreshed, err := selfconv.Refresh(root, procx.Run)
+		if err != nil {
 			return reportScheduledFailure(streams, "self-schedule", err)
 		}
-		// Run the gated code, never an old process against a new manifest.
-		// Re-executing this binary's own path picks up a replacement that the
-		// refresh installed, and costs nothing when there was none.
-		if err := reexecConverge(); err != nil {
+		// Run the gated code, never an old program against a new manifest.
+		// The Python launcher was the checkout, so re-executing it after the
+		// refresh satisfied that by construction; a binary is not the checkout,
+		// so the identity is checked instead.
+		if err := selfconv.VerifyProgram(
+			root, buildinfo.SourceCommit(), refreshed, procx.Run); err != nil {
 			return reportScheduledFailure(streams, "self-schedule", err)
 		}
 	}
@@ -434,15 +436,6 @@ func reportScheduledFailure(streams Streams, command string, err error) (int, er
 		"exit_code": exitcode.Preflight,
 	})
 	return exitcode.Preflight, nil
-}
-
-func reexecConverge() error {
-	executable, err := os.Executable()
-	if err != nil {
-		return failure.Value("cannot locate this binary to re-execute it: %v", err)
-	}
-	return syscall.Exec(
-		executable, []string{executable, "self-pull", "--converge"}, os.Environ())
 }
 
 func trimNewline(value string) string {

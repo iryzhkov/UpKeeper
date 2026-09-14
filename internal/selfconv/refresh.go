@@ -106,6 +106,65 @@ func Refresh(root string, runner procx.Runner) (string, error) {
 	return candidate, nil
 }
 
+// ProgramPaths are the paths a change to which changes the program itself,
+// as opposed to the release intent the program applies.
+var ProgramPaths = []string{"go.mod", "cmd", "internal"}
+
+// VerifyProgram refuses to converge when the running binary is not built from
+// the program the refreshed checkout now holds.
+//
+// The Python launcher was the checkout, so refreshing it and re-executing it
+// guaranteed that the gated code ran. A compiled binary breaks that identity:
+// a fast-forward moves the release intent and the source, and leaves the
+// running program exactly as it was. Re-executing the same binary restores
+// nothing, so the invariant has to be checked instead of assumed.
+//
+// A binary older than the checkout is normal and allowed: main advances on
+// every release capture without the Go program changing at all. What is
+// refused is a binary whose program differs from the one that was gated, and
+// the refusal names the commit whose artifact the host needs.
+func VerifyProgram(root, binaryCommit, checkoutCommit string, runner procx.Runner) error {
+	if runner == nil {
+		runner = procx.Run
+	}
+	if binaryCommit == "" || binaryCommit == "unknown" || strings.HasSuffix(binaryCommit, "-dirty") {
+		return failure.Value(
+			"this binary does not name a clean source commit (%s); a scheduled "+
+				"convergence will not run an unidentified program", displayCommit(binaryCommit))
+	}
+	if binaryCommit == checkoutCommit {
+		return nil
+	}
+	run := func(argv ...string) procx.Result {
+		return runner(procx.Command{
+			Argv: append([]string{"git", "-C", root}, argv...), Timeout: 60 * time.Second})
+	}
+	if result := run("cat-file", "-e", binaryCommit+"^{commit}"); result.Err != nil || result.Code != 0 {
+		return failure.Value(
+			"this binary was built from %s, which is not in this checkout; "+
+				"install the released artifact for %s", binaryCommit, checkoutCommit)
+	}
+	diff := run(append([]string{"diff", "--quiet", binaryCommit, checkoutCommit, "--"},
+		ProgramPaths...)...)
+	if diff.Err != nil {
+		return failure.Value("cannot compare this binary's source with the checkout")
+	}
+	if diff.Code != 0 {
+		return failure.Value(
+			"this binary was built from %s and the gated checkout is now %s, whose "+
+				"program differs; install the released artifact for %s before converging",
+			binaryCommit, checkoutCommit, checkoutCommit)
+	}
+	return nil
+}
+
+func displayCommit(value string) string {
+	if value == "" {
+		return "unset"
+	}
+	return value
+}
+
 // gatePassed requires one completed, successful run for exactly this commit.
 // An in-progress run, a different commit or an extra field all fail the gate.
 func gatePassed(output, candidate string) bool {
