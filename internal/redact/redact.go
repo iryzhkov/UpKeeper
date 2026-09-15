@@ -65,6 +65,20 @@ func withKey(value any, key string) any {
 			return redactEach(items)
 		}
 	}
+	// Enrollment plans carry authorization changes as reviewable text, not an
+	// Authorization credential. Preserve only the closed string-list shape and
+	// still scan each entry for secret-shaped content. Unexpected shapes retain
+	// the ordinary fail-closed handling for authorization keys.
+	if key == "authorization_changes" {
+		if items, ok := sequence(value); ok {
+			for _, item := range items {
+				if _, text := item.(string); !text {
+					return Placeholder
+				}
+			}
+			return redactEach(items)
+		}
+	}
 	if key != "" && secretKeyPattern.MatchString(key) {
 		return Placeholder
 	}
