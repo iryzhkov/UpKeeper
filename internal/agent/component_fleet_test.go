@@ -369,6 +369,9 @@ func TestTheCoordinatorHostIsGivenNoClientDocument(t *testing.T) {
 
 	// A document left over from when this host was only a worker is removed.
 	adapterTestWrite(t, context.Path(fleet.ClientDestination), "{\"stale\": true}\n")
+	if err := os.Chmod(context.Path(fleet.ClientDestination), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	actions := []string{}
 	state, err := fleetApply(context, component, nil, &actions)
 	if err != nil || state != "updated" {
@@ -462,6 +465,9 @@ func TestAFailureOnTheSecondDocumentRestoresTheFirst(t *testing.T) {
 	const stale = "{\"stale\": true}\n"
 	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
 		adapterTestWrite(t, context.Path(destination), stale)
+		if err := os.Chmod(context.Path(destination), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// The second document is handed a payload that does not satisfy the

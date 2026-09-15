@@ -109,6 +109,37 @@ file ownership or permissions are refused. Ordinary convergence of releases with
 the component remains unchanged. Both prior-document and prior-absence outcomes are
 exercised as part of qualification, not assumed.
 
+
+### Client ownership across historical rollback
+
+Fleet application records the original client bytes or absence in the private
+`.local/state/dev-fleet/fleet-config/client-ownership.json` receipt. It records
+an expected pending digest before activation and finalizes the active digest
+after verification. Both states support recovery after an interrupted apply.
+The original boundary survives later applications, including endpoint changes.
+A converged first application adopts the existing matching client without
+rewriting it or reporting changed authorization.
+
+Historical rollback to a release without fleet intent restores the original
+client only when its current bytes match a known receipt state. Restoration
+uses the retained bytes, including older formats, rather than interpreting them
+as a new projection. A restored receipt remains as a tombstone so repeated
+rollback and subsequent re-adoption preserve the original boundary. Client and
+coordinator retirement are both preflighted before either changes.
+
+Unknown or malformed receipts, unexplained client changes, unsafe permissions,
+symlinks (including ancestors of missing directories), and oversized files fail
+closed. Client reads are limited to 4 MiB and receipts to 8 MiB. Worker bootstrap
+files remain under their existing worker-configuration authority.
+
+Migration boundary: older `prior.json` records do not prove which current client
+bytes UpKeeper wrote. A client without an ownership receipt is preserved and
+historical retirement requires manual recovery. Explicitly applying matching
+current fleet intent may establish a new boundary at those existing bytes; it
+cannot infer an older absence. Editing the client after retirement also requires
+manual recovery before re-adoption. Receipts carry only configuration references,
+never the credential values they name.
+
 ## Secrets
 
 The component carries references only, in the existing `secretref:` form. Values are resolved on
