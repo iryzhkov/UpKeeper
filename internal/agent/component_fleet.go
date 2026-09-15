@@ -48,7 +48,7 @@ func fleetProjection(
 	c *Context, component map[string]any, host, runID string, dryRun bool,
 ) (map[string]any, error) {
 	if component == nil {
-		return fleetRetireCoordinator(c, runID, dryRun)
+		return fleetRetireOwnedProjections(c, runID, dryRun)
 	}
 	document, err := fleet.Parse(component)
 	if err != nil {
@@ -57,7 +57,7 @@ func fleetProjection(
 	_, declared := document.Hosts[host]
 	coordinator := host == document.Coordinator.Host
 	if !declared && !coordinator {
-		return fleetRetireCoordinator(c, runID, dryRun)
+		return fleetRetireOwnedProjections(c, runID, dryRun)
 	}
 	var worker, catalog []byte
 	if declared {
@@ -100,9 +100,23 @@ func fleetProjection(
 	for _, planned := range documents {
 		changed = changed || planned.changed
 	}
-	if changed && !dryRun {
-		if err := fleetWriteProjection(c, runID, documents); err != nil {
-			return nil, err
+	if !dryRun {
+		if changed {
+			if err := fleetWriteProjection(c, runID, documents); err != nil {
+				return nil, err
+			}
+		} else {
+			// Establish ownership even when the explicit desired client already
+			// matches. Its original bytes stay the rollback boundary.
+			receipt, err := fleetPrepareClientReceipt(c, documents)
+			if err != nil {
+				return nil, err
+			}
+			if receipt != nil {
+				if err := fleetCommitClientReceipt(c, receipt); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if !declared {
@@ -187,7 +201,13 @@ func fleetPlanDocuments(c *Context, worker, client []byte, catalog ...[]byte) ([
 		if err := workerPathIsInHome(c.Home, planned.target); err != nil {
 			return nil, err
 		}
-		before, err := os.ReadFile(planned.target)
+		var before []byte
+		var err error
+		if planned.destination == fleet.ClientDestination {
+			before, err = fleetReadPrivateBounded(c, fleet.ClientDestination, fleetCoordinatorMaxBytes)
+		} else {
+			before, err = os.ReadFile(planned.target)
+		}
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				return nil, err
@@ -368,6 +388,20 @@ func fleetResolveSecretReference(
 // Both documents are retained even when only one changes, so that restoring a
 // run puts the whole of what it found back rather than half of it.
 func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) error {
+	receipt, err := fleetPrepareClientReceipt(c, documents)
+	if err != nil {
+		return err
+	}
+	if err := fleetWriteDocuments(c, runID, documents); err != nil {
+		return err
+	}
+	if receipt != nil {
+		return fleetCommitClientReceipt(c, receipt)
+	}
+	return nil
+}
+
+func fleetWriteDocuments(c *Context, runID string, documents []*fleetDocument) error {
 	if err := fleetRetainPrior(c, runID, documents); err != nil {
 		return err
 	}

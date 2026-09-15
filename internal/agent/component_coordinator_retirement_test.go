@@ -25,14 +25,14 @@ func TestCoordinatorRetirementPreservesSiblingsAndRetainsPrior(t *testing.T) {
 		adapterTestWrite(t, c.Path(sibling), "preserve sibling\n")
 	}
 	c.RunID = "retire-coordinator"
-	before, err := fleetObserve(c, nil)
+	before, err := fleetRetireCoordinator(c, c.RunID, true)
 	if err != nil || before["state"] != "updated" {
 		t.Fatalf("preview: %#v %v", before, err)
 	}
 	if got, _ := os.ReadFile(path); !bytes.Equal(got, prior) {
 		t.Fatal("preview removed active projection")
 	}
-	if _, err := fleetApply(c, nil, before, &actions); err != nil {
+	if _, err := fleetRetireCoordinator(c, c.RunID, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
