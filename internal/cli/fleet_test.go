@@ -27,8 +27,8 @@ func copyInto(t *testing.T, source, destination string) {
 	}
 }
 
-// fleetConfigRoot builds a configuration root out of this repository's own
-// inventory and release, with the shared fleet intent authored into it.
+// fleetConfigRoot uses a frozen paired release without fleet intent, then
+// explicitly adds the shared fleet fixture when the test requests it.
 func fleetConfigRoot(t *testing.T, authored bool) string {
 	t.Helper()
 	root := t.TempDir()
@@ -38,9 +38,9 @@ func fleetConfigRoot(t *testing.T, authored bool) string {
 	copyInto(t, filepath.Join(repository, "desired", "components.yml"),
 		filepath.Join(root, "desired", "components.yml"))
 
-	raw, err := os.ReadFile(filepath.Join(repository, release.File))
+	raw, err := os.ReadFile(filepath.Join(repository, "testdata", "release", "paired-v1.json"))
 	if err != nil {
-		t.Skipf("no published manifest in this checkout: %v", err)
+		t.Fatalf("read frozen manifest fixture: %v", err)
 	}
 	manifest, err := canonjson.DecodeObject(raw)
 	if err != nil {

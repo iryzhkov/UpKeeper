@@ -1,6 +1,9 @@
 package release_test
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +23,11 @@ func acceptAnyEnvironment(t *testing.T) {
 	t.Cleanup(func() { release.EnvironmentValidator = previous })
 }
 
-func publishedManifest(t *testing.T) map[string]any {
+func pairedManifestFixture(t *testing.T) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", release.File))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "release", "paired-v1.json"))
 	if err != nil {
-		t.Skipf("no published manifest in this checkout: %v", err)
+		t.Fatalf("read frozen manifest fixture: %v", err)
 	}
 	document, err := canonjson.DecodeObject(raw)
 	if err != nil {
@@ -33,9 +36,9 @@ func publishedManifest(t *testing.T) map[string]any {
 	return document
 }
 
-func TestThePublishedManifestValidatesAndKeepsItsIdentity(t *testing.T) {
+func TestThePairedFixtureValidatesAndKeepsItsIdentity(t *testing.T) {
 	acceptAnyEnvironment(t)
-	value, err := release.Validate(publishedManifest(t))
+	value, err := release.Validate(pairedManifestFixture(t))
 	if err != nil {
 		t.Fatalf("the repository's own release did not validate: %v", err)
 	}
@@ -54,6 +57,38 @@ func TestThePublishedManifestValidatesAndKeepsItsIdentity(t *testing.T) {
 	}
 	if !strings.HasPrefix(summary[0], "omarchy-setup ") {
 		t.Errorf("summary does not start with the setup checkout: %q", summary[0])
+	}
+}
+
+// The real release remains covered without treating its evolving inventory,
+// component count, or pins as an immutable encoder fixture.
+func TestCurrentPublishedManifestValidatesAndIsCanonical(t *testing.T) {
+	acceptAnyEnvironment(t)
+	raw, err := os.ReadFile(filepath.Join("..", "..", release.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := canonjson.DecodeObject(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := release.Validate(document)
+	if err != nil {
+		t.Fatalf("current published release: %v", err)
+	}
+	encoded, err := canonjson.MarshalFile(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, raw) {
+		t.Fatal("published release is not canonical")
+	}
+	digest, err := value.SHA256()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256(raw)); digest != want {
+		t.Fatalf("published release identity %s does not match file identity %s", digest, want)
 	}
 }
 
@@ -142,7 +177,7 @@ func TestValidateRefusals(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			manifest := publishedManifest(t)
+			manifest := pairedManifestFixture(t)
 			testCase.mutate(manifest)
 			_, err := release.Validate(manifest)
 			if err == nil {
@@ -239,7 +274,7 @@ func TestWorkerConfigurationRefusals(t *testing.T) {
 func TestLoadVerifiesCompanionDigests(t *testing.T) {
 	acceptAnyEnvironment(t)
 	root := t.TempDir()
-	manifest := publishedManifest(t)
+	manifest := pairedManifestFixture(t)
 	// A legacy-shaped release still carries companion files, which is the case
 	// the digest check exists for.
 	component(manifest, "agent-config")["files"] = []any{map[string]any{

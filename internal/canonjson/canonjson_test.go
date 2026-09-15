@@ -85,13 +85,12 @@ func TestEncodingsMatchPython(t *testing.T) {
 	}
 }
 
-// The published release manifest is the durable identity this package exists
-// for. These digests come from the Python implementation reading the very file
-// in this repository, so a drift in the encoder shows up here first.
-func TestPublishedManifestDigestsMatchPython(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "desired", "release.json"))
+// This frozen published manifest preserves independent Python digest vectors.
+// Future captures must not change the input to these encoder compatibility tests.
+func TestPairedFixtureDigestsMatchPython(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "release", "paired-v1.json"))
 	if err != nil {
-		t.Skipf("no published manifest to compare against: %v", err)
+		t.Fatalf("read frozen manifest fixture: %v", err)
 	}
 	document, err := canonjson.Decode(raw)
 	if err != nil {

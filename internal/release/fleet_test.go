@@ -28,7 +28,7 @@ func fleetIntent(t *testing.T) map[string]any {
 
 func withFleetIntent(t *testing.T, change func(intent map[string]any)) map[string]any {
 	t.Helper()
-	manifest := publishedManifest(t)
+	manifest := pairedManifestFixture(t)
 	intent := fleetIntent(t)
 	if change != nil {
 		change(intent)
@@ -53,7 +53,7 @@ func TestTheFleetComponentComesAfterWorkerConfiguration(t *testing.T) {
 
 func TestAReleaseWithAndWithoutTheFleetComponentBothValidate(t *testing.T) {
 	acceptAnyEnvironment(t)
-	without, err := release.Validate(publishedManifest(t))
+	without, err := release.Validate(pairedManifestFixture(t))
 	if err != nil {
 		t.Fatalf("a release without the fleet component was refused: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAReleaseWithAndWithoutTheFleetComponentBothValidate(t *testing.T) {
 // because a rollback to it has to work.
 func TestALegacyReleaseStillValidates(t *testing.T) {
 	acceptAnyEnvironment(t)
-	manifest := publishedManifest(t)
+	manifest := pairedManifestFixture(t)
 	components, _ := manifest["components"].(map[string]any)
 	kept := map[string]any{}
 	for _, name := range release.LegacyComponentOrder {
@@ -148,7 +148,7 @@ func TestFleetComponentRefusals(t *testing.T) {
 // is still refused: optional does not mean anything goes.
 func TestAnUnknownComponentIsStillRefused(t *testing.T) {
 	acceptAnyEnvironment(t)
-	manifest := publishedManifest(t)
+	manifest := pairedManifestFixture(t)
 	components, _ := manifest["components"].(map[string]any)
 	components["invented"] = map[string]any{"kind": "files"}
 	_, err := release.Validate(manifest)
