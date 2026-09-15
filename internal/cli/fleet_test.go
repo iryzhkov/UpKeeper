@@ -113,6 +113,21 @@ func TestFleetPlanReportsAndWritesNothing(t *testing.T) {
 	if plan["applied"] != false {
 		t.Errorf("the plan reports applied=%v", plan["applied"])
 	}
+	changes, ok := plan["authorization_changes"].([]any)
+	if !ok || len(changes) == 0 {
+		t.Fatalf("the rendered enrollment diff is not reviewable: %#v", plan["authorization_changes"])
+	}
+	var opus bool
+	for _, change := range changes {
+		value, ok := change.(string)
+		if !ok {
+			t.Fatalf("a rendered authorization change is not text: %#v", change)
+		}
+		opus = opus || strings.Contains(value, "claude-opus-4-5")
+	}
+	if !opus {
+		t.Fatalf("the rendered diff hides the proposed Opus authorization: %#v", changes)
+	}
 	// A plan carries no digest that could be mistaken for the revision the
 	// coordinator fences an enrollment against; it names the command that
 	// yields the real one instead.
