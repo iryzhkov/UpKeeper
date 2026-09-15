@@ -98,8 +98,16 @@ that a newer controller wrote is the one behaviour that turns a rollback into da
 
 Staging is deterministic: render, diff, stage to a temporary path, validate, then activate
 atomically, with the previous document retained privately under the run's state directory the
-way `worker-configuration` v1 already retains `prior.json`. Rollback re-applies the retained
-document and is exercised as part of qualification, not assumed.
+way `worker-configuration` v1 already retains `prior.json`. Automatic activation-failure
+recovery restores that retained document. Operator `upkeeper rollback --to <commit>`
+re-applies historical release intent. If that release predates the fleet component,
+rollback still dispatches coordinator cleanup when the fleet component is selected
+(or all components are selected). A host no longer named by fleet intent also retires
+its coordinator projection. Cleanup retains the current bytes before removal and
+preserves worker/client sibling files; unknown formats, future versions and unsafe
+file ownership or permissions are refused. Ordinary convergence of releases without
+the component remains unchanged. Both prior-document and prior-absence outcomes are
+exercised as part of qualification, not assumed.
 
 ## Secrets
 

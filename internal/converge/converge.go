@@ -88,6 +88,19 @@ func Fleet(
 	if err != nil {
 		return nil, 0, err
 	}
+	// Historical releases may predate coordinator ownership. Still dispatch its
+	// retirement adapter when rollback includes that component; otherwise an
+	// absent manifest entry leaves newer authorization active while reporting success.
+	const fleetComponent = "steward-fleet-configuration"
+	if options.Command == "rollback" && value.Components()[fleetComponent] == nil {
+		included := options.Components == nil
+		for _, name := range options.Components {
+			included = included || name == fleetComponent
+		}
+		if included {
+			selected = append(selected, fleetComponent)
+		}
+	}
 	runID := options.RunID
 	if runID == "" {
 		minted, err := runid.New()
