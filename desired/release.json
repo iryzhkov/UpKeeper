@@ -1,6 +1,6 @@
 {
-  "captured_at": "2026-09-14T15:16:35.887416Z",
-  "captured_from": "normandy",
+  "captured_at": "2026-09-15T07:43:42.081187Z",
+  "captured_from": "omarchy-pc",
   "components": {
     "agent-config": {
       "files": [],
@@ -661,7 +661,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c0246b3269ac3723326e1b05fadf8164fa52a6b2fb1033f5263328e89a4e0b7e",
             "size_bytes": 395,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000000"
           },
           {
@@ -672,7 +672,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "e311929865f4759a1735ec53e4f4490abada358e7b8dcfdd496f49a28e556bdd",
             "size_bytes": 36,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000001"
           },
           {
@@ -683,7 +683,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "cd73745f0cffc761ccdf97a11dd712c86c5f81ea27a2567a679cc1a0beb30b06",
             "size_bytes": 18752,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000002"
           },
           {
@@ -694,7 +694,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f0a7ab37da18a720fa8f7db1aea548ed6e5fbb7e79e640494e16dabe7692eab7",
             "size_bytes": 272,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000003"
           },
           {
@@ -705,7 +705,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "e86f4b56765fc288859a8a1f3e3814c990ba920b326c40c55667b56d44c58c1e",
             "size_bytes": 1902,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000004"
           },
           {
@@ -716,7 +716,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c4d7354b4b063d54601fcdd5097a5b1713d1a1a2e386ac39efa438aa1ffef8ce",
             "size_bytes": 7022,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000005"
           },
           {
@@ -727,7 +727,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "47f4e52c21694def9c7c11cbfbf891ca35eac7a93e395797515be3c8a409ae50",
             "size_bytes": 6589,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000006"
           },
           {
@@ -738,7 +738,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8229ca854e11dc8e6aef2131ee03f31fb1561cf905fab9ccc325180cf3331352",
             "size_bytes": 100,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000007"
           },
           {
@@ -749,7 +749,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1",
             "size_bytes": 2553,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000008"
           },
           {
@@ -760,7 +760,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8e740bf98446dbd4dfdc132ac4346d9a7eedaf93de6a495889171cf7f99f16bd",
             "size_bytes": 2664,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000009"
           },
           {
@@ -771,7 +771,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2",
             "size_bytes": 6446,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000010"
           },
           {
@@ -782,7 +782,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f",
             "size_bytes": 102,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000011"
           },
           {
@@ -793,7 +793,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "77f3cf31bc99b2f49af943222526531fcc9fc41d047626d3640e875e85af3e84",
             "size_bytes": 8529,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000012"
           },
           {
@@ -804,7 +804,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3e430dbe4334a87597488c060cb3dc3786bb00c9182877d6f5ec41f62490e90b",
             "size_bytes": 103,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000013"
           },
           {
@@ -815,7 +815,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503",
             "size_bytes": 1316,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000014"
           },
           {
@@ -826,7 +826,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
             "size_bytes": 2733,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000015"
           },
           {
@@ -837,7 +837,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "17ab16ce783e4d2801ee52fd9acdf550cbf44de65ae76797a93943bbedf22a13",
             "size_bytes": 2290,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000016"
           },
           {
@@ -848,7 +848,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "327a2b50620e2fd70abc6893cd6965e76b20f8d0adb0dc2c8d5eb3845efb643e",
             "size_bytes": 3331,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000017"
           },
           {
@@ -859,7 +859,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b",
             "size_bytes": 101,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000018"
           },
           {
@@ -870,7 +870,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c00eeea0e13e74fe4a9d84ba0a8542205a1b736d65f13134fe1a6647eb14976f",
             "size_bytes": 5472,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000019"
           },
           {
@@ -881,7 +881,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637",
             "size_bytes": 157,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000020"
           },
           {
@@ -892,7 +892,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b",
             "size_bytes": 137,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000021"
           },
           {
@@ -903,7 +903,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe",
             "size_bytes": 247,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000022"
           },
           {
@@ -914,7 +914,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9",
             "size_bytes": 145,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000023"
           },
           {
@@ -925,7 +925,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "10ff989e7498b23b5acb49d5048f11dcd906757d2f79c5cdf8a00001381296f2",
             "size_bytes": 1987,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000024"
           },
           {
@@ -936,7 +936,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b",
             "size_bytes": 113,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000025"
           },
           {
@@ -947,7 +947,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "7c62de979fdc7ac32fb5ddb2146156c917f80ee070d30fadc9d40343c4b6ed25",
             "size_bytes": 894,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000026"
           },
           {
@@ -958,7 +958,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "5c479fd562c691851690e8b18c8501045bef0943c10743d636b2fae26add1d28",
             "size_bytes": 141,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000027"
           },
           {
@@ -969,7 +969,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "6d3fd9e83b8f36e5213854779db49b256a457a7ebb4a503e53fa7dcff696adc3",
             "size_bytes": 433,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000028"
           },
           {
@@ -980,7 +980,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8970a8596ade0c28ab427f41a4ea242d6bdf6186c59ebf55e1238dbecaab79dc",
             "size_bytes": 139,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000029"
           },
           {
@@ -991,7 +991,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "581e8bb5a521e46bbda8ca7e19b15948bed882187108092ebb90c62513b77528",
             "size_bytes": 6641,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000030"
           },
           {
@@ -1002,7 +1002,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "d1ac25511a936ff4250a48dbcefda363837d6bb9321b3cba73df99fa37270a75",
             "size_bytes": 5993,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000031"
           },
           {
@@ -1013,7 +1013,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c8cb20f68ebf0edb4e497bc11ae5fcaa196004e661cd189015b04f4109ced7f1",
             "size_bytes": 166,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000032"
           },
           {
@@ -1024,7 +1024,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c9ae9a8555c7533d2cf24a9aaa235a165da35cf3215b194902363de31e53e82f",
             "size_bytes": 4582,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000033"
           },
           {
@@ -1035,7 +1035,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a7d2b5f8b98251dffa177d8fee927bd697e1e95c23b1eba4955353245b825a38",
             "size_bytes": 7237,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000034"
           },
           {
@@ -1046,7 +1046,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f61c7d249e786a79ef289018901c348271e1798dd0b0bc5607b5c6f4d4a01ab9",
             "size_bytes": 6036,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000035"
           },
           {
@@ -1057,7 +1057,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "714de632d116bb73f65cdb5a882db15b9369a6713b9a47c0fad827848f0bfbe3",
             "size_bytes": 2931,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000036"
           },
           {
@@ -1068,7 +1068,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "723211e878acbc7b6ff09755263f3295cde724ba902ff0064da41eed51d45ad3",
             "size_bytes": 6913,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000037"
           },
           {
@@ -1079,7 +1079,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "5af65e43ab41a350436697b81e27b7f848d36782043b73c322bb2c9fa9cc55dc",
             "size_bytes": 100,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000038"
           },
           {
@@ -1090,7 +1090,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "9d8114f8ef0b31f535a265fc05c364bd8cf2e2895a830040e06c22acb11f54b0",
             "size_bytes": 918,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000039"
           },
           {
@@ -1101,7 +1101,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a1f4f96838f2ed6282eb28abbbf99029cb8fadce552baf53da90a025b8bffddf",
             "size_bytes": 113,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000040"
           },
           {
@@ -1112,7 +1112,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "2bcd89e97777cdb705914424e39c97d5db524c8eb4eafac8120778a07774f0ec",
             "size_bytes": 6841,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000041"
           },
           {
@@ -1123,7 +1123,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "9527de0110541c45712319025155aeab8dc7d77c6ed6e5e83271bab1851ab939",
             "size_bytes": 152,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000042"
           },
           {
@@ -1134,7 +1134,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "edc6d6131fdffc4b7135704f5262124fc43355c95f61b7399dc5a4db643e28ca",
             "size_bytes": 2033,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000043"
           },
           {
@@ -1145,7 +1145,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "afd6852a80185217bd28aa5cbe456bef1e85be25be7bd1fba382d5b8ee428325",
             "size_bytes": 3731,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000044"
           },
           {
@@ -1156,7 +1156,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "ea175f73d193b3f55819c0ed9bbccf6ee0e70ad8f928e3d7607596c53380acd6",
             "size_bytes": 3809,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000045"
           },
           {
@@ -1167,7 +1167,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "7dcda20a2eb4bdc89b95d1143423c0691309921cadae3132e6424f371030506e",
             "size_bytes": 1810,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000046"
           },
           {
@@ -1178,7 +1178,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "4f53c9b40ce2651e3611aa090eaedbd6dbc9b71ef8c5f7e65eac0d8263190d0d",
             "size_bytes": 1045,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000047"
           },
           {
@@ -1186,10 +1186,10 @@
             "active_path": "/home/igor/.claude/skills/t3-backlog/SKILL.md",
             "asset_id": "asset-000048",
             "kind": "skill",
-            "provenance": "github.com/iryzhkov/omarchy-setup",
+            "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a5880b128926dd9a2d55f6eb345bdcadc50aaf8a7ba896a14ae32f34fe04477d",
             "size_bytes": 9644,
-            "source_revision": "01c82ce26dd50de9c83c32232bfe24c1c72a3856",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000048"
           },
           {
@@ -1197,10 +1197,10 @@
             "active_path": "/home/igor/.claude/skills/t3-campaign/SKILL.md",
             "asset_id": "asset-000049",
             "kind": "skill",
-            "provenance": "github.com/iryzhkov/omarchy-setup",
+            "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "09bf84ed09787c1a46b02647fca7a061e8ef555e208aaff5fb58ed81efd5f68d",
             "size_bytes": 17858,
-            "source_revision": "01c82ce26dd50de9c83c32232bfe24c1c72a3856",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000049"
           },
           {
@@ -1208,10 +1208,10 @@
             "active_path": "/home/igor/.claude/skills/t3-wait/SKILL.md",
             "asset_id": "asset-000050",
             "kind": "skill",
-            "provenance": "github.com/iryzhkov/omarchy-setup",
+            "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "90369519f58466a1ac6b6053010431f0d3fc4226bc199d6e80fc73e9b22c7404",
             "size_bytes": 8502,
-            "source_revision": "01c82ce26dd50de9c83c32232bfe24c1c72a3856",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000050"
           },
           {
@@ -1222,7 +1222,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "cb01f66bebfaa25fa1f88e6b7e769cd9fd9f35b1120b8563749820738814c927",
             "size_bytes": 3549,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000051"
           },
           {
@@ -1233,7 +1233,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
             "size_bytes": 87,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000052"
           },
           {
@@ -1244,7 +1244,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
             "size_bytes": 1481,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000053"
           },
           {
@@ -1255,7 +1255,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a",
             "size_bytes": 2214,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000054"
           },
           {
@@ -1266,7 +1266,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "43ad9cf318e5e7d3d1fa360253a37021796dc87a0c2e595ad262661a10f85088",
             "size_bytes": 3043,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000055"
           },
           {
@@ -1277,7 +1277,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "1c5b4d1e3d8e52287ef19cc2742fdbbfae1914ac75d33af3e4c8174f08cc55bb",
             "size_bytes": 135,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000056"
           },
           {
@@ -1288,7 +1288,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "5c9fba69845c2519b9b35b9af42ae5142c21f8ca15ac2123dc2722002c8058ae",
             "size_bytes": 5671,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000057"
           },
           {
@@ -1299,7 +1299,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "21bc6215fffcd7614e9f772bb1760e87cc5fc7dcc707e7d282bc9414267a6090",
             "size_bytes": 146,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000058"
           },
           {
@@ -1310,7 +1310,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "7f5f87fed3033df1b06e083c480f3e847b1fbb0647746b8a4c6a50f9f26ef44f",
             "size_bytes": 7942,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000059"
           },
           {
@@ -1321,7 +1321,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "1fbf9b432130c6380aa65813b55553cfda150309b27c595e183f8e335b8a190d",
             "size_bytes": 4667,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000060"
           },
           {
@@ -1332,7 +1332,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "623a2ed692bdc77d2090e2a3dea3b627dd722ad3bbaca0be83aada75292c8fc4",
             "size_bytes": 6557,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000061"
           },
           {
@@ -1343,7 +1343,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "2e683717720cf456d165d0bb1a68bb600d0b6a8ccb61841c172e50d26f95351c",
             "size_bytes": 135,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000062"
           },
           {
@@ -1354,7 +1354,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "fee6e1d0c50f0e736b4ef8a599060c959afae904c9a97d82c97f049fcc3aa0f1",
             "size_bytes": 11908,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000063"
           },
           {
@@ -1365,7 +1365,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "88bc81a11a6d52ac67aeaa76b8b619e387020d47c5133a4dd4927fd15c4ad073",
             "size_bytes": 144,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000064"
           },
           {
@@ -1376,7 +1376,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "ed7320571cafef3074278f66fc83e3035993823ae56a571b72b88bd93d542ef3",
             "size_bytes": 5525,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000065"
           },
           {
@@ -1387,7 +1387,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "67c57cc550d3559ec1529383baf1c71d79a68a8da06bea291aae9bbf2383eeee",
             "size_bytes": 772,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000066"
           },
           {
@@ -1398,7 +1398,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a004b57f5b0cafdb7be3c21d86b9e5ae5bcdfd8c40fa2e289c309f03ed59bff4",
             "size_bytes": 11326,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000067"
           },
           {
@@ -1409,7 +1409,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "acca6503bed1201c242c12103c7c5360a9c19c5ed2e1b4a87ce57f47f4c7f641",
             "size_bytes": 10949,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000068"
           },
           {
@@ -1417,10 +1417,10 @@
             "active_path": "/home/igor/.config/agents/t3-steward.md",
             "asset_id": "asset-000069",
             "kind": "global-instruction",
-            "provenance": "github.com/iryzhkov/omarchy-setup",
+            "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "6fad6df790a39b62b8df71e07824933bd40de5c75650d8726ef50af464a2c5dc",
             "size_bytes": 35551,
-            "source_revision": "01c82ce26dd50de9c83c32232bfe24c1c72a3856",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000069"
           },
           {
@@ -1431,7 +1431,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "4e46b559746016c4160109bb3ad4f54ce5b48879162d3072c96ba4c35e57afd7",
             "size_bytes": 929,
-            "source_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
+            "source_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000070"
           }
         ],
@@ -1442,7 +1442,7 @@
           "probe",
           "rollback"
         ],
-        "previous_environment_revision": "388f3ebd4c99d32f1a53894b33a17ca37a679abf007b0efd45a494ce70e99441",
+        "previous_environment_revision": "8adb8cce2766ed12a0b0785c1b7e4c21771283cf2179e85a1bf259835ce077cb",
         "prior_assets": [
           {
             "active_path": "/home/igor/.claude.json",
@@ -1735,20 +1735,20 @@
           {
             "active_path": "/home/igor/.claude/skills/t3-backlog/SKILL.md",
             "asset_id": "asset-000048",
-            "sha256": "5b1dfc47e9bc54186e8d2f7b5d61a85546c5a8d6ea792bb2758fb907da4397d3",
-            "size_bytes": 5698
+            "sha256": "a5880b128926dd9a2d55f6eb345bdcadc50aaf8a7ba896a14ae32f34fe04477d",
+            "size_bytes": 9644
           },
           {
             "active_path": "/home/igor/.claude/skills/t3-campaign/SKILL.md",
             "asset_id": "asset-000049",
-            "sha256": "1d42f55849b03a8f09aaf608fbab1ec6a96ddf3c20a5affc7e4629de129d0be6",
-            "size_bytes": 6198
+            "sha256": "09bf84ed09787c1a46b02647fca7a061e8ef555e208aaff5fb58ed81efd5f68d",
+            "size_bytes": 17858
           },
           {
             "active_path": "/home/igor/.claude/skills/t3-wait/SKILL.md",
             "asset_id": "asset-000050",
-            "sha256": "95b023f69033cd86979545d489af0c4ace83420ab2774a2a7fed5426013abf49",
-            "size_bytes": 2870
+            "sha256": "90369519f58466a1ac6b6053010431f0d3fc4226bc199d6e80fc73e9b22c7404",
+            "size_bytes": 8502
           },
           {
             "active_path": "/home/igor/.claude/skills/tdd/SKILL.md",
@@ -1861,8 +1861,8 @@
           {
             "active_path": "/home/igor/.config/agents/t3-steward.md",
             "asset_id": "asset-000069",
-            "sha256": "5e7ef3da6b64d0ea266f0d6985223006cddb36f2a55f4fbfd583f6190939f11f",
-            "size_bytes": 13942
+            "sha256": "6fad6df790a39b62b8df71e07824933bd40de5c75650d8726ef50af464a2c5dc",
+            "size_bytes": 35551
           },
           {
             "active_path": "/home/igor/.config/opencode/opencode.json",
@@ -1891,8 +1891,8 @@
           {
             "path": "README.md",
             "repository": "github.com/iryzhkov/UpKeeper",
-            "repository_revision": "2ccc7ad55abff2d7f58a24d88e8e8ba0b5aae9eb",
-            "sha256": "c2550624cdc6a797e13cc7f6e7e10ff7851812fc848a5475e2606b20a0399a94"
+            "repository_revision": "88e76b327edeaf8c77857a9d25274628fd9ac7fa",
+            "sha256": "4549d5064c85c4f0562fad3b6bcb3d85e1723ecaa38599083f40877db54ae17b"
           }
         ],
         "recovery_sources": [
@@ -1950,6 +1950,165 @@
       "ref": "main",
       "source": "https://github.com/iryzhkov/omarchy-setup.git"
     },
+    "steward-fleet-configuration": {
+      "coordinator": {
+        "client_endpoint": {
+          "address": "normandy-steward-admin",
+          "connection": "ssh",
+          "remote_command": "t3-steward",
+          "request_timeout": "30s"
+        },
+        "coordinator_id": "normandy-coordinator",
+        "host": "normandy"
+      },
+      "hosts": {
+        "homelab": {
+          "admin_credential_ref": "secretref:f03-admin/homelab",
+          "credential_ref": "secretref:f02-protocol/homelab",
+          "profile": "standard",
+          "transport": "ssh",
+          "worker_id": "homelab"
+        },
+        "omarchy-pc": {
+          "admin_credential_ref": "secretref:f03-admin/omarchy-pc",
+          "credential_ref": "secretref:f02-protocol/omarchy-pc",
+          "profile": "build",
+          "transport": "ssh",
+          "worker_id": "omarchy-pc"
+        }
+      },
+      "kind": "steward-fleet-configuration",
+      "profiles": {
+        "build": {
+          "capabilities": [
+            "git",
+            "huyang"
+          ],
+          "cpu_class": "high",
+          "executor_slots": 8,
+          "models": {
+            "claudeAgent": [
+              "claude-haiku-4-5",
+              "claude-opus-5"
+            ],
+            "codex": [
+              "gpt-5.6-luna",
+              "gpt-5.6-sol"
+            ],
+            "opencode": [
+              "opencode/muse-spark-1.3-contributor-free"
+            ]
+          },
+          "provider_instances": [
+            "claudeAgent",
+            "codex",
+            "opencode"
+          ],
+          "quota_pools": [
+            "claude-main",
+            "codex-main",
+            "opencode-free"
+          ]
+        },
+        "standard": {
+          "capabilities": [
+            "git",
+            "huyang"
+          ],
+          "cpu_class": "medium",
+          "executor_slots": 4,
+          "models": {
+            "claudeAgent": [
+              "claude-haiku-4-5",
+              "claude-opus-5"
+            ],
+            "codex": [
+              "gpt-5.6-luna"
+            ],
+            "opencode": []
+          },
+          "provider_instances": [
+            "claudeAgent",
+            "codex",
+            "opencode"
+          ],
+          "quota_pools": [
+            "claude-main",
+            "codex-main"
+          ]
+        }
+      },
+      "projects": {
+        "dogfood-sum": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/.cache/track-s-campaign/dogfood-repo",
+          "setup_profile": "git-status"
+        },
+        "huyang-fleet": {
+          "default_ref": "feature/huyang",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/huyang",
+          "setup_profile": "git-status"
+        },
+        "s4-homelab": {
+          "default_ref": "v0.11.0-rc.3",
+          "eligible_workers": [
+            "homelab"
+          ],
+          "repository": "https://github.com/iryzhkov/t3-steward.git",
+          "setup_profile": "git-status"
+        },
+        "s4-omarchy-pc": {
+          "default_ref": "v0.11.0-rc.3",
+          "eligible_workers": [
+            "omarchy-pc"
+          ],
+          "repository": "https://github.com/iryzhkov/t3-steward.git",
+          "setup_profile": "git-status"
+        },
+        "s5a-managed-omarchy": {
+          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
+          "eligible_workers": [
+            "omarchy-pc"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
+          "setup_profile": "git-status"
+        },
+        "steward-tests-homelab": {
+          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
+          "eligible_workers": [
+            "homelab"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
+          "setup_profile": "git-status"
+        },
+        "steward-tests-omarchy-pc": {
+          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
+          "eligible_workers": [
+            "omarchy-pc"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
+          "setup_profile": "git-status"
+        },
+        "upkeeper-migration": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "git@github.com:iryzhkov/UpKeeper.git",
+          "setup_profile": "git-status"
+        }
+      },
+      "schema_version": 1
+    },
     "t3": {
       "compatibility": {
         "max": "0.0.38",
@@ -2006,165 +2165,6 @@
         }
       },
       "kind": "worker-configuration"
-    },
-    "steward-fleet-configuration": {
-      "kind": "steward-fleet-configuration",
-      "schema_version": 1,
-      "coordinator": {
-        "coordinator_id": "normandy-coordinator",
-        "host": "normandy",
-        "client_endpoint": {
-          "address": "normandy-steward-admin",
-          "connection": "ssh",
-          "remote_command": "t3-steward",
-          "request_timeout": "30s"
-        }
-      },
-      "profiles": {
-        "standard": {
-          "cpu_class": "medium",
-          "executor_slots": 4,
-          "capabilities": [
-            "git",
-            "huyang"
-          ],
-          "provider_instances": [
-            "claudeAgent",
-            "codex",
-            "opencode"
-          ],
-          "models": {
-            "claudeAgent": [
-              "claude-haiku-4-5",
-              "claude-opus-5"
-            ],
-            "codex": [
-              "gpt-5.6-luna"
-            ],
-            "opencode": []
-          },
-          "quota_pools": [
-            "claude-main",
-            "codex-main"
-          ]
-        },
-        "build": {
-          "cpu_class": "high",
-          "executor_slots": 8,
-          "capabilities": [
-            "git",
-            "huyang"
-          ],
-          "provider_instances": [
-            "claudeAgent",
-            "codex",
-            "opencode"
-          ],
-          "models": {
-            "claudeAgent": [
-              "claude-haiku-4-5",
-              "claude-opus-5"
-            ],
-            "codex": [
-              "gpt-5.6-luna",
-              "gpt-5.6-sol"
-            ],
-            "opencode": [
-              "opencode/muse-spark-1.3-contributor-free"
-            ]
-          },
-          "quota_pools": [
-            "claude-main",
-            "codex-main",
-            "opencode-free"
-          ]
-        }
-      },
-      "hosts": {
-        "homelab": {
-          "profile": "standard",
-          "worker_id": "homelab",
-          "transport": "ssh",
-          "credential_ref": "secretref:f02-protocol/homelab",
-          "admin_credential_ref": "secretref:f03-admin/homelab"
-        },
-        "omarchy-pc": {
-          "profile": "build",
-          "worker_id": "omarchy-pc",
-          "transport": "ssh",
-          "credential_ref": "secretref:f02-protocol/omarchy-pc",
-          "admin_credential_ref": "secretref:f03-admin/omarchy-pc"
-        }
-      },
-      "projects": {
-        "s5a-managed-omarchy": {
-          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
-          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "omarchy-pc"
-          ]
-        },
-        "steward-tests-homelab": {
-          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
-          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "homelab"
-          ]
-        },
-        "steward-tests-omarchy-pc": {
-          "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
-          "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "omarchy-pc"
-          ]
-        },
-        "s4-homelab": {
-          "repository": "https://github.com/iryzhkov/t3-steward.git",
-          "default_ref": "v0.11.0-rc.3",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "homelab"
-          ]
-        },
-        "s4-omarchy-pc": {
-          "repository": "https://github.com/iryzhkov/t3-steward.git",
-          "default_ref": "v0.11.0-rc.3",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "omarchy-pc"
-          ]
-        },
-        "upkeeper-migration": {
-          "repository": "git@github.com:iryzhkov/UpKeeper.git",
-          "default_ref": "main",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "homelab",
-            "omarchy-pc"
-          ]
-        },
-        "dogfood-sum": {
-          "repository": "ssh://igor@normandy/home/igor/.cache/track-s-campaign/dogfood-repo",
-          "default_ref": "main",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "homelab",
-            "omarchy-pc"
-          ]
-        },
-        "huyang-fleet": {
-          "repository": "ssh://igor@normandy/home/igor/Work/huyang",
-          "default_ref": "feature/huyang",
-          "setup_profile": "git-status",
-          "eligible_workers": [
-            "homelab",
-            "omarchy-pc"
-          ]
-        }
-      }
     }
   },
   "schema_version": 1
