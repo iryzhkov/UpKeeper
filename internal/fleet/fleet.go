@@ -144,14 +144,18 @@ const (
 var (
 	namePattern       = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-	modelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	gitRefPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
-	// repositoryPattern accepts the canonical remote spellings the fleet uses.
+	// Models may be provider-qualified; every slash segment is nonempty.
+	modelPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*(/[A-Za-z0-9][A-Za-z0-9._:-]*)*$`)
+	gitRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	// repositoryPattern accepts HTTPS, SSH URLs with login users, and SCP-style
+	// SSH remotes. Git repositories need not end in .git; preserve their exact
+	// configured paths. Passwords, query strings, fragments and shell syntax are
+	// excluded. This grammar applies only to the typed repository field.
 	// UpKeeper never fetches this remote; it hands the string to the
 	// coordinator, so the check is that the value cannot be mistaken for an
 	// option or carry anything but a repository path.
 	repositoryPattern = regexp.MustCompile(
-		`^(?:https|ssh)://(?:git@)?[A-Za-z0-9.-]+(?::[0-9]{1,5})?/[A-Za-z0-9][A-Za-z0-9._/-]*\.git$`)
+		`^(?:(?:https://(?:git@)?|ssh://(?:[A-Za-z0-9][A-Za-z0-9._-]*@)?)[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]{1,5})?/[A-Za-z0-9][A-Za-z0-9._/-]*|[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9][A-Za-z0-9._/-]*)$`)
 	// commandPattern is a bare program name: no spaces, no arguments and no
 	// path. The runtime passes it to ssh as a single argv element and appends
 	// its own subcommand and operation after it.
@@ -532,7 +536,7 @@ func parseModels(value any, instances []string, context string) (map[string][]st
 				"fleet profile %s model allowlist must be sorted and unique", context)
 		}
 		for _, model := range values {
-			if !modelPattern.MatchString(model) {
+			if len(model) > 128 || !modelPattern.MatchString(model) {
 				return nil, failure.Value(
 					"fleet profile %s has an invalid model identifier", context)
 			}
