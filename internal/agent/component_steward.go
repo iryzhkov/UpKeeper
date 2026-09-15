@@ -405,7 +405,7 @@ func stewardApply(
 // This is deliberately not the steward's own self-update command or its timer:
 // a release names one version, and the agent proves that version before and
 // after it replaces anything.
-func stewardApplyPinned(
+func stewardApplyPinnedBinary(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
 	binary := c.Path(adapterSpecString(spec, "path"))
