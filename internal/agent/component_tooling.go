@@ -1,0 +1,385 @@
+package agent
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/iryzhkov/UpKeeper/internal/agentenv"
+	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/release"
+	"github.com/iryzhkov/UpKeeper/internal/rpcprobe"
+)
+
+func init() {
+	Register(release.ToolingComponent, Handler{Observe: toolingObserve, Apply: toolingApply})
+}
+
+var toolingProbe = probeTooling
+var toolingModels = rpcprobe.Models
+
+func toolingIdentity(spec map[string]any) string {
+	b, _ := canonjson.Compact(spec)
+	return agentenv.Digest(b)
+}
+
+func toolingObserve(c *Context, spec map[string]any) (map[string]any, error) {
+	t, err := release.DecodeTooling(spec)
+	if err != nil {
+		return nil, err
+	}
+	base := c.Path(".local/share/upkeeper-tools")
+	current := filepath.Join(base, "current")
+	resolved, _ := filepath.EvalSymlinks(current)
+	expected := filepath.Join(base, "releases", toolingIdentity(spec))
+	drift := []string{}
+	if resolved != expected {
+		drift = append(drift, "active tooling bundle differs")
+	}
+	if err := verifyToolFiles(c, expected, t); err != nil {
+		drift = append(drift, err.Error())
+	} else if err := toolingProbe(c, expected, t); err != nil {
+		drift = append(drift, err.Error())
+	}
+	for name, target := range toolingLinks(t, base) {
+		link, err := os.Readlink(c.Path(".local/bin", name))
+		if err != nil || link != target {
+			drift = append(drift, "command binding differs: "+name)
+		}
+	}
+	versions := map[string]any{}
+	for _, tool := range []string{"codex", "claude", "opencode", "node"} {
+		result := c.Run([]string{c.Path(".local/share/mise/shims", tool), "--version"}, 15*time.Second, c.Home)
+		if !result.OK {
+			drift = append(drift, "missing or broken CLI: "+tool)
+			versions[tool] = nil
+		} else {
+			versions[tool] = result.Output
+		}
+	}
+	models, err := toolingModels([]string{c.Path(".local/share/mise/shims/codex"), "app-server", "--stdio"}, c.Env, c.Home)
+	if err != nil {
+		drift = append(drift, "Codex catalog: "+err.Error())
+	}
+	sort.Strings(drift)
+	return map[string]any{"drift": drift, "versions": versions, "codex_models": models, "bundle": resolved, "desired_bundle": expected}, nil
+}
+
+func verifyToolFiles(c *Context, dir string, t *release.Tooling) error {
+	if _, err := os.Stat(filepath.Join(dir, ".complete")); err != nil {
+		return errors.New("tooling bundle not installed")
+	}
+	for _, f := range t.Files {
+		path := filepath.Join(dir, f.Path)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || int(info.Mode().Perm()) != f.Mode || c.SHA256File(path) != f.SHA256 {
+			return fmt.Errorf("tool source differs: %s", f.Path)
+		}
+	}
+	for path, file := range toolingGeneratedFiles(t) {
+		target := filepath.Join(dir, path)
+		info, err := os.Lstat(target)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != file.mode || c.SHA256File(target) != agentenv.Digest(file.data) {
+			return fmt.Errorf("generated tooling file differs: %s", path)
+		}
+	}
+	return nil
+}
+
+type generatedToolFile struct {
+	data []byte
+	mode os.FileMode
+}
+
+func toolingGeneratedFiles(t *release.Tooling) map[string]generatedToolFile {
+	files := map[string]generatedToolFile{
+		"ov-memory/requirements.lock": {[]byte(strings.Join(t.Python, "\n") + "\n"), 0600},
+		".complete":                   {[]byte("staged\n"), 0600},
+	}
+	for name, body := range map[string]string{
+		"ov-memory":      "exec \"$root/venv/bin/python\" \"$root/server.py\" \"$@\"\n",
+		"local-file-llm": "exec \"$HOME/.local/share/mise/shims/node\" \"$root/server.mjs\" \"$@\"\n",
+	} {
+		files[name+"/run"] = generatedToolFile{[]byte("#!/bin/sh\nroot=$(dirname -- \"$(readlink -f -- \"$0\")\")\n" + body), 0755}
+	}
+	return files
+}
+
+func toolingLinks(t *release.Tooling, base string) map[string]string {
+	links := map[string]string{
+		"ov-memory-mcp":      filepath.Join(base, "current/ov-memory/run"),
+		"local-file-llm-mcp": filepath.Join(base, "current/local-file-llm/run"),
+	}
+	for _, f := range t.Files {
+		if strings.HasPrefix(f.Path, "homelab-cli/bin/") && f.Mode == 0755 {
+			links[filepath.Base(f.Path)] = filepath.Join(base, "current", f.Path)
+		}
+	}
+	return links
+}
+
+func toolingApply(c *Context, spec, before map[string]any, actions *[]string) (string, error) {
+	t, err := release.DecodeTooling(spec)
+	if err != nil {
+		return "", err
+	}
+	if c.DryRun {
+		*actions = append(*actions, "would run mise upgrade --yes --no-prune (host version ranges and release-age policy)")
+		if drift, _ := before["drift"].([]string); len(drift) > 0 {
+			*actions = append(*actions, "would stage, probe and activate the tooling bundle")
+			return "updated", nil
+		}
+		return "converged", nil
+	}
+	// A rollback restores frozen source bundles, but cannot undo the explicitly
+	// floating mise policy. Never upgrade tools while rolling a release back.
+	if !c.Payload.AllowDowngrade {
+		if _, err := c.Must([]string{"mise", "upgrade", "--yes", "--no-prune"}, 15*time.Minute, c.Home, "mise upgrade"); err != nil {
+			return "", err
+		}
+		*actions = append(*actions, "ran mise upgrade --yes --no-prune using host version ranges")
+	}
+	for _, tool := range []string{"codex", "claude", "opencode", "node"} {
+		if !c.Run([]string{c.Path(".local/share/mise/shims", tool), "--version"}, 15*time.Second, c.Home).OK {
+			return "", Failf("required mise tool %s is missing or broken; configure it in the host's global mise tools", tool)
+		}
+	}
+	base, err := agentenv.TargetPath(c.Home, ".local/share/upkeeper-tools")
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, "releases", toolingIdentity(spec))
+	if err := stageTooling(c, dir, t); err != nil {
+		return "", err
+	}
+	if err := toolingProbe(c, dir, t); err != nil {
+		return "", err
+	}
+	if err := activateTooling(c, base, dir, t); err != nil {
+		return "", err
+	}
+	*actions = append(*actions, "verified and activated CLI sources, MCP runtimes and dependency environments")
+	after, err := toolingObserve(c, spec)
+	if err != nil {
+		return "", err
+	}
+	if drift, _ := after["drift"].([]string); len(drift) > 0 {
+		return "", Failf("tooling verification: %s", strings.Join(drift, "; "))
+	}
+	if reflect.DeepEqual(before, after) {
+		return "converged", nil
+	}
+	return "updated", nil
+}
+
+func stageTooling(c *Context, dir string, t *release.Tooling) error {
+	if _, err := c.Must([]string{"bash", "-c", "command -v bash curl jq python3 ssh readlink secret-tool >/dev/null"}, 15*time.Second, c.Home, "CLI prerequisites"); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".complete")); err == nil {
+		return verifyToolFiles(c, dir, t)
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		return Failf("incomplete tooling stage preserved at %s; inspect before retrying", dir)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	// Failed staging directories remain inspectable, never become current, and
+	// never cause an existing source checkout or virtualenv to be overwritten.
+	for _, f := range t.Files {
+		data, _ := base64.StdEncoding.DecodeString(f.Content)
+		if err := agentenv.AtomicWrite(filepath.Join(dir, f.Path), data, os.FileMode(f.Mode)); err != nil {
+			return err
+		}
+	}
+	lock := filepath.Join(dir, "ov-memory/requirements.lock")
+	if err := agentenv.AtomicWrite(lock, []byte(strings.Join(t.Python, "\n")+"\n"), 0600); err != nil {
+		return err
+	}
+	venv := filepath.Join(dir, "ov-memory/venv")
+	if _, err := c.Must([]string{"python3", "-m", "venv", venv}, 2*time.Minute, c.Home, "OV memory virtualenv"); err != nil {
+		return err
+	}
+	if _, err := c.Must([]string{filepath.Join(venv, "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:", "-r", lock}, 10*time.Minute, c.Home, "OV memory dependencies"); err != nil {
+		return err
+	}
+	if _, err := c.Must([]string{"npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"}, 5*time.Minute, filepath.Join(dir, "local-file-llm"), "local-file-llm dependencies"); err != nil {
+		return err
+	}
+	// Wrappers find their immutable bundle through readlink, so a running process
+	// never crosses from one release's script to another release's library.
+	for path, file := range toolingGeneratedFiles(t) {
+		if path == ".complete" {
+			continue
+		}
+		if err := agentenv.AtomicWrite(filepath.Join(dir, path), file.data, file.mode); err != nil {
+			return err
+		}
+	}
+	return agentenv.AtomicWrite(filepath.Join(dir, ".complete"), []byte("staged\n"), 0600)
+}
+
+func probeTooling(c *Context, dir string, t *release.Tooling) error {
+	// CLI help never invokes a service action or requires copying credentials.
+	for _, name := range []string{"ha", "toolfeedback", "feed", "pve", "unifi", "t3-backlog"} {
+		if _, err := c.Must([]string{filepath.Join(dir, "homelab-cli/bin", name), "--help"}, 15*time.Second, c.Home, name+" help"); err != nil {
+			return err
+		}
+	}
+	if _, err := c.Must([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "check"}, 30*time.Second, c.Home, "OV dependency check"); err != nil {
+		return err
+	}
+	frozen := c.Run([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "freeze"}, 30*time.Second, c.Home)
+	actual := strings.Split(strings.TrimSpace(frozen.Output), "\n")
+	sort.Strings(actual)
+	if !frozen.OK || !reflect.DeepEqual(actual, t.Python) {
+		return Failf("OV Python installed versions differ from release lock")
+	}
+	for _, name := range []string{"ov-memory", "local-file-llm"} {
+		env, err := agentenv.MCPEnvironment(c.Spec("agent-environment"), c.Home, name, c.Env)
+		if err != nil {
+			return Failf("%s environment could not be rendered", name)
+		}
+		calls := []rpcprobe.Call{{Method: "tools/list", Params: map[string]any{}}}
+		if name == "ov-memory" {
+			calls = append(calls, rpcprobe.Call{Method: "tools/call", Params: map[string]any{"name": "memory_status", "arguments": map[string]any{}}})
+		} else {
+			calls = append(calls, rpcprobe.Call{Method: "tools/call", Params: map[string]any{"name": "local_status", "arguments": map[string]any{}}})
+		}
+		results, err := rpcprobe.Exchange([]string{filepath.Join(dir, name, "run")}, env, c.Home, false, calls, 40*time.Second)
+		if err != nil {
+			return Failf("%s health check: %s", name, err)
+		}
+		tools, ok := results[0]["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			return Failf("%s returned no tools", name)
+		}
+	}
+	// Discovery checks the client/account, never a frozen model allowlist.
+	if _, err := toolingModels([]string{c.Path(".local/share/mise/shims/codex"), "app-server", "--stdio"}, c.Env, c.Home); err != nil {
+		return Failf("Codex model discovery: %s", err)
+	}
+	return nil
+}
+
+type linkSnapshot struct {
+	Path   string `json:"path"`
+	Target string `json:"target,omitempty"`
+	Data   []byte `json:"data,omitempty"`
+	Mode   uint32 `json:"mode,omitempty"`
+	Exists bool   `json:"exists"`
+}
+
+func snapshotLink(path string) (linkSnapshot, error) {
+	s := linkSnapshot{Path: path}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	s.Exists = true
+	s.Mode = uint32(info.Mode())
+	if info.Mode()&os.ModeSymlink != 0 {
+		s.Target, err = os.Readlink(path)
+	} else if info.Mode().IsRegular() {
+		s.Data, err = os.ReadFile(path)
+	} else {
+		err = errors.New("tool binding is not a file or symlink")
+	}
+	return s, err
+}
+func swapLink(path, target string) error {
+	temp := path + ".upkeeper-link"
+	if err := os.Symlink(target, temp); err != nil {
+		return err
+	}
+	defer os.Remove(temp)
+	return os.Rename(temp, path)
+}
+func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
+	bin, err := agentenv.TargetPath(c.Home, ".local/bin")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		return err
+	}
+	links := map[string]string{filepath.Join(base, "current"): dir}
+	for name, target := range toolingLinks(t, base) {
+		links[filepath.Join(bin, name)] = target
+	}
+	keys := make([]string, 0, len(links))
+	for path := range links {
+		keys = append(keys, path)
+	}
+	sort.Strings(keys)
+	prior := []linkSnapshot{}
+	for _, path := range keys {
+		s, err := snapshotLink(path)
+		if err != nil {
+			return err
+		}
+		prior = append(prior, s)
+	}
+	encoded, _ := json.MarshalIndent(prior, "", "  ")
+	backup := c.Path(".local/state/dev-fleet/tooling", c.RunID, "bindings.json")
+	if err := agentenv.AtomicWrite(backup, encoded, 0600); err != nil {
+		return err
+	}
+	changed := []int{}
+	restore := func(cause error) error {
+		for n := len(changed) - 1; n >= 0; n-- {
+			i := changed[n]
+			s := prior[i]
+			target, err := os.Readlink(s.Path)
+			if err != nil || target != links[s.Path] {
+				return Failf("rollback failed: concurrent change to %s; prior bindings at %s", s.Path, backup)
+			}
+			if s.Target != "" {
+				err = swapLink(s.Path, s.Target)
+			} else if s.Exists {
+				err = agentenv.AtomicWrite(s.Path, s.Data, os.FileMode(s.Mode).Perm())
+			} else {
+				err = os.Remove(s.Path)
+			}
+			if err != nil {
+				return Failf("rollback failed restoring tooling bindings: %s", err)
+			}
+		}
+		return RolledBackf("tooling activation failed; restored prior bindings: %s", cause)
+	}
+	for i, s := range prior {
+		now, err := snapshotLink(s.Path)
+		if err != nil || !reflect.DeepEqual(now, s) {
+			return restore(errors.New("concurrent tooling binding change"))
+		}
+		if s.Target == links[s.Path] {
+			continue
+		}
+		if err := swapLink(s.Path, links[s.Path]); err != nil {
+			return restore(err)
+		}
+		changed = append(changed, i)
+	}
+	// Verify the active bindings before discarding the compensation scope.
+	if err := toolingProbe(c, filepath.Join(base, "current"), t); err != nil {
+		return restore(err)
+	}
+	for path, target := range links {
+		actual, err := os.Readlink(path)
+		if err != nil || actual != target {
+			return restore(errors.New("tool binding did not verify"))
+		}
+	}
+	return nil
+}

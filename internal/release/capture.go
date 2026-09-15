@@ -29,6 +29,7 @@ type InstructionRef struct {
 // injected for the same reason the validator is: the manifest model does not
 // depend on the projection that applies it.
 var EnvironmentCapturer func(home string, provenance InstructionRef) (map[string]any, error)
+var EnvironmentToolingNormalizer func(map[string]any) (map[string]any, error)
 
 var stewardRangePattern = regexp.MustCompile(
 	`tested with T3 ([0-9]+\.[0-9]+\.[0-9]+)\.\.([0-9]+\.[0-9]+\.[0-9]+)`)
@@ -81,6 +82,9 @@ func Capture(
 		if len(unknown) > 0 {
 			return Release{}, failure.Capture(
 				"unknown component(s): %s", strings.Join(sortedUnique(unknown), ", "))
+		}
+		if selected[ToolingComponent] && !selected["agent-environment"] {
+			return Release{}, failure.Capture("capture agent-tooling and agent-environment together so runtime bindings match")
 		}
 		if err := RefuseAuthoredCapture(only); err != nil {
 			return Release{}, err
@@ -163,6 +167,23 @@ func Capture(
 		return Release{}, failure.Capture("agent-environment: %s", err.Error())
 	}
 	components["agent-environment"] = environment
+	// Tooling is opt-in for historical releases; selecting it bootstraps its
+	// first reviewed capture. Once published it remains part of full captures.
+	if components[ToolingComponent] != nil || selected[ToolingComponent] {
+		tooling, err := CaptureTooling(home, runner)
+		if err != nil {
+			return Release{}, failure.Capture("agent-tooling: %s", err)
+		}
+		components[ToolingComponent] = tooling
+		if EnvironmentToolingNormalizer == nil {
+			return Release{}, failure.Capture("tooling registration normalizer unavailable")
+		}
+		environment, err = EnvironmentToolingNormalizer(environment)
+		if err != nil {
+			return Release{}, failure.Capture("tooling registration: %s", err)
+		}
+		components["agent-environment"] = environment
+	}
 
 	agentConfig, _ := components["agent-config"].(map[string]any)
 	agentConfig["files"] = []any{}

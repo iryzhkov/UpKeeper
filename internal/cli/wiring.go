@@ -11,6 +11,7 @@ import (
 // and keeps the projection free of the manifest's component taxonomy.
 func init() {
 	release.EnvironmentValidator = agentenv.ValidateEnvironment
+	release.EnvironmentToolingNormalizer = agentenv.WithTooling
 	release.EnvironmentCapturer = func(
 		home string, provenance release.InstructionRef,
 	) (map[string]any, error) {

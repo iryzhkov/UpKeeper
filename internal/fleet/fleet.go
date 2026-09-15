@@ -536,6 +536,9 @@ func parseModels(value any, instances []string, context string) (map[string][]st
 				"fleet profile %s model allowlist must be sorted and unique", context)
 		}
 		for _, model := range values {
+			if model == "*" && len(values) == 1 {
+				continue
+			}
 			if len(model) > 128 || !modelPattern.MatchString(model) {
 				return nil, failure.Value(
 					"fleet profile %s has an invalid model identifier", context)

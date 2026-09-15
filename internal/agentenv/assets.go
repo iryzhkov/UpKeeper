@@ -62,12 +62,12 @@ var settingsKeys = []string{"model", "theme", "tui", "syntaxHighlightingDisabled
 // target: whole-file, or merged into a structured document the harness shares.
 var projectionModes = map[string]bool{
 	"file": true, "claude-block": true, "claude-settings": true,
-	"claude-mcp": true, "codex-mcp": true, "opencode": true,
+	"claude-mcp": true, "codex-mcp": true, "codex-settings": true, "opencode": true,
 }
 
 // structuredModes are the projection modes whose payload is a JSON document.
 var structuredModes = map[string]bool{
-	"claude-settings": true, "claude-mcp": true, "codex-mcp": true, "opencode": true,
+	"claude-settings": true, "claude-mcp": true, "codex-mcp": true, "codex-settings": true, "opencode": true,
 }
 
 // modeByPath pins each shared document to its one allowed projection, so that a
@@ -410,10 +410,18 @@ func (f File) matchesAsset(asset ManagedAsset, sourceHome string) error {
 		if err := CheckPublic(decoded, ""); err != nil {
 			return err
 		}
+		if f.Mode == "codex-settings" {
+			if err := validateCodexSettings(objectOf(decoded)); err != nil {
+				return err
+			}
+		}
 	}
 	expected, pinned := modeByPath[f.Path]
 	if !pinned {
 		expected = "file"
+	}
+	if f.Path == ".codex/config.toml" && f.Mode == "codex-settings" {
+		expected = f.Mode
 	}
 	if f.Mode != expected {
 		return errors.New("owned projection does not match its allowed destination")
@@ -563,8 +571,23 @@ func agentInstructionFiles(home string) []string {
 // captureSkillFiles resolves published skill directory symlinks but freezes
 // bytes, never links.
 func captureSkillFiles(home string) ([]string, error) {
-	root := filepath.Join(home, ".claude/skills")
+	var files []string
+	for _, relative := range []string{".claude/skills", ".codex/skills", ".agents/skills"} {
+		found, err := captureSkillRoot(home, relative)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, found...)
+	}
+	return files, nil
+}
+
+func captureSkillRoot(home, relativeRoot string) ([]string, error) {
+	root := filepath.Join(home, relativeRoot)
 	entries, err := os.ReadDir(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -574,6 +597,10 @@ func captureSkillFiles(home string) ([]string, error) {
 	}
 	var relative []string
 	for _, entry := range entries {
+		// Codex installs its own system skills with the client.
+		if entry.Name() == ".system" {
+			continue
+		}
 		directory := filepath.Join(root, entry.Name())
 		info, err := os.Stat(directory)
 		if err != nil || !info.IsDir() {
@@ -713,7 +740,7 @@ func captureRegistrations(home string) ([]registration, error) {
 		value any
 	}{
 		{".claude.json", "claude-mcp", claudeServers},
-		{".codex/config.toml", "codex-mcp", genericValue(codexServers)},
+		{".codex/config.toml", "codex-settings", map[string]any{"mcp_servers": genericValue(codexServers), "settings": captureCodexSettings(codexRoot)}},
 		{".config/opencode/opencode.json", "opencode", map[string]any{
 			"mcp": opencodeServers, "instructions": instructions,
 		}},
@@ -1154,6 +1181,17 @@ func render(file File, old []byte, sourceHome, home string) ([]byte, error) {
 	}
 	if file.Mode == "codex-mcp" {
 		return renderCodex(text, old, owned)
+	}
+	if file.Mode == "codex-settings" {
+		if err := validateCodexSettings(owned); err != nil {
+			return nil, err
+		}
+		settings := objectOf(owned["settings"])
+		projected, err := ProjectRootKeys(text, settings)
+		if err != nil {
+			return nil, err
+		}
+		return renderCodex(projected, []byte(projected), objectOf(owned["mcp_servers"]))
 	}
 	return renderJSON(file.Mode, text, old, owned)
 }

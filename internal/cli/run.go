@@ -122,6 +122,9 @@ func runProbe(streams Streams) (int, error) {
 }
 
 func runObservation(parsed *arguments, streams Streams) (int, error) {
+	if parsed.command == "status" {
+		return runReleaseStatus(parsed, streams)
+	}
 	root, err := ConfigRoot()
 	if err != nil {
 		return exitcode.Preflight, err

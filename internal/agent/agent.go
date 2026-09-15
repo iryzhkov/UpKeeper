@@ -41,6 +41,7 @@ type Payload struct {
 	RetireUpdater  bool              `json:"retire_updater"`
 	AllowDowngrade bool              `json:"allow_downgrade"`
 	DryRun         bool              `json:"dry_run"`
+	ObserveOnly    bool              `json:"observe_only"`
 	Host           HostRef           `json:"host"`
 	Components     []string          `json:"components"`
 	Manifest       map[string]any    `json:"manifest"`
@@ -322,6 +323,9 @@ func agentEnvironment(home string) []string {
 // Execute converges this machine and returns the result document the
 // controller parses.
 func Execute(context *Context) map[string]any {
+	if context.Payload.ObserveOnly {
+		return ObserveRelease(context)
+	}
 	result := map[string]any{
 		"host":       context.Host.Name,
 		"run_id":     context.RunID,

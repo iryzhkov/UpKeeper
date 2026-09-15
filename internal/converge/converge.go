@@ -39,10 +39,11 @@ type HostRunner func(
 
 // Options are the choices a convergence offers.
 type Options struct {
-	Hosts      []string
-	Components []string
-	DryRun     bool
-	Timeout    time.Duration
+	Hosts       []string
+	Components  []string
+	DryRun      bool
+	ObserveOnly bool
+	Timeout     time.Duration
 	// ManifestCommit is the Git commit the release intent was read from, or nil
 	// when the manifest was read from the working tree instead of history.
 	ManifestCommit  *string
@@ -77,6 +78,9 @@ func Controller(config *inventory.Config) string {
 func Fleet(
 	config *inventory.Config, value release.Release, options Options,
 ) (map[string]any, int, error) {
+	if options.ObserveOnly {
+		options.DryRun = true
+	}
 	if options.SelfOnly {
 		identity := transport.LocalMachineIDSHA256()
 		if len(options.Hosts) != 1 ||
@@ -173,7 +177,7 @@ func Fleet(
 		spec := config.Hosts[name]
 		// A self-managed host converges through its own timer. Reaching into
 		// it from a controller would race with that timer's lock.
-		if spec.SelfManaged && !options.SelfOnly {
+		if spec.SelfManaged && !options.SelfOnly && !options.ObserveOnly {
 			results = append(results, map[string]any{
 				"host": name, "reachable": false, "result": "skipped",
 				"self_managed": true, "error": "converges through its local timer",
@@ -188,7 +192,8 @@ func Fleet(
 		}
 		payload := agent.Payload{
 			RunID:          runID,
-			RetireUpdater:  true,
+			RetireUpdater:  !options.ObserveOnly,
+			ObserveOnly:    options.ObserveOnly,
 			AllowDowngrade: options.Command == "rollback",
 			DryRun:         options.DryRun,
 			Host: agent.HostRef{

@@ -89,7 +89,7 @@ func TestUsageErrors(t *testing.T) {
 			"an unknown component",
 			[]string{"pull", "--all", "--components", "nonsense"},
 			`argument --components: invalid choice: "nonsense" (choose from ` +
-				`"omarchy-setup", "agent-config", "agent-environment", "huyang", ` +
+				`"omarchy-setup", "agent-config", "agent-tooling", "agent-environment", "huyang", ` +
 				`"t3-steward", "t3", "worker-configuration", "steward-fleet-configuration")`,
 		},
 		{

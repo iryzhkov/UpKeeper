@@ -114,9 +114,9 @@ func TestCaptureFreezesTheOwnedFiles(t *testing.T) {
 		{Path: ".codex/AGENTS.md", Mode: "file", Kind: "global-instruction",
 			Permissions: 0o644, SizeBytes: 28,
 			SHA256: "da633ae16a567a8f4a33f531ce4ea3a324a9b545463c90f4262b08ea3a9dfbfb"},
-		{Path: ".codex/config.toml", Mode: "codex-mcp", Kind: "mcp-client",
-			Permissions: 0o600, SizeBytes: 46,
-			SHA256: "a0fd61b7835fa58cccd5b3ed57489a587a0a344686c9266897f1272fa3b5fa66"},
+		{Path: ".codex/config.toml", Mode: "codex-settings", Kind: "mcp-client",
+			Permissions: 0o600, SizeBytes: 306,
+			SHA256: "4cbfa68359decf54c2ae517e636e6f0e70ef726f6beac7e6eb2663578f1a7e9d"},
 		{Path: ".config/agents/huyang.md", Mode: "file", Kind: "global-instruction",
 			Permissions: 0o644, SizeBytes: 9,
 			SHA256: "4c2a6a01c3cd31ce3527b5fbfe3b006cd0fd2a4bdd760924c833a81dd683dadd"},
@@ -339,7 +339,7 @@ func TestTargetLocalCredentialsSurviveOwnedRegistrationUpdates(t *testing.T) {
 func TestUnrelatedTomlTablesAndCommentsSurvive(t *testing.T) {
 	home := fakeHome(t)
 	component := capture(t, home)
-	preserved := "# the operator's own comment\nmodel = \"gpt-5\"\n\n" +
+	preserved := "# the operator's own comment\nmodel_provider = \"local-provider\"\n\n" +
 		"[projects.\"/srv/work\"]\ntrust_level = \"trusted\"   # trailing comment\n\n" +
 		"[mcp_servers.other]\ncommand = \"other\"\nargs = [\"--flag\", 3]\n"
 	writeHomeFile(t, home, ".codex/config.toml", preserved, 0o644)

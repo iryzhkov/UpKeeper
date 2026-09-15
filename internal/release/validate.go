@@ -94,6 +94,9 @@ func validateComponent(name string, component, components map[string]any) error 
 		return err
 	}
 	switch name {
+	case ToolingComponent:
+		_, err := DecodeTooling(component)
+		return err
 	case "agent-environment":
 		if EnvironmentValidator == nil {
 			return failure.Validation(
