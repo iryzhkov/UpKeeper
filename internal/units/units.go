@@ -61,7 +61,7 @@ Description=Converge reachable fleet hosts through UpKeeper
 [Service]
 Type=oneshot
 WorkingDirectory=%h/` + FleetCheckout + `
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/` + BinaryPath + ` scheduled-pull
 TimeoutStartSec=3h
 UMask=0077
