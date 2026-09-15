@@ -6,9 +6,8 @@ import (
 )
 
 // CoordinatorPurpose labels the coordinator projection wherever it is reported.
-// It is a review artifact: no binary parses this shape today, and output that
-// implied otherwise would invite somebody to wire a path that does not exist.
-const CoordinatorPurpose = "review artifact; no binary consumes it today"
+// Steward consumes it before building its catalog; enrollment remains explicit.
+const CoordinatorPurpose = "authored coordinator configuration; enrollment remains explicit"
 
 // FenceAdvice is what an enrollment plan says instead of a digest.
 //
@@ -128,7 +127,7 @@ func (d *Document) Report() (map[string]any, error) {
 		"coordinator_id":   d.Coordinator.ID,
 		"coordinator_host": d.Coordinator.Host,
 		"hosts":            hosts,
-		// The digest is of UpKeeper's own rendered review artifact. It is not
+		// The digest is of UpKeeper's rendered coordinator configuration. It is not
 		// the revision the coordinator fences an enrollment against, and it is
 		// named so that it cannot be mistaken for one.
 		"coordinator_projection": map[string]any{

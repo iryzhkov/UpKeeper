@@ -604,9 +604,8 @@ func TestTheCoordinatorHostGetsNoClientDocument(t *testing.T) {
 	}
 }
 
-// The coordinator projection is a review artifact. Reporting it as anything
-// else invites somebody to wire a path that does not exist.
-func TestTheCoordinatorProjectionIsReportedAsAReviewArtifact(t *testing.T) {
+// Authored input is distinct from the coordinator's enrollment revision.
+func TestTheCoordinatorProjectionIsReportedAsAuthoredConfiguration(t *testing.T) {
 	report, err := parsed(t).Report()
 	if err != nil {
 		t.Fatalf("report: %v", err)
@@ -615,7 +614,7 @@ func TestTheCoordinatorProjectionIsReportedAsAReviewArtifact(t *testing.T) {
 		t.Error("the report names a proposed catalog digest nothing would accept")
 	}
 	artifact, _ := report["coordinator_projection"].(map[string]any)
-	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "review artifact") {
+	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "authored coordinator configuration") {
 		t.Errorf("the coordinator projection is not labelled: %q", purpose)
 	}
 	if digest, _ := artifact["sha256"].(string); len(digest) != 64 {

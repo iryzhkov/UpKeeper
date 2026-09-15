@@ -118,7 +118,7 @@ func TestFleetProjectionStagesActivatesAndRetainsThePrevious(t *testing.T) {
 		}
 	}
 	record, err := os.ReadFile(fleetTestPriorPath(context, context.RunID))
-	if err != nil || strings.Count(string(record), `"existed": false`) != 2 {
+	if err != nil || strings.Count(string(record), `"existed": false`) != 3 {
 		t.Fatalf("retained record = %q (%v)", record, err)
 	}
 	for _, destination := range []string{fleet.WorkerDestination, fleet.ClientDestination} {
@@ -148,10 +148,8 @@ func TestFleetProjectionStagesActivatesAndRetainsThePrevious(t *testing.T) {
 	}
 }
 
-// Convergence distributes a bootstrap and nothing else. The proposed catalog is
-// reported by digest and never written, because an accidental enrollment
-// invalidates in-flight offers on a live fleet.
-func TestFleetConvergenceNeverEnrollsOrWritesACatalog(t *testing.T) {
+// A worker host receives no coordinator catalog, and convergence never enrolls.
+func TestWorkerFleetConvergenceNeverEnrollsOrWritesACatalog(t *testing.T) {
 	context := fleetTestPrepare(t)
 	actions := []string{}
 	result, err := fleetProjection(

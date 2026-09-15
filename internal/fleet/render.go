@@ -134,17 +134,10 @@ func (d *Document) ClientBytes(name string) ([]byte, error) {
 
 // CoordinatorProjection renders the fleet's authorization as one document.
 //
-// It is a review artifact. No binary reads it today: the coordinator's own
-// catalog is built from data UpKeeper does not hold, and nothing in the Steward
-// runtime parses this shape. What it is good for is reading, diffing and
-// reviewing what the fleet intends to authorize before somebody enrolls it by
-// hand, which is exactly what was missing when the catalog was live state that
-// nobody owned.
-//
-// It is deliberately not presented as an input. UpKeeper never applies it, and
-// output that names it says what it is, so that nobody mistakes it for a wired
-// path. Credential references stay out of it, because authorization and
-// host-local distribution are different things.
+// UpKeeper applies this document only on the coordinator host. Steward reads it
+// before constructing its catalog. Membership and the rendered fields are
+// authored authority; transport, secret references and explicit quota bindings
+// come from the operator's base configuration. Enrollment is never automatic.
 func (d *Document) CoordinatorProjection() (map[string]any, error) {
 	workers := map[string]any{}
 	for _, name := range d.HostNames() {
@@ -153,8 +146,8 @@ func (d *Document) CoordinatorProjection() (map[string]any, error) {
 			return nil, err
 		}
 		models := map[string]any{}
-		for instance, allowed := range profile.Models {
-			models[instance] = sortedUnique(allowed)
+		for _, instance := range profile.ProviderInstances {
+			models[instance] = sortedUnique(profile.Models[instance])
 		}
 		workers[name] = map[string]any{
 			"worker_id":          name,
@@ -185,8 +178,8 @@ func (d *Document) CoordinatorProjection() (map[string]any, error) {
 	}, nil
 }
 
-// CoordinatorBytes are the canonical bytes of the proposed catalog input. Their
-// digest is what an enrollment plan proposes.
+// CoordinatorBytes are the canonical runtime input bytes. Their digest identifies
+// the document, not the coordinator's independently computed enrollment revision.
 func (d *Document) CoordinatorBytes() ([]byte, error) {
 	projection, err := d.CoordinatorProjection()
 	if err != nil {

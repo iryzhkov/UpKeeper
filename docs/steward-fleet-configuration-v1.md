@@ -65,9 +65,19 @@ only.
 | --- | --- | --- |
 | worker | `~/.config/t3-steward/worker-bootstrap.json` | byte-identical to the `worker-configuration` v1 document whenever a host's intent is unchanged |
 | client | `~/.config/t3-steward/coordinator-client.json`, mode 0600 | rendered from `coordinator.client_endpoint` plus the host's `admin_credential_ref`; an explicit `backlog_v2.coordinator_client` block in `config.yaml` overrides it |
-| coordinator | a review artifact | no binary consumes this shape today; it is the reviewable statement of what the fleet intends to authorize, and UpKeeper never applies it |
+| coordinator | `~/.config/t3-steward/coordinator-fleet.json`, mode 0600 | Steward consumes the authored catalog fields before validation; only the coordinator host receives it, including a coordinator that is not a worker |
 
 Rendering is deterministic: the same intent produces the same bytes on every host and every run.
+
+The coordinator projection owns the full worker and project membership and the fields it renders.
+Removing an entry revokes that authorization; release review must therefore cover the full intended
+catalog, including entries unrelated to the immediate model change. For retained entries Steward
+preserves the base configuration's transport, credentials, quota bindings, execution metadata and
+resource sizes. A new worker, provider or project needs an explicit matching base binding; a missing
+or unauthorized quota mapping is refused rather than inferred from an unordered list of pools.
+CPU classes use Steward's `low`, `medium`, `high` vocabulary; profile names remain arbitrary.
+The projection never claims that desired models are installed, authenticated or available.
+A changed catalog leaves enrollment stale until the existing revision-fenced operation is applied.
 Staging writes to a temporary path in the destination directory, validates, then renames
 atomically, retaining the previous document under the run's private state directory the way
 `worker-configuration` v1 already retains `prior.json`.
@@ -170,7 +180,7 @@ component is authored, not captured, and names the file to edit.
 **Retention lives in its own directory.** The documents a run replaces are kept under
 `~/.local/state/dev-fleet/fleet-config/<run-id>/prior.json`, alongside but not inside
 `worker-config/<run-id>/`, so that a run in which both components act cannot collide on one
-exclusively created directory. Both owned documents are retained even when only one of them
+exclusively created directory. Every owned document for that host is retained even when only one of them
 changes, so restoring a run puts the whole of what it found back rather than half of it. The
 retained record names each destination, and restoring it puts the host back to exactly what
 the run found, including having no document at all. A retry of the same run ID reuses the
@@ -178,7 +188,7 @@ record the first attempt took rather than refusing or overwriting it; a director
 without a record is diagnosed as a collision.
 
 **What the retained document is for, and what it is not.** It is the within-run repair: when
-one of the two documents cannot be activated, every document that run touched is put back
+one of the documents cannot be activated, every document that run touched is put back
 before the host reports, so a failed convergence never leaves a host half applied. There is no
 operator command that replays it, and there should not be one — an operator who wants a host
 back on an earlier bootstrap converges an earlier release, which is reviewed, committed and

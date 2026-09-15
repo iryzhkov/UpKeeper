@@ -124,7 +124,7 @@ func TestFleetPlanReportsAndWritesNothing(t *testing.T) {
 		t.Errorf("the plan does not name the command that yields the fence: %q", advice)
 	}
 	artifact, _ := report["coordinator_projection"].(map[string]any)
-	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "review artifact") {
+	if purpose, _ := artifact["purpose"].(string); !strings.Contains(purpose, "authored coordinator configuration") {
 		t.Errorf("the coordinator projection is not labelled a review artifact: %q", purpose)
 	}
 	hosts, _ := report["hosts"].(map[string]any)

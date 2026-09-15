@@ -19,7 +19,7 @@
         "git",
         "huyang"
       ],
-      "cpu_class": "standard",
+      "cpu_class": "medium",
       "desired_models": {
         "claudeAgent": [
           "claude-opus-4-5",
@@ -48,7 +48,7 @@
         "git",
         "huyang"
       ],
-      "cpu_class": "build",
+      "cpu_class": "high",
       "desired_models": {
         "claudeAgent": [
           "claude-haiku-4-5",

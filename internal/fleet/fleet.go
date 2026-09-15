@@ -46,8 +46,9 @@ const (
 	// runtime reads this file the way it reads the worker bootstrap, and an
 	// explicit backlog_v2.coordinator_client block overrides it.
 	ClientDestination = ".config/t3-steward/coordinator-client.json"
-	// CoordinatorKind labels the proposed catalog input. It is a proposal: no
-	// UpKeeper code path applies it.
+	// CoordinatorDestination holds the authored coordinator catalog fields.
+	CoordinatorDestination = ".config/t3-steward/coordinator-fleet.json"
+	// CoordinatorKind identifies the closed runtime input.
 	CoordinatorKind = "steward-coordinator-catalog-input"
 	// StateDirectory is the run-private directory the previous document is
 	// retained under, mirroring worker-configuration v1's prior.json.
@@ -471,8 +472,8 @@ func (d *Document) parseProfiles(value any) error {
 
 func parseProfileBody(name string, entry map[string]any) (Profile, error) {
 	class, _ := entry["cpu_class"].(string)
-	if !identifierPattern.MatchString(class) {
-		return Profile{}, failure.Value("fleet profile %s has an invalid cpu_class", name)
+	if class != "low" && class != "medium" && class != "high" {
+		return Profile{}, failure.Value("fleet profile %s cpu_class must be low, medium or high", name)
 	}
 	slots, numbered := intValue(entry["executor_slots"])
 	if !numbered || slots < 1 || slots > 64 {

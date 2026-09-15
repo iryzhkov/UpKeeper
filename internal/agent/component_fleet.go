@@ -41,9 +41,8 @@ type fleetDocument struct {
 // fleetProjection decides what this host's fleet intent means for it, and
 // writes the documents that differ from what is there.
 //
-// Two files are owned: the worker bootstrap the runtime already reads, and the
-// coordinator client it reads the same way. The proposed catalog is a third
-// projection and is never written anywhere by this program.
+// Worker and client projections are scoped to worker hosts. The coordinator
+// receives the authored catalog input even when it is not itself a worker.
 func fleetProjection(
 	c *Context, component map[string]any, host, runID string, dryRun bool,
 ) (map[string]any, error) {
@@ -51,32 +50,45 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
-	if _, declared := document.Hosts[host]; !declared {
+	_, declared := document.Hosts[host]
+	coordinator := host == document.Coordinator.Host
+	if !declared && !coordinator {
 		return map[string]any{"state": "converged", "configured": false, "enrolled": false}, nil
 	}
-	worker, err := document.WorkerBytes(host)
-	if err != nil {
-		return nil, err
+	var worker, catalog []byte
+	if declared {
+		worker, err = document.WorkerBytes(host)
+		if err != nil {
+			return nil, err
+		}
+		if err := fleetAgreesWithWorkerConfiguration(c, host, worker); err != nil {
+			return nil, err
+		}
 	}
-	if err := fleetAgreesWithWorkerConfiguration(c, host, worker); err != nil {
-		return nil, err
+	if coordinator {
+		catalog, err = document.CoordinatorBytes()
+		if err != nil {
+			return nil, err
+		}
 	}
 	// The coordinator administers itself over its own local socket, and its
 	// runtime refuses to start while a remote client endpoint is configured.
 	// It gets its worker bootstrap like any other host and no client document,
 	// and one left over from when it was only a worker is removed.
 	var client []byte
-	if document.NeedsClientProjection(host) {
+	if declared && document.NeedsClientProjection(host) {
 		rendered, err := document.ClientBytes(host)
 		if err != nil {
 			return nil, err
 		}
 		client = rendered
 	}
-	if err := fleetResolveCredentials(c, document.Hosts[host], client != nil); err != nil {
-		return nil, err
+	if declared {
+		if err := fleetResolveCredentials(c, document.Hosts[host], client != nil); err != nil {
+			return nil, err
+		}
 	}
-	documents, err := fleetPlanDocuments(c, worker, client)
+	documents, err := fleetPlanDocuments(c, worker, client, catalog)
 	if err != nil {
 		return nil, err
 	}
@@ -89,16 +101,36 @@ func fleetProjection(
 			return nil, err
 		}
 	}
+	if !declared {
+		state := "converged"
+		if changed {
+			state = "updated"
+		}
+		return map[string]any{
+			"state": state, "configured": true, "enrolled": false,
+			"coordinator_projection": map[string]any{
+				"purpose": fleet.CoordinatorPurpose, "sha256": agentenv.Digest(catalog),
+			},
+		}, nil
+	}
 	return fleetResult(document, host, worker, client, changed)
 }
 
 // fleetPlanDocuments works out what each owned file would become, in a stable
 // order, before anything is written. Deciding first and writing second is what
 // lets an observation run exactly the code an apply does.
-func fleetPlanDocuments(c *Context, worker, client []byte) ([]*fleetDocument, error) {
+func fleetPlanDocuments(c *Context, worker, client []byte, catalog ...[]byte) ([]*fleetDocument, error) {
 	documents := []*fleetDocument{
-		{destination: fleet.WorkerDestination, payload: worker},
 		{destination: fleet.ClientDestination, payload: client, remove: client == nil},
+	}
+	if worker != nil {
+		documents = append(documents, &fleetDocument{destination: fleet.WorkerDestination, payload: worker})
+	}
+	if len(catalog) > 0 {
+		documents = append(documents, &fleetDocument{
+			destination: fleet.CoordinatorDestination,
+			payload:     catalog[0], remove: catalog[0] == nil,
+		})
 	}
 	sort.Slice(documents, func(left, right int) bool {
 		return documents[left].destination < documents[right].destination
@@ -147,9 +179,8 @@ func fleetResult(
 		"client_sha256":  nil,
 		"credential_ref": document.Hosts[host].CredentialRef,
 		"desired_models": fleetModelMap(sets.Desired),
-		// The coordinator projection is a review artifact. Its digest is
-		// reported under a name that cannot be read as the revision an
-		// enrollment is fenced against, because nothing consumes this shape.
+		// This document digest is not the enrollment revision. The coordinator
+		// computes that revision after loading the projection and local bindings.
 		"coordinator_projection": map[string]any{
 			"purpose": fleet.CoordinatorPurpose,
 			"sha256":  agentenv.Digest(catalog),
@@ -416,8 +447,9 @@ func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) erro
 // record is replayed by the restore path, so the paths in it are checked again
 // rather than trusted because this program wrote them.
 var fleetOwnedDestinations = map[string]bool{
-	fleet.WorkerDestination: true,
-	fleet.ClientDestination: true,
+	fleet.WorkerDestination:      true,
+	fleet.ClientDestination:      true,
+	fleet.CoordinatorDestination: true,
 }
 
 // FleetRestorePrior puts back the documents a run replaced.
@@ -546,6 +578,10 @@ func fleetValidateStaged(staged string, planned *fleetDocument) error {
 		if !workerSameFields(entry, fleet.ClientFields) {
 			return errors.New("staged fleet projection is not a coordinator client document")
 		}
+	case fleet.CoordinatorDestination:
+		if !workerSameFields(entry, []string{"kind", "schema_version", "coordinator_id", "workers", "projects"}) || entry["kind"] != fleet.CoordinatorKind {
+			return errors.New("staged fleet projection is not a coordinator fleet document")
+		}
 	default:
 		return errors.New("staged fleet projection has no owned destination")
 	}
@@ -567,7 +603,7 @@ func fleetApply(
 	}
 	if configured, _ := result["configured"].(bool); configured {
 		*actions = append(*actions,
-			"fleet worker and client projections applied; "+
+			"host-scoped fleet projections applied; "+
 				"enrollment stays an explicit Steward operation")
 	}
 	state, _ := result["state"].(string)
