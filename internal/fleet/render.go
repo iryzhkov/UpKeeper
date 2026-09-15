@@ -41,6 +41,9 @@ func (d *Document) Resolved(name string) (Profile, error) {
 // byte-identical bytes. That is the migration safety property: adding this
 // component changes nothing on a host until its intent is actually edited.
 func (d *Document) WorkerProjection(name string) (map[string]any, error) {
+	if host, present := d.Hosts[name]; present && host.Management == "catalog-only" {
+		return nil, failure.Value("catalog-only worker has no managed bootstrap")
+	}
 	host, present := d.Hosts[name]
 	if !present {
 		return nil, failure.Value("fleet host %s is not declared", name)
@@ -84,6 +87,9 @@ func (d *Document) WorkerBytes(name string) ([]byte, error) {
 // value lives in the host's own 0600 secret store and is never read, copied or
 // carried here.
 func (d *Document) ClientProjection(name string) (map[string]any, error) {
+	if host, present := d.Hosts[name]; present && host.Management == "catalog-only" {
+		return nil, failure.Value("catalog-only worker has no managed client")
+	}
 	host, present := d.Hosts[name]
 	if !present {
 		return nil, failure.Value("fleet host %s is not declared", name)
@@ -118,7 +124,13 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 // first place. A coordinator that is also a worker still gets its worker
 // bootstrap; only the client document is withheld.
 func (d *Document) NeedsClientProjection(name string) bool {
-	return name != d.Coordinator.Host
+	return d.NeedsWorkerProjection(name) && name != d.Coordinator.Host
+}
+
+// NeedsWorkerProjection excludes catalog-only declarations from host management.
+func (d *Document) NeedsWorkerProjection(name string) bool {
+	host, present := d.Hosts[name]
+	return present && host.Management != "catalog-only"
 }
 
 // ClientBytes are the exact bytes of the client projection on disk: the same
@@ -168,10 +180,13 @@ func (d *Document) CoordinatorProjection() (map[string]any, error) {
 			"setup_profile":    project.SetupProfile,
 			"eligible_workers": sortedUnique(project.EligibleWorkers),
 		}
+		if project.Type == "fresh" {
+			projects[name].(map[string]any)["type"] = "fresh"
+		}
 	}
 	return map[string]any{
 		"kind":           CoordinatorKind,
-		"schema_version": SchemaVersion,
+		"schema_version": d.Version,
 		"coordinator_id": d.Coordinator.ID,
 		"workers":        workers,
 		"projects":       projects,

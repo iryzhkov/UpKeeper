@@ -88,9 +88,12 @@ func (d *Document) Report() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		worker, err := d.WorkerBytes(name)
-		if err != nil {
-			return nil, err
+		var worker []byte
+		if d.NeedsWorkerProjection(name) {
+			worker, err = d.WorkerBytes(name)
+			if err != nil {
+				return nil, err
+			}
 		}
 		profile, err := d.Resolved(name)
 		if err != nil {
@@ -102,8 +105,15 @@ func (d *Document) Report() (map[string]any, error) {
 			"executor_slots":  profile.ExecutorSlots,
 			"desired_models":  asAny(sets.Desired),
 			"observed_models": nil,
-			"worker_sha256":   Digest(worker),
+			"worker_sha256":   nil,
 			"client_sha256":   nil,
+		}
+		if worker != nil {
+			entry["worker_sha256"] = Digest(worker)
+		}
+		if d.Hosts[name].Management == "catalog-only" {
+			entry["management"] = "catalog-only"
+			entry["worker"] = "not written; catalog authorization only"
 		}
 		if d.NeedsClientProjection(name) {
 			client, err := d.ClientBytes(name)
@@ -112,7 +122,11 @@ func (d *Document) Report() (map[string]any, error) {
 			}
 			entry["client_sha256"] = Digest(client)
 		} else {
-			entry["client"] = "not written; the coordinator administers itself locally"
+			if d.Hosts[name].Management == "catalog-only" {
+				entry["client"] = "not written; catalog authorization only"
+			} else {
+				entry["client"] = "not written; the coordinator administers itself locally"
+			}
 		}
 		if sets.HasObservation {
 			entry["observed_models"] = asAny(sets.Observed)
@@ -161,7 +175,18 @@ func (d *Document) EnrollmentPlan(previous *Document) (map[string]any, error) {
 		"authorization_changes": asStrings(changes),
 		"fence":                 FenceAdvice,
 		"note":                  "proposal only; enrollment is an explicit Steward operation",
+		"catalog_only_workers":  d.catalogOnlyWorkers(),
 	}, nil
+}
+
+func (d *Document) catalogOnlyWorkers() []string {
+	names := []string{}
+	for _, name := range d.HostNames() {
+		if !d.NeedsWorkerProjection(name) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // observedCoordinator reads one field of what capture recorded about the
@@ -257,6 +282,9 @@ func projectChanges(proposed, previous *Document) []string {
 		if !known {
 			changes = append(changes, "project "+name+" is added at "+project.Repository)
 			continue
+		}
+		if earlier.Type != project.Type {
+			changes = append(changes, "project "+name+" type "+earlier.Type+" becomes "+project.Type)
 		}
 		if earlier.Repository != project.Repository {
 			changes = append(changes, "project "+name+" repository "+

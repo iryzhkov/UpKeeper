@@ -199,6 +199,7 @@ type Profile struct {
 
 // Host is one worker host's intent.
 type Host struct {
+	Management         string
 	Name               string
 	Profile            string
 	WorkerID           string
@@ -213,6 +214,7 @@ type Host struct {
 
 // Project is one Steward project.
 type Project struct {
+	Type            string
 	Name            string
 	Repository      string
 	DefaultRef      string
@@ -222,6 +224,7 @@ type Project struct {
 
 // Document is a parsed and validated fleet intent component.
 type Document struct {
+	Version     int
 	raw         map[string]any
 	rawProfiles map[string]map[string]any
 	Coordinator Coordinator
@@ -260,7 +263,7 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, failure.Value("steward fleet configuration has the wrong kind")
 	}
 	version, numbered := intValue(component["schema_version"])
-	if !numbered || version != SchemaVersion {
+	if !numbered || (version != SchemaVersion && version != 2) {
 		return nil, failure.Value(
 			"unsupported steward-fleet-configuration schema_version")
 	}
@@ -272,7 +275,7 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, failure.Value(
 			"steward fleet configuration is missing %s", missing)
 	}
-	document := &Document{raw: component}
+	document := &Document{raw: component, Version: version}
 	if err := document.parseCoordinator(component["coordinator"]); err != nil {
 		return nil, err
 	}
@@ -553,7 +556,15 @@ func (d *Document) parseHosts(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet host")
 		}
-		missing, unknown := checkKeys(entry, HostFields, []string{"exceptions"})
+		required, optional := HostFields, []string{"exceptions"}
+		if d.Version == 2 {
+			optional = append(optional, "management")
+			if entry["management"] == "catalog-only" {
+				required = []string{"profile", "worker_id", "management"}
+				optional = []string{"exceptions"}
+			}
+		}
+		missing, unknown := checkKeys(entry, required, optional)
 		if missing != "" || unknown != "" {
 			return fieldError("fleet host "+name, missing, unknown)
 		}
@@ -574,6 +585,21 @@ func (d *Document) parseHostBody(name string, entry map[string]any) (Host, error
 	if entry["worker_id"] != name {
 		return Host{}, failure.Value("fleet worker identity must match its inventory host")
 	}
+	management := "managed"
+	if value, present := entry["management"]; present {
+		var valid bool
+		management, valid = value.(string)
+		if !valid || (management != "managed" && management != "catalog-only") {
+			return Host{}, failure.Value("invalid fleet host management mode")
+		}
+	}
+	if management == "catalog-only" {
+		exceptions, err := d.parseExceptions(name, profile, entry["exceptions"])
+		if err != nil {
+			return Host{}, err
+		}
+		return Host{Name: name, Profile: profile, WorkerID: name, Management: management, Exceptions: exceptions}, nil
+	}
 	if entry["transport"] != "ssh" {
 		return Host{}, failure.Value("fleet worker transport must be ssh")
 	}
@@ -590,6 +616,7 @@ func (d *Document) parseHostBody(name string, entry map[string]any) (Host, error
 		return Host{}, err
 	}
 	return Host{
+		Management:         management,
 		Name:               name,
 		Profile:            profile,
 		WorkerID:           name,
@@ -645,20 +672,48 @@ func (d *Document) parseProjects(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet project name")
 		}
-		if missing, unknown := checkKeys(entry, ProjectFields, nil); missing != "" || unknown != "" {
+		projectType := "git"
+		required, optional := ProjectFields, []string(nil)
+		if d.Version == 2 {
+			optional = []string{"type"}
+			if value, present := entry["type"]; present {
+				var valid bool
+				projectType, valid = value.(string)
+				if !valid || (projectType != "git" && projectType != "fresh") {
+					return failure.Value("invalid fleet project type")
+				}
+			}
+			if projectType == "fresh" {
+				required = []string{"type", "eligible_workers"}
+				optional = []string{"repository", "default_ref", "setup_profile"}
+			}
+		}
+		if missing, unknown := checkKeys(entry, required, optional); missing != "" || unknown != "" {
 			return fieldError("fleet project "+name, missing, unknown)
 		}
 		repository, _ := entry["repository"].(string)
-		if !repositoryPattern.MatchString(repository) {
+		if projectType == "fresh" {
+			for _, field := range []string{"repository", "default_ref", "setup_profile"} {
+				if value, present := entry[field]; present {
+					if _, valid := value.(string); !valid {
+						return failure.Value("fresh project fields must be strings")
+					}
+				}
+			}
+			if repository != "" {
+				return failure.Value("fresh project cannot name a repository")
+			}
+		}
+		if projectType == "git" && !repositoryPattern.MatchString(repository) {
 			return failure.Value(
 				"fleet project %s needs a canonical https or ssh repository", name)
 		}
 		ref, _ := entry["default_ref"].(string)
-		if !gitRefPattern.MatchString(ref) {
+		if (projectType == "git" && !gitRefPattern.MatchString(ref)) || (projectType == "fresh" && ref != "") {
 			return failure.Value("fleet project %s has an invalid default_ref", name)
 		}
 		setup, _ := entry["setup_profile"].(string)
-		if !identifierPattern.MatchString(setup) {
+		if (projectType == "git" || setup != "") && !identifierPattern.MatchString(setup) {
 			return failure.Value("fleet project %s has an invalid setup_profile", name)
 		}
 		workers, err := identifierList(entry["eligible_workers"], name+".eligible_workers")
@@ -672,6 +727,7 @@ func (d *Document) parseProjects(value any) error {
 			}
 		}
 		d.Projects[name] = Project{
+			Type:            projectType,
 			Name:            name,
 			Repository:      repository,
 			DefaultRef:      ref,
