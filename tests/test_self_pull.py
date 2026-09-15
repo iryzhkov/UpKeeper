@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -33,6 +34,11 @@ def self_checkout(tmp_path):
     shutil.copy2(ROOT / "desired/components.yml", root / "desired/components.yml")
     (root / "inventory").mkdir()
     inventory = json.loads((ROOT / "inventory/hosts.yml").read_text())
+    # This suite also runs on a real fleet member. Retaining that host's
+    # committed identity would create two matches after assigning Normandy
+    # the local identity, so every other fixture host must be synthetic.
+    for name, host in inventory["all"]["hosts"].items():
+        host["machine_id_sha256"] = hashlib.sha256(f"fixture:{name}".encode()).hexdigest()
     inventory["all"]["hosts"]["normandy"]["machine_id_sha256"] = local_machine_id_sha256()
     (root / "inventory/hosts.yml").write_text(json.dumps(inventory))
     git(root, "init", "-b", "main")
