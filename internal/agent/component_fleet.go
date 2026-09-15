@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -46,6 +47,9 @@ type fleetDocument struct {
 func fleetProjection(
 	c *Context, component map[string]any, host, runID string, dryRun bool,
 ) (map[string]any, error) {
+	if component == nil {
+		return fleetRetireCoordinator(c, runID, dryRun)
+	}
 	document, err := fleet.Parse(component)
 	if err != nil {
 		return nil, err
@@ -53,7 +57,7 @@ func fleetProjection(
 	_, declared := document.Hosts[host]
 	coordinator := host == document.Coordinator.Host
 	if !declared && !coordinator {
-		return map[string]any{"state": "converged", "configured": false, "enrolled": false}, nil
+		return fleetRetireCoordinator(c, runID, dryRun)
 	}
 	var worker, catalog []byte
 	if declared {
@@ -114,6 +118,48 @@ func fleetProjection(
 		}, nil
 	}
 	return fleetResult(document, host, worker, client, changed)
+}
+
+// fleetRetireCoordinator removes only the private coordinator projection when
+// historical or current intent no longer assigns this host that ownership.
+// Other host documents are outside this transition. Unknown formats and unsafe
+// filesystem objects require inspection; their contents are never discarded.
+func fleetRetireCoordinator(c *Context, runID string, dryRun bool) (map[string]any, error) {
+	result := map[string]any{"state": "converged", "configured": false, "enrolled": false}
+	path := c.Path(fleet.CoordinatorDestination)
+	if err := workerPathIsInHome(c.Home, path); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || int(owner.Uid) != os.Getuid() {
+		return nil, errors.New("refusing to retire an unsafe coordinator fleet document")
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := canonjson.DecodeObject(before)
+	if err != nil || !workerSameFields(entry, []string{"kind", "schema_version", "coordinator_id", "workers", "projects"}) ||
+		entry["kind"] != fleet.CoordinatorKind || entry["schema_version"] != json.Number("1") {
+		return nil, errors.New("refusing to retire an unknown coordinator fleet document")
+	}
+	result["state"] = "updated"
+	if dryRun {
+		return result, nil
+	}
+	planned := &fleetDocument{destination: fleet.CoordinatorDestination, target: path,
+		remove: true, before: before, changed: true}
+	if err := fleetWriteProjection(c, runID, []*fleetDocument{planned}); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // fleetPlanDocuments works out what each owned file would become, in a stable
