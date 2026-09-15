@@ -141,13 +141,14 @@ func fleetRetireCoordinator(c *Context, runID string, dryRun bool) (map[string]a
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || int(owner.Uid) != os.Getuid() {
 		return nil, errors.New("refusing to retire an unsafe coordinator fleet document")
 	}
-	before, err := os.ReadFile(path)
+	before, err := fleetReadRetirementCoordinator(path, info)
 	if err != nil {
 		return nil, err
 	}
 	entry, err := canonjson.DecodeObject(before)
 	if err != nil || !workerSameFields(entry, []string{"kind", "schema_version", "coordinator_id", "workers", "projects"}) ||
-		entry["kind"] != fleet.CoordinatorKind || entry["schema_version"] != json.Number("1") {
+		entry["kind"] != fleet.CoordinatorKind || entry["schema_version"] != json.Number("1") ||
+		!fleetKnownCoordinatorChildren(entry) {
 		return nil, errors.New("refusing to retire an unknown coordinator fleet document")
 	}
 	result["state"] = "updated"
