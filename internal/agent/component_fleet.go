@@ -100,10 +100,17 @@ func fleetProjection(
 	for _, planned := range documents {
 		changed = changed || planned.changed
 	}
+	reload := ""
 	if !dryRun {
 		if changed {
 			if err := fleetWriteProjection(c, runID, documents); err != nil {
 				return nil, err
+			}
+			if coordinator && fleetCatalogChanged(documents) {
+				reload, err = fleetReloadCoordinator(c)
+				if err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			// Establish ownership even when the explicit desired client already
@@ -124,14 +131,62 @@ func fleetProjection(
 		if changed {
 			state = "updated"
 		}
-		return map[string]any{
+		result := map[string]any{
 			"state": state, "configured": true, "enrolled": false,
 			"coordinator_projection": map[string]any{
 				"purpose": fleet.CoordinatorPurpose, "sha256": agentenv.Digest(catalog),
 			},
-		}, nil
+		}
+		if reload != "" {
+			result["coordinator_reload"] = reload
+		}
+		return result, nil
 	}
-	return fleetResult(document, host, worker, client, changed)
+	result, err := fleetResult(document, host, worker, client, changed)
+	if err != nil {
+		return nil, err
+	}
+	if reload != "" {
+		result["coordinator_reload"] = reload
+	}
+	return result, nil
+}
+
+// stewardCoordinatorUnit is the unit that runs the coordinator on its host. It
+// re-reads its configuration, including the catalog input this component
+// writes, on SIGHUP.
+const stewardCoordinatorUnit = "t3-steward.service"
+
+// fleetCatalogChanged reports whether this run rewrote the coordinator catalog
+// input, as opposed to only the worker or client documents.
+func fleetCatalogChanged(documents []*fleetDocument) bool {
+	for _, planned := range documents {
+		if planned.destination == fleet.CoordinatorDestination && planned.changed {
+			return true
+		}
+	}
+	return false
+}
+
+// fleetReloadCoordinator asks a running coordinator to re-read its
+// configuration after its catalog input changed on disk. Without this, a
+// projection that changes while the binary does not is never loaded: the
+// steward component only restarts the unit when it installs a new release,
+// and even then it restarts before this component has written the file.
+//
+// The coordinator validates the reload itself and keeps its effective
+// configuration when a worker still holds an assignment against the old
+// catalog, so this is a request the coordinator's journal answers, not a
+// guarantee. An inactive unit reads the projection when it next starts.
+func fleetReloadCoordinator(c *Context) (string, error) {
+	if !c.UnitActive(stewardCoordinatorUnit) {
+		return "unit inactive; the projection is read at the next start", nil
+	}
+	if _, err := c.Must([]string{"systemctl", "--user", "kill", "-s", "HUP", stewardCoordinatorUnit},
+		0, "", "reload coordinator configuration"); err != nil {
+		return "", err
+	}
+	return "signalled", nil
 }
 
 // fleetRetireCoordinator removes only the private coordinator projection when
@@ -686,6 +741,11 @@ func fleetApply(
 		*actions = append(*actions,
 			"host-scoped fleet projections applied; "+
 				"enrollment stays an explicit Steward operation")
+	}
+	if reload, _ := result["coordinator_reload"].(string); reload == "signalled" {
+		*actions = append(*actions,
+			"coordinator catalog input changed; asked "+stewardCoordinatorUnit+
+				" to reload its configuration (the coordinator validates the reload)")
 	}
 	state, _ := result["state"].(string)
 	return state, nil
