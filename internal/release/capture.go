@@ -167,6 +167,13 @@ func Capture(
 		return Release{}, failure.Capture("agent-environment: %s", err.Error())
 	}
 	components["agent-environment"] = environment
+	if components[JocastaComponent] != nil && (selected == nil || selected[JocastaComponent]) {
+		jocasta, err := CaptureJocasta(home, runner, components[JocastaComponent].(map[string]any))
+		if err != nil {
+			return Release{}, failure.Capture("jocasta: %s", err)
+		}
+		components[JocastaComponent] = jocasta
+	}
 	// Tooling is opt-in for historical releases; selecting it bootstraps its
 	// first reviewed capture. Once published it remains part of full captures.
 	if components[ToolingComponent] != nil || selected[ToolingComponent] {

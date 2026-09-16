@@ -94,6 +94,9 @@ func validateComponent(name string, component, components map[string]any) error 
 		return err
 	}
 	switch name {
+	case JocastaComponent:
+		_, err := DecodeJocasta(component)
+		return err
 	case ToolingComponent:
 		_, err := DecodeTooling(component)
 		return err

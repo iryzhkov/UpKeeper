@@ -62,6 +62,7 @@ var ComponentOrder = []string{
 	"omarchy-setup",
 	"agent-config",
 	ToolingComponent,
+	JocastaComponent,
 	"agent-environment",
 	"huyang",
 	"t3-steward",
@@ -74,7 +75,7 @@ var ComponentOrder = []string{
 // intent is optional because every release captured before it existed has to
 // keep loading, converging and rolling back exactly as it does now: adding a
 // component may not invalidate the releases already published.
-var OptionalComponents = map[string]bool{fleet.Component: true, ToolingComponent: true}
+var OptionalComponents = map[string]bool{fleet.Component: true, ToolingComponent: true, JocastaComponent: true}
 
 // defaultManifest is the shape of a fresh manifest. Everything push captures is
 // null here, so that a manifest which was never captured cannot be mistaken for

@@ -92,6 +92,8 @@ func observationMatches(c *Context, name string, spec, observed map[string]any) 
 			}
 		}
 		return true
+	case release.JocastaComponent:
+		return observed["converged"] == true
 	case release.ToolingComponent:
 		drift, ok := observed["drift"].([]string)
 		return ok && len(drift) == 0
