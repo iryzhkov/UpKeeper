@@ -2371,6 +2371,23 @@
         }
       },
       "kind": "worker-configuration"
+    },
+    "jocasta": {
+      "kind": "github-release",
+      "repository": "iryzhkov/jocasta",
+      "version": "0.1.1",
+      "commit": "f1630be11d95073212d130e6daa21a061af6c572",
+      "url": "https://jocasta.ryzhkov.dev",
+      "assets": {
+        "linux_amd64": "eb5b44c0e2d470e4a432052436f33e5133687e4776eccae4635b62d800d05dda",
+        "linux_arm64": "ab21c8f4503175d529c597eed1405a018535b6496acbad0d4b05060ecc336c49"
+      },
+      "hosts": {
+        "laptop": "secretref:jocasta/laptop",
+        "homelab": "secretref:jocasta/homelab",
+        "normandy": "secretref:jocasta/normandy",
+        "omarchy-pc": "secretref:jocasta/omarchy-pc"
+      }
     }
   },
   "schema_version": 1
