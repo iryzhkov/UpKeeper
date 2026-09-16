@@ -1,6 +1,7 @@
 package agentenv
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -330,6 +331,42 @@ func TestTargetLocalCredentialsSurviveOwnedRegistrationUpdates(t *testing.T) {
 	for path, want := range wanted {
 		if got := readHomeFile(t, home, path); got != want {
 			t.Errorf("%s =\n%q\nwant\n%q", path, got, want)
+		}
+	}
+}
+
+// TestOwnedInstructionsReplaceTheGeneratedOnesAndKeepTheTargetsOwn proves that a
+// generated instruction file the release stops naming also stops being loaded.
+// The list used to be additive, so a file removed from the loaded set stayed in
+// every target's list for ever and kept costing that session its tokens.
+func TestOwnedInstructionsReplaceTheGeneratedOnesAndKeepTheTargetsOwn(t *testing.T) {
+	home := fakeHome(t)
+	shared := home + "/.config/agents/AGENTS.md"
+	superseded := home + "/.config/agents/t3-steward.md"
+	targetsOwn := home + "/notes/mine.md"
+	writeHomeFile(t, home, ".config/opencode/opencode.json",
+		`{"mcp":{"huyang":{"command":["huyang"]}},"instructions":["`+shared+`"]}`, 0o644)
+	component := capture(t, home)
+	// The target still loads the reference file the release has dropped, and one
+	// file of its own from outside the fleet-owned directory.
+	writeHomeFile(t, home, ".config/opencode/opencode.json",
+		`{"mcp":{"huyang":{"command":["huyang"]}},"instructions":["`+superseded+
+			`","`+targetsOwn+`"]}`, 0o644)
+	apply(t, component, home, "instructions", false, nil)
+	var projected struct {
+		Instructions []string `json:"instructions"`
+	}
+	if err := json.Unmarshal(
+		[]byte(readHomeFile(t, home, ".config/opencode/opencode.json")), &projected); err != nil {
+		t.Fatalf("the projected file does not parse: %v", err)
+	}
+	wanted := []string{shared, targetsOwn}
+	if len(projected.Instructions) != len(wanted) {
+		t.Fatalf("instructions = %v, want %v", projected.Instructions, wanted)
+	}
+	for index, want := range wanted {
+		if projected.Instructions[index] != want {
+			t.Errorf("instructions[%d] = %q, want %q", index, projected.Instructions[index], want)
 		}
 	}
 }

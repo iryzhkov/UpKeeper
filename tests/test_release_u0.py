@@ -113,6 +113,36 @@ def test_target_local_mcp_credentials_survive_owned_registration_updates(tmp_pat
     )
 
 
+def test_owned_instructions_replace_the_generated_ones_and_keep_the_targets_own(tmp_path):
+    """A generated instruction file the release stops naming stops being loaded.
+
+    The list used to be additive, so a file removed from the loaded set stayed in
+    every target's list for ever and kept costing that session its tokens.
+    """
+    (tmp_path / "repo").mkdir()
+    home = fake_home(tmp_path)
+    shared = str(home / ".config/agents/AGENTS.md")
+    superseded = str(home / ".config/agents/t3-steward.md")
+    targets_own = str(home / "notes/mine.md")
+    opencode = home / ".config/opencode/opencode.json"
+    opencode.write_text(
+        json.dumps({"mcp": {"huyang": {"command": ["huyang"]}}, "instructions": [shared]})
+    )
+    component = capture_environment(home, PROVENANCE)
+    # The target still loads the reference file the release has dropped, and one
+    # file of its own from outside the fleet-owned directory.
+    opencode.write_text(
+        json.dumps(
+            {
+                "mcp": {"huyang": {"command": ["huyang"]}},
+                "instructions": [superseded, targets_own],
+            }
+        )
+    )
+    apply_environment(component, home, "instructions")
+    assert json.loads(opencode.read_text())["instructions"] == [shared, targets_own]
+
+
 def test_missing_files_dry_run_and_cross_host_rebasing(tmp_path):
     _, component = environment(tmp_path)
     home = tmp_path / "other"

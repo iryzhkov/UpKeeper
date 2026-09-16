@@ -75,7 +75,12 @@ observes capabilities and authenticates enrollment separately.
 
 Environment capture owns the Claude managed import and imported instructions,
 home-owned skill files, Claude settings keys, shared agent instructions, Codex global
-instructions, named MCP registrations and OpenCode instruction-list additions.
+instructions, named MCP registrations and the OpenCode instruction list. That list
+is authoritative for the shared instruction directory: applying a release replaces
+the entries under ~/.config/agents with the ones the release names, so a generated
+file it stops naming stops being loaded, while an entry from anywhere else is the
+target's own and is kept. Skill files are never pruned this way, because a target
+may hold skills the release does not carry.
 It omits account state, provider credentials, unrelated JSON keys, Codex project
 tables and unrelated MCP registrations. Unsupported/malformed shared-file layouts
 fail instead of causing whole-file replacement. MCP executable/service prerequisites

@@ -1408,13 +1408,30 @@ func mergeOpenCode(current, owned map[string]any) error {
 	if err != nil {
 		return err
 	}
-	added, err := anyList(ownedInstructions)
+	ownedList, err := anyList(ownedInstructions)
 	if err != nil {
 		return err
 	}
-	current["instructions"] = dedupeInOrder(append(existing, added...))
+	// The shared instruction directory is fleet-owned, so the release decides
+	// which of its files OpenCode loads. An entry of the target's own is kept:
+	// only a generated one the release no longer names is dropped, which is how a
+	// file that moved out of the loaded set stops being loaded everywhere.
+	kept := make([]any, 0, len(existing))
+	for _, entry := range existing {
+		if text, isText := entry.(string); isText &&
+			strings.Contains(text, managedInstructionDirectory) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	current["instructions"] = dedupeInOrder(append(ownedList, kept...))
 	return nil
 }
+
+// managedInstructionDirectory names the directory whose instruction files the
+// release owns. It is matched as a path fragment rather than against one home
+// directory, because the targets do not share a user name.
+const managedInstructionDirectory = "/.config/agents/"
 
 // MergeRegistrations overlays the owned registrations on the ones a target
 // already has, keeping every field the target added.

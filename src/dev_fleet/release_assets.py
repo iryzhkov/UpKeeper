@@ -38,6 +38,11 @@ SETTINGS_KEYS = ("model", "theme", "tui", "syntaxHighlightingDisabled", "permiss
 REF_RE = re.compile(r"secretref:[A-Za-z0-9][A-Za-z0-9._/-]*")
 MODES = {"file", "claude-block", "claude-settings", "claude-mcp", "codex-mcp", "opencode"}
 
+# The directory whose instruction files the release owns. It is matched as a path
+# fragment rather than against one home directory, because the targets do not
+# share a user name.
+MANAGED_INSTRUCTION_DIRECTORY = "/.config/agents/"
+
 
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -354,9 +359,16 @@ def render(f, old: bytes | None, source_home: str, home: Path) -> bytes:
         current["mcpServers"] = merge_registrations(current.get("mcpServers", {}), owned)
     elif f["mode"] == "opencode":
         current["mcp"] = merge_registrations(current.get("mcp", {}), owned["mcp"])
-        current["instructions"] = list(
-            dict.fromkeys(current.get("instructions", []) + owned["instructions"])
-        )
+        # The shared instruction directory is fleet-owned, so the release decides
+        # which of its files OpenCode loads. An entry of the target's own is kept:
+        # only a generated one the release no longer names is dropped, which is how
+        # a file that left the loaded set stops being loaded everywhere.
+        kept = [
+            entry
+            for entry in current.get("instructions", [])
+            if not (isinstance(entry, str) and MANAGED_INSTRUCTION_DIRECTORY in entry)
+        ]
+        current["instructions"] = list(dict.fromkeys(owned["instructions"] + kept))
     # Harnesses rewrite their own account/cache state and formatting. Those
     # bytes are not owned drift when all projected keys already agree.
     if old is not None and json.loads(text) == current:
