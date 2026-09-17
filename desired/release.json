@@ -1742,6 +1742,16 @@
           "repository": "ssh://igor@normandy/home/igor/Work/homelab-cli",
           "setup_profile": "git-status"
         },
+        "home-assistant-config": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "normandy",
+            "omarchy-pc"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/home-assistant-config.git",
+          "setup_profile": "git-status"
+        },
         "huyang": {
           "default_ref": "feature/huyang",
           "eligible_workers": [
