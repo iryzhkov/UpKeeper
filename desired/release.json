@@ -1725,14 +1725,6 @@
           "repository": "ssh://igor@normandy/home/igor/Work/citadel",
           "setup_profile": "git-status"
         },
-        "dev-fleet": {
-          "default_ref": "main",
-          "eligible_workers": [
-            "normandy"
-          ],
-          "repository": "ssh://git@git.ryzhkov.dev/igor/dev-fleet.git",
-          "setup_profile": "git-status"
-        },
         "dogfood-sum": {
           "default_ref": "main",
           "eligible_workers": [
@@ -1808,7 +1800,7 @@
           "setup_profile": "git-status"
         },
         "t3-steward": {
-          "default_ref": "fix/terminal-observation-recovery-20260911",
+          "default_ref": "main",
           "eligible_workers": [
             "normandy"
           ],
