@@ -1628,7 +1628,23 @@
           "credential_ref": "secretref:f02-protocol/normandy",
           "exceptions": {
             "cpu_class": "low",
-            "executor_slots": 2
+            "executor_slots": 2,
+            "models": {
+              "claudeAgent": [
+                "*"
+              ],
+              "codex": [
+                "*"
+              ],
+              "opencode": [
+                "*"
+              ]
+            },
+            "quota_pools": [
+              "claude-main",
+              "codex-main",
+              "opencode-free"
+            ]
           },
           "profile": "standard",
           "transport": "ssh",
