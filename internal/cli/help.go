@@ -41,6 +41,7 @@ var commandSummaries = [][2]string{
 	{"pull", "converge hosts on an exact release manifest"},
 	{"rollback", "converge hosts on an exact release manifest"},
 	{"fleet-plan", "report the Steward fleet intent and what enrolling it would change"},
+	{"project", "add or remove a Steward project in the release manifest and show the plan"},
 	{"self-pull", "refresh the gated release and converge this machine only"},
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
@@ -67,6 +68,8 @@ func helpText(program, command string) string {
 		return rollbackHelp(program)
 	case "fleet-plan":
 		return fleetPlanHelp(program)
+	case "project":
+		return projectHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
 	default:
@@ -150,6 +153,40 @@ func fleetPlanHelp(program string) string {
 		describe("  --json", "") +
 		"\nexit codes: 0 reported, 2 malformed command line, 30 refused\n" +
 		"\nexample:\n  " + program + " fleet-plan --previous 6bcd2f8 --json\n"
+}
+
+// projectHelp documents the one command that edits the release manifest for
+// a person. It says what the command does not do as plainly as what it does:
+// the edit is local, reviewed as a Git diff, and published by the same push
+// every other release change goes through.
+func projectHelp(program string) string {
+	return "usage: " + program + " project add NAME --repository URL --default-ref REF" +
+		" --workers HOST[,HOST...] [--setup-profile PROFILE] [--json]\n" +
+		"       " + program + " project remove NAME [--json]\n\n" +
+		"Add or remove one Steward project in the steward-fleet-configuration component\n" +
+		"of desired/release.json, validate the edited manifest with the same parser\n" +
+		"fleet-plan uses, and print the fleet-plan diff against the release committed at\n" +
+		"HEAD. The edit is written atomically in the manifest's canonical encoding.\n\n" +
+		"It commits nothing, pushes nothing, pulls nothing and never enrolls: review the\n" +
+		"diff, commit it, and publish it with `" + program + " push`. An added project is\n" +
+		"loaded by the coordinator with default local bindings, and every worker it is\n" +
+		"eligible for needs `t3-steward worker enroll <worker> --current-catalog` on the\n" +
+		"coordinator host after the release converges.\n\n" +
+		"positional arguments:\n" +
+		describe("  {add,remove}", "") +
+		describe("  NAME", "project name: lowercase letters, digits and hyphens") +
+		"\noptions:\n" + helpOption + "\n" +
+		describe("  --repository URL", "canonical https or ssh remote (add)") +
+		describe("  --default-ref REF", "branch, tag or commit the project checks out (add)") +
+		describe("  --workers HOST[,HOST...]",
+			"fleet hosts eligible for the project; an unknown host is refused (add)") +
+		describe("  --setup-profile PROFILE",
+			"Steward setup profile (add; default "+projectSetupProfileDefault+")") +
+		describe("  --json", "") +
+		"\nexit codes: 0 edited, 2 malformed command line, 30 refused (nothing written)\n" +
+		"\nexample:\n  " + program + " project add home-assistant-config \\\n" +
+		"    --repository ssh://git@git.ryzhkov.dev/igor/home-assistant-config.git \\\n" +
+		"    --default-ref main --workers homelab,normandy,omarchy-pc\n"
 }
 
 func scheduledHelp(program, command string) string {

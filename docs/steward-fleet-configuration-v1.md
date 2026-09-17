@@ -73,8 +73,15 @@ The coordinator projection owns the full worker and project membership and the f
 Removing an entry revokes that authorization; release review must therefore cover the full intended
 catalog, including entries unrelated to the immediate model change. For retained entries Steward
 preserves the base configuration's transport, credentials, quota bindings, execution metadata and
-resource sizes. A new worker, provider or project needs an explicit matching base binding; a missing
+resource sizes. A new worker or provider needs an explicit matching base binding; a missing
 or unauthorized quota mapping is refused rather than inferred from an unordered list of pools.
+A new project does not: Steward loads a project the projection names and `backlog_v2.projects`
+does not bind with default local bindings (no credentials, resource locks or directory
+resources), logs one warning naming it at startup, and reports `project-binding-defaulted` as an
+informational detail in `campaign check`. This amends the original wording, under which one
+unbound project failed the coordinator's whole configuration load and with it every admin query.
+A project that needs host-local bindings still gets them from an explicit `backlog_v2.projects`
+entry, which is preserved exactly as before.
 CPU classes use Steward's `low`, `medium`, `high` vocabulary; profile names remain arbitrary.
 The projection never claims that desired models are installed, authenticated or available.
 A changed catalog leaves enrollment stale until the existing revision-fenced operation is applied.
@@ -93,8 +100,33 @@ number the coordinator will always reject, and printing one that merely looks li
 invites somebody to pass it and then to distrust the refusal. The plan reports the last
 observed coordinator revision when there is one, and names where the real fence comes from:
 read it with `t3-steward backlog workers --json`, which reports each worker's catalog
-revision, and pass it to `t3-steward worker enroll --catalog-revision <revision>`. This
-replaces the original wording, which promised previous and proposed catalog digests.
+revision, and pass it to `t3-steward worker enroll --catalog-revision <revision>`, or run
+`t3-steward worker enroll <worker> --current-catalog` on the coordinator host, which reads
+the digest and the revision from the coordinator itself. This replaces the original wording,
+which promised previous and proposed catalog digests.
+
+For a project that the previous release did not carry, the plan says that the coordinator
+will load it with default local bindings and lists, per eligible worker, the re-enrollment
+command above. A worker that becomes or stops being eligible for an existing project, and
+every worker of a removed project, is listed the same way, because each of those changes the
+catalog digest that worker is enrolled against.
+
+## Adding and removing a project
+
+`upkeeper project add NAME --repository URL --default-ref REF --workers a,b
+[--setup-profile P]` and `upkeeper project remove NAME` are the one authored edit this
+component has a command for. They load the release, edit the `projects` entry through the
+release model, validate the edited manifest with `fleet.Parse` before a byte is written,
+write `desired/release.json` atomically in its canonical encoding (a temporary file beside
+it, renamed over it), and print the `fleet-plan` diff against the release committed at
+`HEAD`. `--setup-profile` defaults to `git-status`. A worker the fleet intent does not
+declare is refused by name, and a refusal writes nothing.
+
+The commands stay inside the authority this document draws: they commit, push, pull and
+enroll nothing. The operator reviews `git diff desired/release.json`, commits, publishes with
+`upkeeper push`, and, once the coordinator has converged, re-enrolls the eligible workers on
+the coordinator host. The coordinator's own `backlog_v2.projects` is not written, and does
+not need to be for a plain Git project (see the rule above).
 
 ## Shared fixtures
 

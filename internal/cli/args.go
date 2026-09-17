@@ -53,13 +53,21 @@ type arguments struct {
 
 	// fleet-plan
 	previousRelease string
+
+	// project
+	projectAction       string
+	projectName         string
+	projectRepository   string
+	projectDefaultRef   string
+	projectSetupProfile string
+	projectWorkers      []string
 }
 
 // Commands are the subcommands `upkeeper` accepts. The two names beginning
 // with underscores are the machine-facing halves a controller invokes on a
 // target; they are deliberately undocumented in help output.
 var Commands = []string{
-	"doctor", "status", "push", "pull", "rollback", "fleet-plan",
+	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project",
 	"self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
 	"version",
 }
@@ -100,6 +108,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parsePull(parsed, rest, componentChoices)
 	case "fleet-plan":
 		return parsed, parseFleetPlan(parsed, rest)
+	case "project":
+		return parsed, parseProject(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
 	case "install-self-timer", "install-pull-timer", agentCommand, probeCommand, "version":
@@ -280,6 +290,94 @@ func parseFleetPlan(parsed *arguments, argv []string) error {
 		}
 	}
 	return nil
+}
+
+// projectSetupProfileDefault is the setup profile a project gets when none is
+// named. Every project the fleet carries today uses it; a project that needs
+// another one says so with --setup-profile.
+const projectSetupProfileDefault = "git-status"
+
+// parseProject reads `project add NAME --repository URL --default-ref REF
+// --workers a,b [--setup-profile P] [--json]` and `project remove NAME
+// [--json]`. The workers are one comma-separated value, the shape the fleet
+// contract and the issue that asked for this command both use.
+func parseProject(parsed *arguments, argv []string) error {
+	if len(argv) == 0 {
+		return usagef("the following arguments are required: action (add or remove)")
+	}
+	parsed.projectAction = argv[0]
+	if parsed.projectAction != "add" && parsed.projectAction != "remove" {
+		return usagef("argument action: invalid choice: %q (choose from \"add\", \"remove\")",
+			parsed.projectAction)
+	}
+	if len(argv) < 2 || strings.HasPrefix(argv[1], "-") {
+		return usagef("the following arguments are required: NAME")
+	}
+	parsed.projectName = argv[1]
+	parsed.projectSetupProfile = projectSetupProfileDefault
+	for index := 2; index < len(argv); index++ {
+		token := argv[index]
+		if token == "--json" {
+			parsed.asJSON = true
+			continue
+		}
+		if parsed.projectAction != "add" {
+			return unrecognized(token)
+		}
+		switch token {
+		case "--repository", "--default-ref", "--setup-profile", "--workers":
+			value, next, err := takeValue(argv, index, token)
+			if err != nil {
+				return err
+			}
+			index = next
+			switch token {
+			case "--repository":
+				parsed.projectRepository = value
+			case "--default-ref":
+				parsed.projectDefaultRef = value
+			case "--setup-profile":
+				parsed.projectSetupProfile = value
+			case "--workers":
+				parsed.projectWorkers = splitWorkers(value)
+				if len(parsed.projectWorkers) == 0 {
+					return usagef("argument --workers: expected at least one worker")
+				}
+			}
+		default:
+			return unrecognized(token)
+		}
+	}
+	if parsed.projectAction == "add" {
+		missing := []string{}
+		for _, required := range []struct{ flag, value string }{
+			{"--repository", parsed.projectRepository},
+			{"--default-ref", parsed.projectDefaultRef},
+		} {
+			if required.value == "" {
+				missing = append(missing, required.flag)
+			}
+		}
+		if len(parsed.projectWorkers) == 0 {
+			missing = append(missing, "--workers")
+		}
+		if len(missing) > 0 {
+			return usagef("the following arguments are required: %s", strings.Join(missing, ", "))
+		}
+	}
+	return nil
+}
+
+// splitWorkers reads a comma-separated worker list, ignoring empty entries so
+// that a trailing comma is not a worker called "".
+func splitWorkers(value string) []string {
+	workers := []string{}
+	for _, worker := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(worker); trimmed != "" {
+			workers = append(workers, trimmed)
+		}
+	}
+	return workers
 }
 
 func parseScheduled(parsed *arguments, argv []string) error {
