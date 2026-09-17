@@ -12,8 +12,15 @@ from .validation import ValidationError
 
 
 def load_historical_release(root: Path, revision: str) -> tuple[Release, str, dict[str, str]]:
+    # The reference implementation takes a commit hash only. The compiled
+    # binary resolves anything git does (a tag, a branch, HEAD) and names the
+    # flag that was used; the message here says which of the two this is.
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", revision):
-        raise ValidationError("--to must be a release commit hash (7 to 40 hex characters)")
+        raise ValidationError(
+            "--to must name a release commit hash (7 to 40 hex characters) in this "
+            "reference implementation; the compiled upkeeper binary also resolves a "
+            "tag, branch or symbolic ref such as HEAD"
+        )
 
     def git(*arguments: str) -> bytes:
         result = subprocess.run(

@@ -42,9 +42,8 @@ func (h *HoldRunner) Run(
 			"error": "cannot create the scheduled hold directory: " + err.Error(),
 		}
 	}
-	marker := filepath.Join(h.Directory, spec.Name+".hold")
-	err := fsatomic.CreateExclusive(marker,
-		[]byte("Scheduled dispatch may have run. Observe the host before clearing.\n"), 0o600)
+	marker := HoldPath(h.Directory, spec.Name)
+	err := fsatomic.CreateExclusive(marker, []byte(holdContent(spec.Name, payload.RunID)), 0o600)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return map[string]any{
@@ -66,4 +65,21 @@ func (h *HoldRunner) Run(
 		_ = os.Remove(marker)
 	}
 	return result
+}
+
+// HoldPath is the marker one host's scheduled dispatch writes.
+func HoldPath(directory, host string) string {
+	return filepath.Join(directory, host+".hold")
+}
+
+// holdContent is what an operator finds in the marker: which run left it and
+// which command clears it. The run identifier is the thread back to the run
+// record; the command is there because the marker is the only breadcrumb a
+// lost run leaves.
+func holdContent(host, runID string) string {
+	if runID == "" {
+		runID = "unknown"
+	}
+	return "Scheduled dispatch may have run (run " + runID + "). Observe the host before clearing.\n" +
+		"Clear with: upkeeper hold clear " + host + " --reason TEXT\n"
 }

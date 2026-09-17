@@ -66,7 +66,23 @@ host's observations may never become fleet-wide authorization. See
 ./scripts/fleet status
 ./scripts/fleet status --json
 ./scripts/fleet status --json --limit laptop,homelab
+./bin/upkeeper hold show --json                         # scheduled hold markers on this host
 ```
+
+`status` prints a reason beside each drifting component from what this host can see: a hold
+marker, a disabled self timer, or the outcome of the last run it recorded for that host.
+
+## Scheduled holds
+
+```bash
+./bin/upkeeper hold show
+./bin/upkeeper hold clear laptop --reason "T3 reinstalled after the mise Node upgrade"
+```
+
+A scheduled run leaves `~/.local/state/dev-fleet/scheduled-holds/<host>.hold` when it fails
+or loses its output, and later runs refuse that host until the marker is cleared. `hold clear`
+removes exactly one marker and records the reason in `<host>.hold.cleared`. See
+[scheduled convergence](docs/scheduled-convergence.md) and [recovery](docs/recovery.md).
 
 Both commands use local execution for the inventory entry whose verified machine identity
 matches the controller and SSH for every other host. SSH always uses batch mode, strict

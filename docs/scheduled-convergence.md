@@ -34,6 +34,25 @@ that host until an operator observes its state and removes that exact marker.
 Do not remove a hold just to retry. Manual pull remains an explicit operator action.
 Other hosts can still converge independently.
 
+The marker names the run that wrote it and the command that clears it.
+`upkeeper hold show [--json]` lists every marker on the host that keeps it, with
+its content, age and, when the local run store has that run, the run record and
+its result. `upkeeper hold clear <host> --reason TEXT` removes exactly that marker
+and appends who cleared it, when, why and what the marker said to
+`<host>.hold.cleared` beside it. A clear without `--reason`, or for a host with no
+marker, exits 2 and changes nothing. Markers live where the dispatch ran: a
+self-converging host keeps its own, Normandy keeps the fleet timer's.
+
+A scheduled run's stdout is one JSON document. Its failures are repeated on
+stderr, one line per failed host or component with the untruncated first line of
+the error, followed by the run record path and the exit code, so the journal
+shows why the run failed without reading the document. `upkeeper status` prints a
+reason beside each drifting component from what the controller can see locally: a
+hold marker it keeps, its own `upkeeper-self.timer` being disabled, or the last
+run it recorded for that host (a component failure, a deferral, or a host-level
+refusal such as a hold). When none of that is on the controller, the reason says
+"reason unavailable from this host" and points at the host's own run store.
+
 The runner posts once to the fleet feed only if a component/legacy updater changed
 or the run needs attention. Quiet convergence and pre-dispatch offline skips produce
 no post. Source is `upkeeper-pull`, tags are `citadel upkeeper`. Reports are redacted.

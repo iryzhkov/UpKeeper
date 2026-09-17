@@ -45,6 +45,7 @@ var commandSummaries = [][2]string{
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
 	{"install-pull-timer", "install the controller systemd user timer"},
+	{"hold", "show or clear the scheduled hold markers this host keeps"},
 	{"version", "print the exact source commit this binary was built from"},
 }
 
@@ -69,9 +70,30 @@ func helpText(program, command string) string {
 		return fleetPlanHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
+	case "hold":
+		return holdHelp(program)
 	default:
 		return plainHelp(program, command)
 	}
+}
+
+// holdHelp documents the two hold actions. A hold is cleared by name and with
+// a reason, never in bulk: each marker stands for one host somebody has to
+// look at.
+func holdHelp(program string) string {
+	return "usage: " + program + " hold show [-h] [--json]\n" +
+		"       " + program + " hold clear [-h] HOST --reason TEXT [--json]\n\n" +
+		"A scheduled run writes ~/.local/state/dev-fleet/scheduled-holds/HOST.hold\n" +
+		"before it dispatches and removes it only after an understood result. A\n" +
+		"marker that is still there means the run died, lost its output or failed;\n" +
+		"later scheduled runs refuse that host until the marker is cleared.\n\n" +
+		"show lists every marker on this host with its content, age and the run\n" +
+		"that wrote it. clear removes exactly one marker after you have observed the\n" +
+		"host, and records who cleared it, when and why in HOST.hold.cleared.\n\n" +
+		"options:\n" + helpOption + "\n" +
+		describe("  --reason TEXT", "why the hold is safe to clear (clear only; required)") +
+		describe("  --json", "") +
+		"\nexit codes: 0 done, 2 malformed command line or no marker for HOST, 30 refused\n"
 }
 
 func topHelp(program string) string {

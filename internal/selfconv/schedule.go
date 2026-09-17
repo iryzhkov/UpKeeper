@@ -40,7 +40,7 @@ func ConvergeSelf(
 	if err != nil {
 		return nil, 0, err
 	}
-	value, commit, stored, err := release.LoadHistorical(root, revision, runner)
+	value, commit, stored, err := release.LoadHistorical(root, revision, "", runner)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -87,7 +87,7 @@ func ConvergeFleet(
 	if host != "normandy" {
 		return nil, 0, failure.Value("the fleet convergence timer belongs on normandy only")
 	}
-	value, commit, stored, err := release.LoadHistorical(root, revision, runner)
+	value, commit, stored, err := release.LoadHistorical(root, revision, "", runner)
 	if err != nil {
 		return nil, 0, err
 	}
