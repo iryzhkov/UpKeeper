@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -17,7 +20,41 @@ func init() {
 var (
 	t3ServedPattern  = regexp.MustCompile(`T3 server (\d+\.\d+\.\d+) `)
 	t3ThreadsPattern = regexp.MustCompile(`shell snapshot: \d+ threads, (\d+) running`)
+	// t3ExecStartPattern reads the program out of systemd's ExecStart rendering,
+	// which looks like "{ path=/home/x/.local/share/mise/shims/t3 ; argv[]=... }".
+	t3ExecStartPattern = regexp.MustCompile(`path=([^\s;]+)`)
 )
+
+// t3ServiceBinary asks systemd which program the T3 unit starts and whether
+// that program is still on disk. The second answer is what separates "T3 is
+// not answering" from "a Node upgrade deleted T3": the steward's check fails
+// identically in both cases. A unit systemd cannot describe answers nil for
+// both, never a guess.
+func t3ServiceBinary(c *Context, service string) (any, any) {
+	if service == "" {
+		return nil, nil
+	}
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "ExecStart", "--value"},
+		10*time.Second, "")
+	if !result.OK {
+		return nil, nil
+	}
+	match := t3ExecStartPattern.FindStringSubmatch(result.Output)
+	if match == nil {
+		return nil, nil
+	}
+	path := strings.ReplaceAll(match[1], "%h", c.Home)
+	if !filepath.IsAbs(path) {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path, false
+	}
+	_, err = os.Stat(resolved)
+	return path, err == nil
+}
 
 // t3StewardBinary is the steward binary this release pins, which is also the
 // program that answers for the running T3.
@@ -50,9 +87,26 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 			observed["running_threads"] = running
 		}
 	}
-	observed["service_active"] = c.UnitActive(adapterSpecString(spec, "service"))
+	service := adapterSpecString(spec, "service")
+	observed["service"] = service
+	observed["service_active"] = c.UnitActive(service)
 	observed["check_ok"] = check.OK
+	if !check.OK {
+		// The first line is what a refusal quotes; the tail is already bounded.
+		observed["check_error"] = firstLine(check.Output)
+	}
+	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
 	return observed, nil
+}
+
+// firstLine returns the first non-empty line of a command's output.
+func firstLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // t3Idle reports whether an observation proves that no thread is running.
