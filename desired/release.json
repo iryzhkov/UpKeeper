@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-09-17T02:39:55.307758Z",
+  "captured_at": "2026-09-17T03:01:24.322426Z",
   "captured_from": "omarchy-pc",
   "components": {
     "agent-config": {
@@ -1823,7 +1823,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.62"
+        "steward_version": "0.11.0-rc.63"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -1837,7 +1837,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.62"
+      "version": "0.11.0-rc.63"
     },
     "worker-configuration": {
       "hosts": {
