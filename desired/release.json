@@ -1737,7 +1737,7 @@
         "fleet-ops": {
           "default_ref": "main",
           "eligible_workers": [
-            "homelab"
+            "normandy"
           ],
           "repository": "ssh://igor@normandy/home/igor/Work/homelab-cli",
           "setup_profile": "git-status"
