@@ -1699,6 +1699,14 @@
           "repository": "ssh://igor@normandy/home/igor/.cache/track-s-campaign/dogfood-repo",
           "setup_profile": "git-status"
         },
+        "fleet-ops": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/homelab-cli",
+          "setup_profile": "git-status"
+        },
         "huyang-fleet": {
           "default_ref": "feature/huyang",
           "eligible_workers": [
