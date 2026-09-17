@@ -1,6 +1,7 @@
 package selfconv_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/agent"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
+	"github.com/iryzhkov/UpKeeper/internal/runstore"
 	"github.com/iryzhkov/UpKeeper/internal/selfconv"
 )
 
@@ -226,6 +228,114 @@ func TestTheHoldMarkerSurvivesAnUnderstoodFailureAndClearsOnSuccess(t *testing.T
 	}
 	if !strings.Contains(result["error"].(string), "scheduled hold requires operator observation") {
 		t.Errorf("result is %#v", result)
+	}
+}
+
+const holdTestRunID = "20260917T140905Z-6b2c83ab"
+
+// holdTestLeave runs one dispatch that leaves its marker behind.
+func holdTestLeave(t *testing.T, directory, host string) {
+	t.Helper()
+	holds := &selfconv.HoldRunner{
+		Directory: directory,
+		Inner: func(inventory.HostSpec, agent.Payload, time.Duration, bool) map[string]any {
+			return map[string]any{"reachable": false, "result": "failed"}
+		},
+	}
+	holds.Run(inventory.HostSpec{Name: host}, agent.Payload{RunID: holdTestRunID}, time.Minute, true)
+}
+
+// The marker is the only thing an operator finds after a lost run, so it has
+// to say which run wrote it and which command clears it.
+func TestTheHoldMarkerNamesTheRunAndTheClearCommand(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "scheduled-holds")
+	holdTestLeave(t, directory, "laptop")
+	content, err := os.ReadFile(filepath.Join(directory, "laptop.hold"))
+	if err != nil {
+		t.Fatalf("the hold was not kept: %v", err)
+	}
+	for _, expected := range []string{
+		"run " + holdTestRunID,
+		"Observe the host before clearing",
+		"upkeeper hold clear laptop --reason",
+	} {
+		if !strings.Contains(string(content), expected) {
+			t.Errorf("the marker does not say %q:\n%s", expected, content)
+		}
+	}
+}
+
+func TestHoldsAreListedAndClearedWithAReason(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "scheduled-holds")
+	store := &runstore.Store{Root: filepath.Join(t.TempDir(), "runs")}
+	now := time.Now()
+
+	markers, err := selfconv.ListHolds(directory, store, now)
+	if err != nil || len(markers) != 0 {
+		t.Fatalf("an absent hold directory is an empty list, got %v, %v", markers, err)
+	}
+
+	record, err := runstore.New(holdTestRunID, "pull", "laptop", nil,
+		[]string{"t3-steward"}, []string{"laptop"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	record.Phase, record.Result = "finished", "exit-40"
+	if _, err := store.Write(record); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	holdTestLeave(t, directory, "laptop")
+
+	markers, err = selfconv.ListHolds(directory, store, now.Add(26*time.Hour))
+	if err != nil || len(markers) != 1 {
+		t.Fatalf("one marker expected, got %v, %v", markers, err)
+	}
+	marker := markers[0]
+	if marker.Host != "laptop" || marker.Path != filepath.Join(directory, "laptop.hold") ||
+		!strings.Contains(marker.Content, "Observe the host") ||
+		marker.RunID != holdTestRunID || marker.RunRecord != store.Path(holdTestRunID) ||
+		marker.RunResult != "exit-40" || marker.Age < 25*time.Hour {
+		t.Fatalf("marker is %#v", marker)
+	}
+
+	// A host without a marker is nothing to do, reported as such.
+	_, _, err = selfconv.ClearHold(directory, "homelab", "looked at it", "igor", now)
+	if !errors.Is(err, selfconv.ErrNoHold) {
+		t.Fatalf("clearing an absent marker produced %v", err)
+	}
+
+	cleared, logPath, err := selfconv.ClearHold(
+		directory, "laptop", "observed the host; T3 reinstalled", "igor", now)
+	if err != nil {
+		t.Fatalf("ClearHold: %v", err)
+	}
+	if cleared.Host != "laptop" || cleared.RunID != holdTestRunID {
+		t.Errorf("cleared marker is %#v", cleared)
+	}
+	if _, err := os.Stat(marker.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the marker survived the clear: %v", err)
+	}
+	if logPath != filepath.Join(directory, "laptop.hold.cleared") {
+		t.Errorf("the clear was logged at %q", logPath)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("the clear left no record: %v", err)
+	}
+	for _, expected := range []string{
+		"observed the host; T3 reinstalled", `"user":"igor"`, holdTestRunID, "Observe the host",
+	} {
+		if !strings.Contains(string(logged), expected) {
+			t.Errorf("the cleared log does not carry %q:\n%s", expected, logged)
+		}
+	}
+	// Clearing exactly one marker: the second call finds nothing.
+	if _, _, err := selfconv.ClearHold(directory, "laptop", "again", "igor", now); !errors.Is(err, selfconv.ErrNoHold) {
+		t.Fatalf("a second clear produced %v", err)
+	}
+	markers, err = selfconv.ListHolds(directory, store, now)
+	if err != nil || len(markers) != 0 {
+		t.Fatalf("the cleared log was listed as a marker: %v, %v", markers, err)
 	}
 }
 

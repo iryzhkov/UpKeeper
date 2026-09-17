@@ -216,3 +216,47 @@ func TestT3IdleNeedsAProvenCount(t *testing.T) {
 		t.Fatal("a proven zero is idle")
 	}
 }
+
+// The service unit names the T3 program it starts. Whether that program still
+// exists on disk is the one fact that separates "T3 is not answering" from "a
+// Node upgrade deleted T3", so the observation carries it.
+func TestT3ObserveReportsWhetherTheServiceBinaryExists(t *testing.T) {
+	context, runner := t3TestPrepare(t, t3TestHost{
+		installed: t3TestPinned, served: t3TestPinned, checkOK: true, active: true,
+	})
+	binary := context.Path(".local/share/mise/shims/t3")
+	inner := runner.handle
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "show", "t3code.service", "ExecStart") {
+			return procx.Result{Stdout: "{ path=" + binary + " ; argv[]=" + binary +
+				" serve --host 127.0.0.1 --port 7391 ; ignore_errors=no ; pid=0 }\n"}
+		}
+		return inner(command)
+	}
+	observed, err := t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path"] != binary || observed["installed_path_exists"] != false {
+		t.Fatalf("a missing service binary was not reported: %v", observed)
+	}
+	adapterTestWrite(t, binary, "#!/bin/sh\n")
+	observed, err = t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path_exists"] != true {
+		t.Fatalf("a present service binary was not reported: %v", observed)
+	}
+
+	// A unit systemd cannot describe leaves the question open rather than
+	// answering it either way.
+	runner.handle = inner
+	observed, err = t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path"] != nil || observed["installed_path_exists"] != nil {
+		t.Fatalf("an unknown service binary was guessed at: %v", observed)
+	}
+}

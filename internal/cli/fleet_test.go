@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,6 +160,62 @@ func TestFleetPlanReportsAndWritesNothing(t *testing.T) {
 		if after[path] != content {
 			t.Errorf("fleet-plan rewrote %s", path)
 		}
+	}
+}
+
+// fleetCheckout turns a configuration root into a one-commit Git checkout, so
+// that --previous can be resolved by the real git.
+func fleetCheckout(t *testing.T, root string) {
+	t.Helper()
+	for _, argv := range [][]string{
+		{"init", "--quiet", "--initial-branch=main"},
+		{"add", "."},
+		{"-c", "user.name=test", "-c", "user.email=test@example.invalid",
+			"commit", "--quiet", "--no-gpg-sign", "-m", "Publish a release"},
+	} {
+		command := exec.Command("git", append([]string{"-C", root}, argv...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", argv, err, output)
+		}
+	}
+}
+
+// --previous accepts whatever git resolves, and a refusal names --previous
+// rather than a flag fleet-plan does not have.
+func TestFleetPlanPreviousResolvesSymbolicRefsAndNamesItsOwnFlag(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	root := fleetConfigRoot(t, true)
+	fleetCheckout(t, root)
+	t.Setenv(cli.ConfigRootEnvironment, root)
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(root)
+
+	var out, errs bytes.Buffer
+	code := cli.Main("upkeeper", []string{"fleet-plan", "--previous", "HEAD", "--json"},
+		cli.Streams{Out: &out, Err: &errs})
+	if code != 0 {
+		t.Fatalf("--previous HEAD exited %d: %s", code, errs.String())
+	}
+	report, err := canonjson.DecodeObject(out.Bytes())
+	if err != nil {
+		t.Fatalf("the report is not JSON: %v\n%s", err, out.String())
+	}
+	if report["command"] != "fleet-plan" {
+		t.Errorf("command is %v", report["command"])
+	}
+
+	out.Reset()
+	errs.Reset()
+	code = cli.Main("upkeeper", []string{"fleet-plan", "--previous", "no-such-release"},
+		cli.Streams{Out: &out, Err: &errs})
+	if code != 30 {
+		t.Fatalf("an unknown revision exited %d: %s", code, errs.String())
+	}
+	if !strings.Contains(errs.String(), "--previous no-such-release does not resolve to a commit") ||
+		strings.Contains(errs.String(), "--to") {
+		t.Errorf("stderr is %q", errs.String())
 	}
 }
 
