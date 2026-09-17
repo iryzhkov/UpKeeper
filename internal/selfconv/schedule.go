@@ -57,6 +57,7 @@ func ConvergeSelf(
 	}
 	return converge.Fleet(config, value, converge.Options{
 		Hosts:          []string{host},
+		Command:        "self-pull",
 		SelfOnly:       true,
 		DryRun:         dryRun,
 		Timeout:        DefaultTimeout,
@@ -104,6 +105,7 @@ func ConvergeFleet(
 	}
 	return converge.Fleet(config, value, converge.Options{
 		Hosts:           config.HostNames(),
+		Command:         "scheduled-pull",
 		DryRun:          dryRun,
 		Timeout:         DefaultTimeout,
 		ManifestCommit:  &commit,

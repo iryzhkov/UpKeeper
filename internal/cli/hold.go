@@ -129,7 +129,10 @@ func printHolds(out io.Writer, directory string, markers []selfconv.HoldMarker) 
 		for _, line := range strings.Split(strings.TrimSpace(marker.Content), "\n") {
 			fmt.Fprintf(out, "  %s\n", line)
 		}
-		fmt.Fprintf(out, "  clear with: upkeeper hold clear %s --reason TEXT\n", marker.Host)
+		// A marker written before markers named the command gets the line here.
+		if !strings.Contains(marker.Content, "upkeeper hold clear") {
+			fmt.Fprintf(out, "  clear with: upkeeper hold clear %s --reason TEXT\n", marker.Host)
+		}
 	}
 }
 

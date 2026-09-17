@@ -544,15 +544,22 @@ func TestStewardRunningT3RangeRefusalsSayWhatWasObserved(t *testing.T) {
 				"no T3 server version); no safe pair transition",
 		},
 		{
-			name: "a service binary missing on disk outranks the failed check",
+			name: "a failed check with the program missing on disk names the program",
 			observed: map[string]any{
 				"check_ok":              false,
 				"check_error":           "exec: no such file or directory",
-				"installed_path":        "/home/igor/.local/share/mise/shims/t3",
+				"installed_path":        "/home/igor/.local/share/mise/installs/node/26.7.0/bin/node",
 				"installed_path_exists": false,
 			},
-			want: "running T3 binary missing on disk: /home/igor/.local/share/mise/shims/t3 " +
+			want: "running T3 binary missing on disk: /home/igor/.local/share/mise/installs/node/26.7.0/bin/node " +
 				"(installed 0.0.38 from the manifest); restart T3 after reinstalling, then retry",
+		},
+		{
+			name: "a check without a version and the program missing names the program too",
+			observed: map[string]any{
+				"check_ok": true, "installed_path": "/x/node", "installed_path_exists": false,
+			},
+			want: "running T3 binary missing on disk: /x/node (installed 0.0.38 from the manifest)",
 		},
 	}
 	for _, test := range cases {
@@ -569,5 +576,22 @@ func TestStewardRunningT3RangeRefusalsSayWhatWasObserved(t *testing.T) {
 	inRange := map[string]any{"check_ok": true, "served": "0.0.38", "installed_path_exists": true}
 	if err := stewardRunningT3InRange(inRange, "0.0.38", "0.0.39", "0.0.38"); err != nil {
 		t.Fatalf("a running T3 inside the range was refused: %v", err)
+	}
+	// A server that still answers from a deleted program is inside the range
+	// and proceeds; the missing program is a warning, not a new precondition.
+	stillServing := map[string]any{
+		"check_ok": true, "served": "0.0.38",
+		"installed_path": "/x/node", "installed_path_exists": false,
+	}
+	if err := stewardRunningT3InRange(stillServing, "0.0.38", "0.0.39", "0.0.38"); err != nil {
+		t.Fatalf("an answering in-range T3 was refused for its missing program: %v", err)
+	}
+	outOfRange := map[string]any{
+		"check_ok": true, "served": "0.0.40",
+		"installed_path": "/x/node", "installed_path_exists": false,
+	}
+	err := stewardRunningT3InRange(outOfRange, "0.0.38", "0.0.39", "0.0.38")
+	if err == nil || !strings.HasPrefix(err.Error(), "running T3 0.0.40 is outside") {
+		t.Fatalf("an answering out-of-range T3 got %v", err)
 	}
 }

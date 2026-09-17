@@ -89,14 +89,23 @@ type componentOutcome struct {
 	Actions []string
 }
 
-// lastRun is the newest recorded run on this host that dispatched to a host.
+// lastRun is one scheduled run this host recorded that dispatched to a host.
 type lastRun struct {
-	RunID      string
-	CreatedAt  string
+	RunID     string
+	Command   string
+	CreatedAt string
+	// Selected is the component list the run was asked to converge; a run that
+	// never selected a component says nothing about that component's drift.
+	Selected   []string
 	HostResult string
 	HostError  string
 	Components map[string]componentOutcome
 }
+
+// scheduledCommands are the run records that count as scheduled convergence.
+// A manual pull is recorded too, but it is not the answer to "why has the
+// scheduled pull not converged this".
+var scheduledCommands = map[string]bool{"self-pull": true, "scheduled-pull": true}
 
 // driftEvidence is everything this host can say about why a scheduled pull
 // has not converged a drifting component. All of it is local: the hold
@@ -108,7 +117,9 @@ type driftEvidence struct {
 	// selfTimerEnabled is nil when the timer state was not observed.
 	selfTimerEnabled *bool
 	holds            map[string]selfconv.HoldMarker
-	lastRuns         map[string]lastRun
+	// scheduledRuns holds, per host, the scheduled runs recorded here, newest
+	// first.
+	scheduledRuns map[string][]lastRun
 }
 
 // gatherDriftEvidence reads the local state directory and this host's timer.
@@ -116,9 +127,9 @@ type driftEvidence struct {
 // status still reports the drift it observed.
 func gatherDriftEvidence(controller string, process procx.Runner) driftEvidence {
 	evidence := driftEvidence{
-		controller: controller,
-		holds:      map[string]selfconv.HoldMarker{},
-		lastRuns:   map[string]lastRun{},
+		controller:    controller,
+		holds:         map[string]selfconv.HoldMarker{},
+		scheduledRuns: map[string][]lastRun{},
 	}
 	store, err := runstore.Default()
 	if err != nil {
@@ -137,7 +148,7 @@ func gatherDriftEvidence(controller string, process procx.Runner) driftEvidence 
 	}
 	for index := len(ids) - 1; index >= 0; index-- {
 		record, err := store.Read(ids[index])
-		if err != nil {
+		if err != nil || !scheduledCommands[text(record["command"])] {
 			continue
 		}
 		details, _ := record["details"].(map[string]any)
@@ -147,10 +158,8 @@ func gatherDriftEvidence(controller string, process procx.Runner) driftEvidence 
 			if name == "" {
 				continue
 			}
-			if _, seen := evidence.lastRuns[name]; seen {
-				continue
-			}
-			evidence.lastRuns[name] = lastRunOf(ids[index], record, host)
+			evidence.scheduledRuns[name] = append(
+				evidence.scheduledRuns[name], lastRunOf(ids[index], record, host))
 		}
 	}
 	if controller != "unknown" && process != nil {
@@ -169,7 +178,9 @@ func gatherDriftEvidence(controller string, process procx.Runner) driftEvidence 
 func lastRunOf(runID string, record, host map[string]any) lastRun {
 	value := lastRun{
 		RunID:      runID,
+		Command:    text(record["command"]),
 		CreatedAt:  text(record["created_at"]),
+		Selected:   stringList(record["components"]),
 		HostResult: text(host["result"]),
 		HostError:  text(host["error"]),
 		Components: map[string]componentOutcome{},
@@ -219,23 +230,37 @@ func driftReason(host, component string, evidence driftEvidence) string {
 		parts = append(parts, selfTimerUnit+
 			" is disabled on this host, so no scheduled run will converge it")
 	}
-	run, recorded := evidence.lastRuns[host]
+	run, recorded := lastScheduledRun(evidence.scheduledRuns[host], component)
 	switch {
 	case recorded:
 		parts = append(parts, lastRunReason(run, component))
 	case local:
-		parts = append(parts, "no scheduled run recorded on this host")
+		parts = append(parts, "no scheduled run selecting "+component+" recorded on this host")
 	case len(parts) > 0:
-		parts = append(parts, "no run record for "+host+" on this host")
+		parts = append(parts, "no scheduled run record for "+host+" on this host")
 	default:
-		return fmt.Sprintf("reason unavailable from this host: no hold marker and no run record "+
-			"for %s here; inspect %s's own run store and timer", host, host)
+		return fmt.Sprintf("reason unavailable from this host: no hold marker and no scheduled "+
+			"run record for %s here; inspect %s's own run store and timer", host, host)
 	}
 	return strings.Join(parts, "; ")
 }
 
+// lastScheduledRun picks the newest scheduled run that selected the component.
+// A run that did not select it says nothing about it.
+func lastScheduledRun(runs []lastRun, component string) (lastRun, bool) {
+	for _, run := range runs {
+		for _, selected := range run.Selected {
+			if selected == component {
+				return run, true
+			}
+		}
+	}
+	return lastRun{}, false
+}
+
+// lastRunReason reports what the run recorded, and only that.
 func lastRunReason(run lastRun, component string) string {
-	prefix := fmt.Sprintf("last recorded run %s (%s)", run.RunID, run.CreatedAt)
+	prefix := fmt.Sprintf("last %s run %s (%s)", run.Command, run.RunID, run.CreatedAt)
 	outcome, reached := run.Components[component]
 	if !reached {
 		hostOutcome := "host " + run.HostResult
@@ -254,7 +279,6 @@ func lastRunReason(run lastRun, component string) string {
 		}
 		return fmt.Sprintf("%s deferred %s: %s", prefix, component, detail)
 	default:
-		return fmt.Sprintf("%s reported %s %s, so the drift appeared after it",
-			prefix, component, outcome.State)
+		return fmt.Sprintf("%s reported %s %s", prefix, component, outcome.State)
 	}
 }

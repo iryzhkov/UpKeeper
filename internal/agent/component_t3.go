@@ -25,14 +25,29 @@ var (
 	t3ExecStartPattern = regexp.MustCompile(`path=([^\s;]+)`)
 )
 
-// t3ServiceBinary asks systemd which program the T3 unit starts and whether
-// that program is still on disk. The second answer is what separates "T3 is
-// not answering" from "a Node upgrade deleted T3": the steward's check fails
-// identically in both cases. A unit systemd cannot describe answers nil for
-// both, never a guess.
+// t3ProcRoot is where a running unit's program is read from. A test points it
+// at a directory of its own; production reads the kernel's.
+var t3ProcRoot = "/proc"
+
+// t3ServiceBinary finds the program that actually runs the T3 unit and reports
+// whether it is still on disk. That answer is what separates "T3 is not
+// answering" from "a Node upgrade deleted T3": the steward's check fails
+// identically in both cases.
+//
+// The unit's ExecStart is not that program on this fleet: it is the mise shim,
+// a symlink to /usr/bin/mise, and both survive a Node upgrade that removes the
+// Node prefix T3 lives under. So the running process is asked first, through
+// /proc/<MainPID>/exe, which the kernel marks "(deleted)" once the binary is
+// gone. Without a running process the ExecStart path is resolved, and when it
+// resolves to mise, `mise which t3` names the real program. The mise binary
+// itself is never reported as existing T3; when nothing better is known the
+// answer is nil, not a guess.
 func t3ServiceBinary(c *Context, service string) (any, any) {
 	if service == "" {
 		return nil, nil
+	}
+	if path, exists, known := t3RunningProgram(c, service); known {
+		return path, exists
 	}
 	result := c.Run(
 		[]string{"systemctl", "--user", "show", service, "-p", "ExecStart", "--value"},
@@ -52,8 +67,47 @@ func t3ServiceBinary(c *Context, service string) (any, any) {
 	if err != nil {
 		return path, false
 	}
-	_, err = os.Stat(resolved)
-	return path, err == nil
+	if filepath.Base(resolved) != "mise" {
+		_, err = os.Stat(resolved)
+		return path, err == nil
+	}
+	// The launcher is mise; ask it which t3 it would run. A mise that cannot
+	// answer leaves the question open rather than vouching for itself.
+	which := c.Run([]string{resolved, "which", "t3"}, 15*time.Second, "")
+	target := firstLine(which.Output)
+	if !which.OK || !filepath.IsAbs(target) {
+		return path, nil
+	}
+	if _, err := os.Stat(target); err != nil {
+		return target, false
+	}
+	return target, true
+}
+
+// t3RunningProgram reads the program behind the unit's main process. The
+// third result is false when there is no running process or its executable
+// link cannot be read; then the caller falls back to the unit definition.
+func t3RunningProgram(c *Context, service string) (string, bool, bool) {
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "MainPID", "--value"},
+		10*time.Second, "")
+	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
+	if !result.OK || err != nil || pid <= 0 {
+		return "", false, false
+	}
+	target, err := os.Readlink(filepath.Join(t3ProcRoot, strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return "", false, false
+	}
+	if deleted := strings.TrimSuffix(target, " (deleted)"); deleted != target {
+		return deleted, false, true
+	}
+	if filepath.Base(target) == "mise" {
+		// mise is still execing the shim; the program has not started.
+		return "", false, false
+	}
+	_, err = os.Stat(target)
+	return target, err == nil, true
 }
 
 // t3StewardBinary is the steward binary this release pins, which is also the
@@ -96,6 +150,14 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["check_error"] = firstLine(check.Output)
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
+	if exists, known := observed["installed_path_exists"].(bool); known && !exists {
+		// A server that still answers from a deleted program keeps working until
+		// it is restarted; the warning travels with the observation so a report
+		// shows it even when nothing is refused.
+		observed["warning"] = "T3 program missing on disk: " +
+			adapterSpecString(observed, "installed_path") +
+			"; a restart will fail until T3 is reinstalled"
+	}
 	return observed, nil
 }
 

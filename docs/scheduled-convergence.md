@@ -49,9 +49,19 @@ the error, followed by the run record path and the exit code, so the journal
 shows why the run failed without reading the document. `upkeeper status` prints a
 reason beside each drifting component from what the controller can see locally: a
 hold marker it keeps, its own `upkeeper-self.timer` being disabled, or the last
-run it recorded for that host (a component failure, a deferral, or a host-level
-refusal such as a hold). When none of that is on the controller, the reason says
-"reason unavailable from this host" and points at the host's own run store.
+scheduled run (`self-pull` or `scheduled-pull`; a manual pull is not scheduled
+evidence) it recorded for that host that selected the component (a component
+failure, a deferral, or a host-level refusal such as a hold). When none of that is on
+the controller, the reason says "reason unavailable from this host" and points at
+the host's own run store. Run records written by `self-pull` and `scheduled-pull`
+now carry that command name; records from earlier releases say `pull` and are not
+counted as scheduled evidence.
+
+The T3 pair refusal reads the program behind `t3code.service` through the running
+process (`/proc/<MainPID>/exe`, which the kernel marks deleted when a mise Node
+upgrade removed it) or, when nothing is running, through `mise which t3`; the mise
+shim itself is never taken as evidence that T3 exists. A missing program under a
+server that still answers is a warning in the observation, not a refusal.
 
 The runner posts once to the fleet feed only if a component/legacy updater changed
 or the run needs attention. Quiet convergence and pre-dispatch offline skips produce

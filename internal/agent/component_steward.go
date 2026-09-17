@@ -351,26 +351,29 @@ func stewardStage(
 
 // stewardRunningT3InRange refuses a pair transition the running T3 cannot take.
 //
-// Every refusal says what was observed and what to do next. The observation
-// that could not be made is reported as such, because "outside the range" and
-// "could not be read" call for different remedies, and a T3 whose program has
-// been deleted from under its unit is named outright: that is the case the
-// steward's check cannot distinguish from a server that is merely down.
+// The precondition is unchanged from the original: a served version inside
+// the candidate's range proceeds. What changed is what a refusal says. An
+// observation that could not be made is reported as such, because "outside
+// the range" and "could not be read" call for different remedies; and when the
+// version could not be read because the program behind the T3 unit has been
+// deleted, that is named outright, since the steward's check cannot tell it
+// from a server that is merely down. A missing program under a server that
+// still answers is a warning in the observation, not a refusal.
 func stewardRunningT3InRange(current map[string]any, low, high, pinned string) error {
-	if exists, known := current["installed_path_exists"].(bool); known && !exists {
-		path, _ := current["installed_path"].(string)
-		installed := pinned
-		if installed == "" {
-			installed = "an unknown version"
-		}
-		return Failf("running T3 binary missing on disk: %s (installed %s from the manifest); "+
-			"restart T3 after reinstalling, then retry", path, installed)
-	}
 	service, _ := current["service"].(string)
 	if service == "" {
 		service = "t3code.service"
 	}
 	unobserved := func(cause string) error {
+		if exists, known := current["installed_path_exists"].(bool); known && !exists {
+			path, _ := current["installed_path"].(string)
+			installed := pinned
+			if installed == "" {
+				installed = "an unknown version"
+			}
+			return Failf("running T3 binary missing on disk: %s (installed %s from the manifest); "+
+				"restart T3 after reinstalling, then retry", path, installed)
+		}
 		return Failf("running T3 version could not be observed (%s); no safe pair transition. "+
 			"Check that T3 is serving (systemctl --user status %s) and that the steward "+
 			"reaches it, then retry", cause, service)
