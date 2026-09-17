@@ -1623,6 +1623,17 @@
           "transport": "ssh",
           "worker_id": "homelab"
         },
+        "normandy": {
+          "admin_credential_ref": "secretref:f03-admin/normandy",
+          "credential_ref": "secretref:f02-protocol/normandy",
+          "exceptions": {
+            "cpu_class": "low",
+            "executor_slots": 2
+          },
+          "profile": "standard",
+          "transport": "ssh",
+          "worker_id": "normandy"
+        },
         "omarchy-pc": {
           "admin_credential_ref": "secretref:f03-admin/omarchy-pc",
           "credential_ref": "secretref:f02-protocol/omarchy-pc",
@@ -1690,6 +1701,22 @@
         }
       },
       "projects": {
+        "citadel": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "normandy"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/citadel",
+          "setup_profile": "git-status"
+        },
+        "dev-fleet": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "normandy"
+          ],
+          "repository": "ssh://git@git.ryzhkov.dev/igor/dev-fleet.git",
+          "setup_profile": "git-status"
+        },
         "dogfood-sum": {
           "default_ref": "main",
           "eligible_workers": [
@@ -1705,6 +1732,14 @@
             "homelab"
           ],
           "repository": "ssh://igor@normandy/home/igor/Work/homelab-cli",
+          "setup_profile": "git-status"
+        },
+        "huyang": {
+          "default_ref": "feature/huyang",
+          "eligible_workers": [
+            "normandy"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/huyang",
           "setup_profile": "git-status"
         },
         "huyang-fleet": {
@@ -1754,6 +1789,14 @@
             "omarchy-pc"
           ],
           "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
+          "setup_profile": "git-status"
+        },
+        "t3-steward": {
+          "default_ref": "fix/terminal-observation-recovery-20260911",
+          "eligible_workers": [
+            "normandy"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/Work/t3-steward",
           "setup_profile": "git-status"
         },
         "upkeeper-migration": {
