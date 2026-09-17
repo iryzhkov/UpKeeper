@@ -1,20 +1,27 @@
-.PHONY: test lint syntax check-mode redaction gate
+.PHONY: sync test lint syntax check-mode redaction gate
 .PHONY: go-build go-test go-race go-vet go-format go-cross go-gate
 
-test:
+# Every Python target needs the locked development environment, which a fresh
+# checkout does not have: `uv run pytest` fails with "Failed to spawn: pytest"
+# until the extras are installed. uv sync is idempotent and quick when nothing
+# changed, so the targets depend on it directly rather than on a marker file.
+sync:
+	uv sync --all-extras
+
+test: sync
 	uv run pytest
 
-lint:
+lint: sync
 	uv run ruff check src tests scripts
 	uv run python scripts/run-captured ansible-lint --offline playbooks
 
-syntax:
+syntax: sync
 	uv run python scripts/run-captured ansible-playbook playbooks/status.yml --syntax-check
 
-check-mode:
+check-mode: sync
 	uv run python scripts/run-captured ansible-playbook -i tests/fixtures/localhost_inventory.yml playbooks/status.yml --check
 
-redaction:
+redaction: sync
 	uv run pytest tests/test_redaction.py
 
 gate: lint test syntax check-mode redaction
