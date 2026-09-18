@@ -25,7 +25,9 @@ renders one spelling however it was written.
 
 `profiles`: named reusable host profiles, at least `standard` and `build`. Each carries
 `cpu_class`, `executor_slots`, `capabilities`, `provider_instances`, `models` (a map from
-provider instance to its explicit desired model allowlist) and `quota_pools`.
+provider instance to its explicit desired model allowlist), `quota_pools` and, optionally,
+`quota_bindings` (a map from provider instance to the one quota pool the coordinator charges
+its work to; see "Quota bindings" below).
 
 `hosts`: one entry per worker host, keyed by the inventory host name. Each carries `profile`,
 `worker_id` (which must equal the key), `transport`, `credential_ref`, `admin_credential_ref` and
@@ -49,6 +51,39 @@ authenticated or advertised.
 
 An unknown `schema_version` fails closed, and so does an unknown field inside a known version.
 Every key set in this component is closed, at the top level and in every nested object.
+`quota_bindings` is the one optional profile key: a document authored before it existed
+validates unchanged, and a document that carries it is validated as strictly as any other key.
+
+## Quota bindings
+
+`quota_bindings` maps a provider instance to the quota pool the coordinator may charge that
+instance's work to. It is authorization, exactly as a model allowlist is: it says which pool an
+instance is allowed to draw from. It never claims that the instance is installed on the host,
+signed in, enabled, or advertising any model; those remain facts only the worker's inventory
+and the coordinator's accepted snapshot can state, and the projection still never claims them.
+
+Every instance a binding names must be in the profile's `provider_instances`, and every pool
+it names must be in the profile's `quota_pools`; either mismatch is refused, because a binding
+nobody can act on is dead authorization. One instance binds to one pool. A host exception may
+override the binding for that host, and may introduce `quota_bindings` even when its profile
+has none, because the exception is the reviewed place one worker differs from its class.
+
+The coordinator projection renders `quota_bindings` in a worker's entry only when the worker's
+resolved profile binds something. A worker that binds nothing projects the exact bytes it did
+before the field existed, so a release that never authored a binding changes nothing on the
+coordinator.
+
+**Until the corresponding t3-steward change lands, the coordinator does not read this
+field.** It reads `coordinator-fleet.json` with unknown fields refused, so a projection that
+carries `quota_bindings` is rejected by a coordinator that predates that change, its reload
+receipt says so, and the `steward-fleet-configuration` convergence on the coordinator host
+fails with that receipt rather than applying half of the intent. Authoring a binding is
+therefore safe only once the coordinator accepts the field; the intended contract on that
+side is that the projected binding is used when `backlog_v2.workers.<w>.providers.<instance>`
+carries no explicit `quota_pool`, that an explicit `quota_pool` in the coordinator's own
+configuration still wins, and that an instance with desired models and no binding from either
+source is dropped for that worker with one warning naming it rather than failing the whole
+configuration. Once that lands, registering a provider is one release edit.
 
 This amends the original wording, which said unknown fields were preserved when they could be
 round-tripped. A field nothing validates is a field a credential value can be authored into,
@@ -72,9 +107,12 @@ Rendering is deterministic: the same intent produces the same bytes on every hos
 The coordinator projection owns the full worker and project membership and the fields it renders.
 Removing an entry revokes that authorization; release review must therefore cover the full intended
 catalog, including entries unrelated to the immediate model change. For retained entries Steward
-preserves the base configuration's transport, credentials, quota bindings, execution metadata and
-resource sizes. A new worker or provider needs an explicit matching base binding; a missing
-or unauthorized quota mapping is refused rather than inferred from an unordered list of pools.
+preserves the base configuration's transport, credentials, explicit quota bindings, execution
+metadata and resource sizes. A new worker needs an explicit matching base binding. A new
+provider's quota binding may be authored in the projection (`quota_bindings`, above); a
+coordinator that reads the field uses it where its own configuration binds nothing, and a
+coordinator that does not yet read it refuses the projection. A quota mapping is never inferred
+from an unordered list of pools.
 A new project does not: Steward loads a project the projection names and `backlog_v2.projects`
 does not bind with default local bindings (no credentials, resource locks or directory
 resources), logs one warning naming it at startup, and reports `project-binding-defaulted` as an
@@ -116,7 +154,11 @@ For a project that the previous release did not carry, the plan says that the co
 will load it with default local bindings and lists, per eligible worker, the re-enrollment
 command above. A worker that becomes or stops being eligible for an existing project, and
 every worker of a removed project, is listed the same way, because each of those changes the
-catalog digest that worker is enrolled against.
+catalog digest that worker is enrolled against. So is every worker whose own coordinator entry
+changes (models, quota pools, quota bindings, executor slots, capabilities, cpu class or
+provider instances). A binding that appears, moves to another pool or disappears is its own
+line: "worker W binds I to quota pool P", "rebinds I from quota pool P to Q", "unbinds I from
+quota pool P".
 
 ## Adding and removing a project
 
@@ -134,6 +176,31 @@ enroll nothing. The operator reviews `git diff desired/release.json`, commits, p
 `upkeeper push`, and, once the coordinator has converged, re-enrolls the eligible workers on
 the coordinator host. The coordinator's own `backlog_v2.projects` is not written, and does
 not need to be for a plain Git project (see the rule above).
+
+## Adding and removing a provider
+
+`upkeeper provider add INSTANCE --quota-pool POOL --hosts a,b [--models m1,m2]` and
+`upkeeper provider remove INSTANCE [--hosts a,b]` are the same kind of authored edit for a
+provider instance. `add` puts `INSTANCE` into `provider_instances`, its models into `models`
+(`["*"]` for an instance the targets do not run yet; the authored allowlist is kept for one
+they do, unless `--models` names new ones), `POOL` into `quota_pools` and `INSTANCE: POOL`
+into `quota_bindings`, in one edit, on every named host. When every host of a profile is
+named the profile itself is edited; otherwise each named host's `exceptions` receives all
+four provider keys, built from the merged view of its profile and its existing exceptions, so
+the host reads the same values whether or not the profile changes later. A host whose
+exceptions already override a provider key is edited even when its profile is, because the
+exception would otherwise mask the profile change. The output says which profiles and which
+hosts were edited.
+
+A host the fleet intent does not declare, an instance already bound to a pool on a named host
+(the same pool: "already bound"; another pool: one instance may not draw from two pools) and
+an invalid instance, pool or model name are refused, and a refusal writes nothing. `remove`
+takes the instance, its models and its binding out of the named hosts, or out of every
+profile and host exception when none is named; `quota_pools` is membership rather than a
+binding and is left as authored. The edited manifest is validated with `fleet.Parse`, written
+atomically in the canonical encoding, and the `fleet-plan` diff against `HEAD` is printed,
+with the re-enrollment command for every worker whose entry changed. The commands commit,
+push, pull and enroll nothing.
 
 ## Shared fixtures
 

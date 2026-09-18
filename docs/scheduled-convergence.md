@@ -47,15 +47,23 @@ A scheduled run's stdout is one JSON document. Its failures are repeated on
 stderr, one line per failed host or component with the untruncated first line of
 the error, followed by the run record path and the exit code, so the journal
 shows why the run failed without reading the document. `upkeeper status` prints a
-reason beside each drifting component from what the controller can see locally: a
-hold marker it keeps, its own `upkeeper-self.timer` being disabled, or the last
-scheduled run (`self-pull` or `scheduled-pull`; a manual pull is not scheduled
-evidence) it recorded for that host that selected the component (a component
-failure, a deferral, or a host-level refusal such as a hold). When none of that is on
-the controller, the reason says "reason unavailable from this host" and points at
-the host's own run store. Run records written by `self-pull` and `scheduled-pull`
-now carry that command name; records from earlier releases say `pull` and are not
-counted as scheduled evidence.
+reason beside each drifting component: a hold marker for the host, the host's
+`upkeeper-self.timer` being disabled, or the last scheduled run (`self-pull` or
+`scheduled-pull`; a manual pull is not scheduled evidence) recorded for that host
+that selected the component (a component failure, a deferral, or a host-level
+refusal such as a hold). For the controller itself the evidence is read locally.
+For every other host it comes from the host's own observation: the target-side
+agent and the probe both report, under `upkeeper`, the host's newest scheduled
+runs (id, time, command, outcome, failed components, per-host component outcomes)
+from its own run store, every hold marker it holds with the run that left it and
+its age, and the state of `upkeeper-self.timer` and `upkeeper-pull.timer`
+(enabled, active, next elapse). A marker the controller wrote for a host when it
+dispatched there is kept in front of the host's own. The sentence "reason
+unavailable from this host" is printed only for a host that reported no such
+evidence at all, which is a target running an UpKeeper binary from before this
+release. Run records written by `self-pull` and `scheduled-pull` carry that
+command name; records from earlier releases say `pull` and are not counted as
+scheduled evidence.
 
 The T3 pair refusal reads the program behind `t3code.service` through the running
 process (`/proc/<MainPID>/exe`, which the kernel marks deleted when a mise Node

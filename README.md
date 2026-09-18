@@ -36,6 +36,8 @@ See [the release guide](docs/upkeeper-push-pull.md) and
 ./bin/upkeeper fleet-plan --previous 6bcd2f8 --json      # and what enrolling it would change
 ./bin/upkeeper project add NAME --repository URL --default-ref REF --workers a,b [--setup-profile P]
 ./bin/upkeeper project remove NAME                       # both edit desired/release.json and print the plan
+./bin/upkeeper provider add INSTANCE --quota-pool POOL --hosts a,b [--models m1,m2]
+./bin/upkeeper provider remove INSTANCE [--hosts a,b]    # same, for a provider instance and its binding
 ```
 
 `project add` and `project remove` edit the `projects` entry of the fleet intent through the
@@ -46,6 +48,15 @@ nothing: review `git diff desired/release.json`, commit, and publish with `push`
 project is loaded by the coordinator with default local bindings, and each worker it is
 eligible for needs `t3-steward worker enroll <worker> --current-catalog` on the coordinator
 host once the release has converged there.
+
+`provider add` and `provider remove` do the same for a provider instance: one edit carries the
+instance, its models (`*` unless `--models` names them), the quota pool and the
+`quota_bindings` entry that binds the instance to that pool, on every named host (the profile
+when every host of it is named, otherwise each host's exceptions; the output says which). An
+unknown host, an instance already bound to a pool, or an invalid name is refused and nothing is
+written. The binding is authorization to charge the pool; it never claims the instance is
+installed or signed in, and the coordinator honors it only once it reads the field (see the
+contract). Every worker whose catalog entry changed is told to re-enroll in the printed plan.
 
 The `steward-fleet-configuration` component holds the authored, non-secret intent for the
 whole Steward fleet: the coordinator and its client endpoint, reusable host profiles, one
@@ -80,8 +91,12 @@ host's observations may never become fleet-wide authorization. See
 ./bin/upkeeper hold show --json                         # scheduled hold markers on this host
 ```
 
-`status` prints a reason beside each drifting component from what this host can see: a hold
-marker, a disabled self timer, or the outcome of the last run it recorded for that host.
+`status` prints a reason beside each drifting component: a hold marker for the host, the
+host's self timer being disabled, or the outcome of the last scheduled run that selected the
+component. For the controller the evidence is local; for every other host it is what the host's
+own agent reported about its run store, hold markers and timers, so a remote host's drift is
+explained the same way. "Reason unavailable" is printed only for a target whose binary predates
+that evidence.
 
 ## Scheduled holds
 
