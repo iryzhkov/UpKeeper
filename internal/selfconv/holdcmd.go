@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/fsatomic"
+	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
 	"github.com/iryzhkov/UpKeeper/internal/pytime"
 	"github.com/iryzhkov/UpKeeper/internal/runstore"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
@@ -20,9 +20,6 @@ import (
 // ErrNoHold is returned when a host has no marker to clear: nothing to do,
 // which the CLI reports as a malformed request rather than as a failure.
 var ErrNoHold = errors.New("no hold marker")
-
-// holdRunPattern finds the run identifier a marker names.
-var holdRunPattern = regexp.MustCompile(`run ([0-9]{8}T[0-9]{6}Z-[0-9a-f]{8})`)
 
 // HoldMarker is one scheduled hold as an operator sees it.
 type HoldMarker struct {
@@ -85,8 +82,9 @@ func readHold(directory, host string, store *runstore.Store, now time.Time) (Hol
 		Host: host, Path: path, Content: string(content),
 		ModifiedAt: info.ModTime(), Age: now.Sub(info.ModTime()),
 	}
-	if match := holdRunPattern.FindStringSubmatch(marker.Content); match != nil {
-		marker.RunID = match[1]
+	// The marker's run identifier is read the way the host's own probe reads
+	// it, so a controller and the host agree on which run left the marker.
+	if marker.RunID = hostevidence.RunIDInMarker(marker.Content); marker.RunID != "" {
 		if store != nil {
 			if record, err := store.Read(marker.RunID); err == nil {
 				marker.RunRecord = store.Path(marker.RunID)

@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/converge"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
+	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -77,7 +79,7 @@ func runReleaseStatus(parsed *arguments, streams Streams) (int, error) {
 }
 
 // selfTimerUnit is the timer every host converges through.
-const selfTimerUnit = "upkeeper-self.timer"
+const selfTimerUnit = hostevidence.SelfTimer
 
 // driftRecordLimit bounds how far back the run store is read for evidence.
 const driftRecordLimit = 200
@@ -105,13 +107,13 @@ type lastRun struct {
 // scheduledCommands are the run records that count as scheduled convergence.
 // A manual pull is recorded too, but it is not the answer to "why has the
 // scheduled pull not converged this".
-var scheduledCommands = map[string]bool{"self-pull": true, "scheduled-pull": true}
+var scheduledCommands = hostevidence.ScheduledCommands
 
-// driftEvidence is everything this host can say about why a scheduled pull
-// has not converged a drifting component. All of it is local: the hold
-// markers this host wrote, the run records this host kept, this host's own
-// timer. Nothing here is fetched from another host, so what is not here is
-// reported as unavailable rather than guessed.
+// driftEvidence is everything status can say about why a scheduled pull has
+// not converged a drifting component: what this host holds locally (the hold
+// markers it wrote, the run records it kept, its own timer) and, for a host
+// whose probe reported them, that host's own markers, runs and timer. What
+// neither source has is reported as unavailable rather than guessed.
 type driftEvidence struct {
 	controller string
 	// selfTimerEnabled is nil when the timer state was not observed.
@@ -120,6 +122,10 @@ type driftEvidence struct {
 	// scheduledRuns holds, per host, the scheduled runs recorded here, newest
 	// first.
 	scheduledRuns map[string][]lastRun
+	// probed names every host whose own probe evidence was read; timers is
+	// what those probes said about the host's self timer, nil when unobserved.
+	probed map[string]bool
+	timers map[string]*bool
 }
 
 // gatherDriftEvidence reads the local state directory and this host's timer.
@@ -196,8 +202,10 @@ func lastRunOf(runID string, record, host map[string]any) lastRun {
 	return value
 }
 
-// annotateDriftReasons adds a reason beside every drifting component.
+// annotateDriftReasons adds a reason beside every drifting component, from
+// the controller's local evidence and from what each host's probe reported.
 func annotateDriftReasons(document map[string]any, evidence driftEvidence) {
+	evidence = withProbeEvidence(document, evidence)
 	for _, item := range list(document["hosts"]) {
 		host, _ := item.(map[string]any)
 		name := text(host["host"])
@@ -211,11 +219,89 @@ func annotateDriftReasons(document map[string]any, evidence driftEvidence) {
 	}
 }
 
+// withProbeEvidence reads the "upkeeper" evidence each remote host's probe
+// reported into the evidence, beside what the controller holds locally. Local
+// evidence is kept in front: a marker this controller wrote for a host is
+// this controller's own knowledge about that host. The controller's own
+// entry is skipped, because its local evidence is the same store.
+func withProbeEvidence(document map[string]any, evidence driftEvidence) driftEvidence {
+	if evidence.holds == nil {
+		evidence.holds = map[string]selfconv.HoldMarker{}
+	}
+	if evidence.scheduledRuns == nil {
+		evidence.scheduledRuns = map[string][]lastRun{}
+	}
+	evidence.probed = map[string]bool{}
+	evidence.timers = map[string]*bool{}
+	for _, item := range list(document["hosts"]) {
+		host, _ := item.(map[string]any)
+		name := text(host["host"])
+		probe, reported := host["upkeeper"].(map[string]any)
+		if !reported || name == "" || name == evidence.controller {
+			continue
+		}
+		evidence.probed[name] = true
+		for _, entry := range list(probe["holds"]) {
+			marker, _ := entry.(map[string]any)
+			if text(marker["host"]) != name {
+				continue
+			}
+			if _, held := evidence.holds[name]; held {
+				break
+			}
+			evidence.holds[name] = selfconv.HoldMarker{
+				Host:  name,
+				Path:  text(marker["path"]),
+				RunID: text(marker["run_id"]),
+				Age:   time.Duration(number(marker["age_seconds"])) * time.Second,
+			}
+		}
+		for _, entry := range list(probe["scheduled_runs"]) {
+			run, _ := entry.(map[string]any)
+			if !scheduledCommands[text(run["command"])] {
+				continue
+			}
+			for _, raw := range list(run["hosts"]) {
+				outcome, _ := raw.(map[string]any)
+				if text(outcome["host"]) == name {
+					evidence.scheduledRuns[name] = append(
+						evidence.scheduledRuns[name], lastRunOf(text(run["run_id"]), run, outcome))
+				}
+			}
+		}
+		timers, _ := probe["timers"].(map[string]any)
+		self, _ := timers[selfTimerUnit].(map[string]any)
+		if enabled, observed := self["enabled"].(bool); observed {
+			evidence.timers[name] = &enabled
+		}
+	}
+	return evidence
+}
+
+// number reads an integer however the document encoded it: as a Go int when
+// built in process, or as a JSON number when read back from a host.
+func number(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	}
+	return 0
+}
+
 // driftReason explains one drifting component from the evidence, in a fixed
-// order: a hold marker, this host's own timer, the last recorded run. When
-// none of it applies to a remote host, the reason says so in as many words.
+// order: a hold marker, the host's timer, the last recorded run. When none
+// of it applies to a host whose probe reported nothing, the reason says so
+// in as many words.
 func driftReason(host, component string, evidence driftEvidence) string {
 	local := host == evidence.controller
+	probed := evidence.probed[host]
 	parts := []string{}
 	if marker, held := evidence.holds[host]; held {
 		leftBy := ""
@@ -229,6 +315,9 @@ func driftReason(host, component string, evidence driftEvidence) string {
 	if local && evidence.selfTimerEnabled != nil && !*evidence.selfTimerEnabled {
 		parts = append(parts, selfTimerUnit+
 			" is disabled on this host, so no scheduled run will converge it")
+	} else if enabled := evidence.timers[host]; probed && enabled != nil && !*enabled {
+		parts = append(parts, selfTimerUnit+
+			" is disabled on "+host+", so no scheduled run will converge it")
 	}
 	run, recorded := lastScheduledRun(evidence.scheduledRuns[host], component)
 	switch {
@@ -236,6 +325,8 @@ func driftReason(host, component string, evidence driftEvidence) string {
 		parts = append(parts, lastRunReason(run, component))
 	case local:
 		parts = append(parts, "no scheduled run selecting "+component+" recorded on this host")
+	case probed:
+		parts = append(parts, "no scheduled run selecting "+component+" recorded on "+host)
 	case len(parts) > 0:
 		parts = append(parts, "no scheduled run record for "+host+" on this host")
 	default:

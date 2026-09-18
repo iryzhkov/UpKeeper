@@ -27,6 +27,7 @@ import (
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
+	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/redact"
@@ -548,6 +549,10 @@ func components(home string, runner procx.Runner) map[string]any {
 			"codex_skills":  metadata(filepath.Join(home, ".codex/skills")),
 			"claude_skills": metadata(filepath.Join(home, ".claude/skills")),
 		},
+		// UpKeeper's own evidence on this host: its scheduled runs, hold
+		// markers and timers, so a controller can explain this host's drift
+		// from the host's own facts rather than saying it cannot.
+		"upkeeper": hostevidence.Collect(home, runner, time.Now()),
 	}
 }
 

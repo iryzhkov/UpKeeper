@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
+	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
@@ -41,7 +42,14 @@ func ObserveRelease(c *Context) map[string]any {
 		}
 		entries = append(entries, entry)
 	}
-	return map[string]any{"host": c.Host.Name, "name": c.Host.Name, "run_id": c.RunID, "observe_only": true, "reachable": true, "components": entries, "result": worst}
+	return map[string]any{
+		"host": c.Host.Name, "name": c.Host.Name, "run_id": c.RunID, "observe_only": true,
+		"reachable": true, "components": entries, "result": worst,
+		// This host's own convergence evidence, read the same way the probe
+		// reads it, so the controller's status explains this host's drift
+		// from the host's run store, hold markers and timers.
+		"upkeeper": hostevidence.Collect(c.Home, c.Runner, c.now()),
+	}
 }
 
 func observationMatches(c *Context, name string, spec, observed map[string]any) bool {
