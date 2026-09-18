@@ -66,13 +66,20 @@ type arguments struct {
 	projectDefaultRef   string
 	projectSetupProfile string
 	projectWorkers      []string
+
+	// provider
+	providerAction   string
+	providerInstance string
+	providerPool     string
+	providerModels   []string
+	providerHosts    []string
 }
 
 // Commands are the subcommands `upkeeper` accepts. The two names beginning
 // with underscores are the machine-facing halves a controller invokes on a
 // target; they are deliberately undocumented in help output.
 var Commands = []string{
-	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project",
+	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project", "provider",
 	"self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
 	"hold", "version",
 }
@@ -115,6 +122,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseFleetPlan(parsed, rest)
 	case "project":
 		return parsed, parseProject(parsed, rest)
+	case "provider":
+		return parsed, parseProvider(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
 	case "hold":
@@ -367,6 +376,72 @@ func parseProject(parsed *arguments, argv []string) error {
 		}
 		if len(parsed.projectWorkers) == 0 {
 			missing = append(missing, "--workers")
+		}
+		if len(missing) > 0 {
+			return usagef("the following arguments are required: %s", strings.Join(missing, ", "))
+		}
+	}
+	return nil
+}
+
+// parseProvider reads `provider add INSTANCE --quota-pool POOL --hosts a,b
+// [--models m1,m2] [--json]` and `provider remove INSTANCE [--hosts a,b]
+// [--json]`. Hosts and models are one comma-separated value each, the shape
+// `project add --workers` already uses.
+func parseProvider(parsed *arguments, argv []string) error {
+	if len(argv) == 0 {
+		return usagef("the following arguments are required: action (add or remove)")
+	}
+	parsed.providerAction = argv[0]
+	if parsed.providerAction != "add" && parsed.providerAction != "remove" {
+		return usagef("argument action: invalid choice: %q (choose from \"add\", \"remove\")",
+			parsed.providerAction)
+	}
+	if len(argv) < 2 || strings.HasPrefix(argv[1], "-") {
+		return usagef("the following arguments are required: INSTANCE")
+	}
+	parsed.providerInstance = argv[1]
+	for index := 2; index < len(argv); index++ {
+		token := argv[index]
+		if token == "--json" {
+			parsed.asJSON = true
+			continue
+		}
+		if parsed.providerAction != "add" && token != "--hosts" {
+			return unrecognized(token)
+		}
+		switch token {
+		case "--quota-pool", "--hosts", "--models":
+			value, next, err := takeValue(argv, index, token)
+			if err != nil {
+				return err
+			}
+			index = next
+			switch token {
+			case "--quota-pool":
+				parsed.providerPool = value
+			case "--hosts":
+				parsed.providerHosts = splitWorkers(value)
+				if len(parsed.providerHosts) == 0 {
+					return usagef("argument --hosts: expected at least one host")
+				}
+			case "--models":
+				parsed.providerModels = splitWorkers(value)
+				if len(parsed.providerModels) == 0 {
+					return usagef("argument --models: expected at least one model")
+				}
+			}
+		default:
+			return unrecognized(token)
+		}
+	}
+	if parsed.providerAction == "add" {
+		missing := []string{}
+		if parsed.providerPool == "" {
+			missing = append(missing, "--quota-pool")
+		}
+		if len(parsed.providerHosts) == 0 {
+			missing = append(missing, "--hosts")
 		}
 		if len(missing) > 0 {
 			return usagef("the following arguments are required: %s", strings.Join(missing, ", "))

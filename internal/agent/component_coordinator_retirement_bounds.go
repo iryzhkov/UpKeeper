@@ -62,8 +62,26 @@ func fleetKnownCoordinatorChildren(entry map[string]any) bool {
 	}
 	for _, value := range workers {
 		worker, ok := value.(map[string]any)
-		if !ok || !workerSameFields(worker, []string{"worker_id", "cpu_class", "executor_slots",
-			"capabilities", "provider_instances", "desired_models", "quota_pools"}) {
+		if !ok {
+			return false
+		}
+		fields := []string{"worker_id", "cpu_class", "executor_slots",
+			"capabilities", "provider_instances", "desired_models", "quota_pools"}
+		// quota_bindings is the one optional v1 child: rendered only when a
+		// binding is authored, as a string per instance.
+		if bindings, present := worker["quota_bindings"]; present {
+			bound, ok := bindings.(map[string]any)
+			if !ok {
+				return false
+			}
+			for _, pool := range bound {
+				if _, ok := pool.(string); !ok {
+					return false
+				}
+			}
+			fields = append(fields, "quota_bindings")
+		}
+		if !workerSameFields(worker, fields) {
 			return false
 		}
 		if _, ok := worker["worker_id"].(string); !ok {

@@ -179,7 +179,7 @@ func (d *Document) coordinatorWorkerEntry(name string) (map[string]any, error) {
 	for _, instance := range profile.ProviderInstances {
 		models[instance] = sortedUnique(profile.Models[instance])
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"worker_id":          name,
 		"cpu_class":          profile.CPUClass,
 		"executor_slots":     profile.ExecutorSlots,
@@ -187,7 +187,20 @@ func (d *Document) coordinatorWorkerEntry(name string) (map[string]any, error) {
 		"provider_instances": sortedUnique(profile.ProviderInstances),
 		"desired_models":     models,
 		"quota_pools":        sortedUnique(profile.QuotaPools),
-	}, nil
+	}
+	// The key is rendered only when a binding is authored. A worker with no
+	// binding projects the exact bytes it did before the field existed, so a
+	// release that never bound anything changes nothing on the coordinator;
+	// and a coordinator that predates the field, which refuses unknown keys,
+	// is touched only by a release that deliberately authored one.
+	if len(profile.QuotaBindings) > 0 {
+		bindings := map[string]any{}
+		for _, instance := range sortedKeys(profile.QuotaBindings) {
+			bindings[instance] = profile.QuotaBindings[instance]
+		}
+		entry[QuotaBindingsField] = bindings
+	}
+	return entry, nil
 }
 
 // CoordinatorBytes are the canonical runtime input bytes. Their digest identifies

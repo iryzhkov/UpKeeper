@@ -42,6 +42,7 @@ var commandSummaries = [][2]string{
 	{"rollback", "converge hosts on an exact release manifest"},
 	{"fleet-plan", "report the Steward fleet intent and what enrolling it would change"},
 	{"project", "add or remove a Steward project in the release manifest and show the plan"},
+	{"provider", "register or remove a provider instance and its quota binding in the release manifest"},
 	{"self-pull", "refresh the gated release and converge this machine only"},
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
@@ -71,6 +72,8 @@ func helpText(program, command string) string {
 		return fleetPlanHelp(program)
 	case "project":
 		return projectHelp(program)
+	case "provider":
+		return providerHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
 	case "hold":
@@ -209,6 +212,43 @@ func projectHelp(program string) string {
 		"\nexample:\n  " + program + " project add home-assistant-config \\\n" +
 		"    --repository ssh://git@git.ryzhkov.dev/igor/home-assistant-config.git \\\n" +
 		"    --default-ref main --workers homelab,normandy,omarchy-pc\n"
+}
+
+// providerHelp documents the second command that edits the release manifest
+// for a person. Like projectHelp it says what the command does not do, and it
+// says what the binding is: authorization to charge a pool, never evidence
+// that the instance exists on the host.
+func providerHelp(program string) string {
+	return "usage: " + program + " provider add INSTANCE --quota-pool POOL --hosts HOST[,HOST...]" +
+		" [--models MODEL[,MODEL...]] [--json]\n" +
+		"       " + program + " provider remove INSTANCE [--hosts HOST[,HOST...]] [--json]\n\n" +
+		"Register or remove one provider instance in the steward-fleet-configuration\n" +
+		"component of desired/release.json: add adds INSTANCE to provider_instances, its\n" +
+		"models (default \"*\") to models, POOL to quota_pools and INSTANCE: POOL to\n" +
+		"quota_bindings, on every named host at once. When every host of a profile is\n" +
+		"named the profile is edited; otherwise each named host's exceptions are, and\n" +
+		"the output says which. The edited manifest is validated with the same parser\n" +
+		"fleet-plan uses, written atomically in its canonical encoding, and the\n" +
+		"fleet-plan diff against the release committed at HEAD is printed.\n\n" +
+		"It commits nothing, pushes nothing, pulls nothing and never enrolls: review the\n" +
+		"diff, commit it, and publish it with `" + program + " push`. Every host whose\n" +
+		"catalog entry changed needs `t3-steward worker enroll <worker> --current-catalog`\n" +
+		"on the coordinator host after the release converges. A binding is authorization\n" +
+		"to charge the pool; it never claims the instance is installed or signed in.\n\n" +
+		"positional arguments:\n" +
+		describe("  {add,remove}", "") +
+		describe("  INSTANCE", "provider instance name, as the T3 instance is named on the hosts") +
+		"\noptions:\n" + helpOption + "\n" +
+		describe("  --quota-pool POOL", "the one quota pool the instance's work is charged to (add)") +
+		describe("  --hosts HOST[,HOST...]",
+			"fleet hosts to register on (add: required; remove: default every host); "+
+				"an unknown host is refused") +
+		describe("  --models MODEL[,MODEL...]",
+			"desired model allowlist (add; default \"*\" for a new instance, kept for an existing one)") +
+		describe("  --json", "") +
+		"\nexit codes: 0 edited, 2 malformed command line, 30 refused (nothing written)\n" +
+		"\nexample:\n  " + program + " provider add opencode --quota-pool opencode-free \\\n" +
+		"    --hosts homelab,normandy,omarchy-pc --models glm-4.6,kimi-k2\n"
 }
 
 func scheduledHelp(program, command string) string {

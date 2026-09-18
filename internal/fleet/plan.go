@@ -223,6 +223,10 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 	// catalog revision changed by this document, whether through its own
 	// entry or through a project; the advice is then said once, at the end.
 	refusable := false
+	// reenroll collects every worker whose own entry changed; its
+	// re-enrollment advice is said once per worker, together with the
+	// workers a project change touched, after every diff line.
+	reenroll := map[string]bool{}
 	if previous != nil && previous.Coordinator.ID != d.Coordinator.ID {
 		changes = append(changes,
 			"coordinator identity "+previous.Coordinator.ID+" becomes "+d.Coordinator.ID)
@@ -252,6 +256,9 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if changed {
+			reenroll[name] = true
+		}
 		refusable = refusable || changed
 	}
 	if previous != nil {
@@ -261,8 +268,11 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 			}
 		}
 	}
-	projectLines, touched := projectChanges(d, previous)
+	projectLines, touched := projectChanges(d, previous, reenroll)
 	changes = append(changes, projectLines...)
+	for _, worker := range sortedKeys(reenroll) {
+		changes = append(changes, reenrollAdvice(worker))
+	}
 	if refusable || touched {
 		changes = append(changes, ReloadRefusalAdvice)
 	}
@@ -307,17 +317,46 @@ func slotChanges(proposed, previous *Document, name string) []string {
 	for _, dropped := range difference(before.QuotaPools, now.QuotaPools) {
 		changes = append(changes, "worker "+name+" leaves quota pool "+dropped)
 	}
+	changes = append(changes, bindingChanges(name, before.QuotaBindings, now.QuotaBindings)...)
+	return changes
+}
+
+// bindingChanges lists, per instance, a binding that appears, moves to another
+// pool or disappears. A binding is authorization the coordinator acts on, so
+// each change is one line an operator reads before pushing.
+func bindingChanges(host string, before, now map[string]string) []string {
+	changes := []string{}
+	instances := map[string]bool{}
+	for instance := range before {
+		instances[instance] = true
+	}
+	for instance := range now {
+		instances[instance] = true
+	}
+	for _, instance := range sortedKeys(instances) {
+		earlier, wasBound := before[instance]
+		current, isBound := now[instance]
+		switch {
+		case !wasBound && isBound:
+			changes = append(changes, "worker "+host+" binds "+instance+" to quota pool "+current)
+		case wasBound && !isBound:
+			changes = append(changes, "worker "+host+" unbinds "+instance+" from quota pool "+earlier)
+		case earlier != current:
+			changes = append(changes, "worker "+host+" rebinds "+instance+" from quota pool "+
+				earlier+" to "+current)
+		}
+	}
 	return changes
 }
 
 // projectChanges lists the project differences and reports whether any of
 // them touched a worker the coordinator already knows, which is when the
-// reload can be refused for retained work on that worker.
-func projectChanges(proposed, previous *Document) ([]string, bool) {
+// reload can be refused for retained work on that worker. Every worker whose
+// catalog changes because a project it is eligible for was added, removed or
+// re-scoped is recorded in reenroll, once, for the caller to advise.
+func projectChanges(proposed, previous *Document, reenroll map[string]bool) ([]string, bool) {
 	changes := []string{}
-	// reenroll collects, once per worker, every worker whose catalog changes
-	// because a project it is eligible for was added, removed or re-scoped.
-	reenroll := map[string]bool{}
+	touched := false
 	for _, name := range proposed.ProjectNames() {
 		project := proposed.Projects[name]
 		var earlier Project
@@ -331,6 +370,7 @@ func projectChanges(proposed, previous *Document) ([]string, bool) {
 				"project "+name+" "+ProjectAddedAdvice)
 			for _, worker := range project.EligibleWorkers {
 				reenroll[worker] = true
+				touched = true
 			}
 			continue
 		}
@@ -345,10 +385,12 @@ func projectChanges(proposed, previous *Document) ([]string, bool) {
 		for _, added := range difference(project.EligibleWorkers, earlier.EligibleWorkers) {
 			changes = append(changes, "project "+name+" becomes eligible for "+added)
 			reenroll[added] = true
+			touched = true
 		}
 		for _, dropped := range difference(earlier.EligibleWorkers, project.EligibleWorkers) {
 			changes = append(changes, "project "+name+" stops being eligible for "+dropped)
 			reenroll[dropped] = true
+			touched = true
 		}
 	}
 	if previous != nil {
@@ -357,19 +399,12 @@ func projectChanges(proposed, previous *Document) ([]string, bool) {
 				changes = append(changes, "project "+name+" is removed")
 				for _, worker := range previous.Projects[name].EligibleWorkers {
 					reenroll[worker] = true
+					touched = true
 				}
 			}
 		}
 	}
-	workers := make([]string, 0, len(reenroll))
-	for worker := range reenroll {
-		workers = append(workers, worker)
-	}
-	sort.Strings(workers)
-	for _, worker := range workers {
-		changes = append(changes, reenrollAdvice(worker))
-	}
-	return changes, len(workers) != 0
+	return changes, touched
 }
 
 func modelChanges(host string, before, now map[string][]string) []string {

@@ -95,6 +95,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runFleetPlan(parsed, streams)
 	case "project":
 		return runProject(parsed, streams)
+	case "provider":
+		return runProvider(parsed, streams)
 	case "self-pull":
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":

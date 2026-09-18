@@ -734,12 +734,13 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	// The model change alters homelab's catalog revision, so the plan also
-	// says, once, that the coordinator refuses the reload while homelab holds
-	// retained work.
+	// tells homelab to re-enroll and says, once, that the coordinator refuses
+	// the reload while homelab holds retained work.
 	changes, _ = plan["authorization_changes"].([]any)
-	if len(changes) != 2 ||
+	if len(changes) != 3 ||
 		changes[0] != "worker homelab is authorized for claudeAgent model claude-opus-4-5" ||
-		changes[1] != fleet.ReloadRefusalAdvice {
+		!strings.Contains(changes[1].(string), "t3-steward worker enroll homelab --current-catalog") ||
+		changes[2] != fleet.ReloadRefusalAdvice {
 		t.Errorf("authorization changes are %v", changes)
 	}
 }

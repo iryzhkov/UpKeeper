@@ -104,8 +104,9 @@ const (
 	MaximumRequestTimeout = time.Hour
 )
 
-// ProfileFields, HostFields and ProjectFields are the complete key set of an
-// entry of that kind.
+// ProfileFields, HostFields and ProjectFields are the complete required key
+// set of an entry of that kind; ProfileOptionalFields are the profile keys a
+// document may omit.
 //
 // Every one of them is closed. A key nobody validates is a key a credential
 // value can be authored into, and this component is published in the release
@@ -114,18 +115,29 @@ const (
 // schema_version: a newer controller that needs a new field ships a new
 // version, and an older binary refuses that version outright instead of
 // carrying fields it cannot check.
+//
+// quota_bindings is optional rather than required so that every document
+// authored before it existed still validates unchanged; it is still closed,
+// because an absent binding and an unknown key are different things.
 var (
 	ProfileFields = []string{
 		"cpu_class", "executor_slots", "capabilities",
 		"provider_instances", "models", "quota_pools",
 	}
-	HostFields = []string{
+	ProfileOptionalFields = []string{QuotaBindingsField}
+	HostFields            = []string{
 		"profile", "worker_id", "transport", "credential_ref", "admin_credential_ref",
 	}
 	ProjectFields = []string{
 		"repository", "default_ref", "setup_profile", "eligible_workers",
 	}
 )
+
+// QuotaBindingsField is the profile key that binds a provider instance to the
+// one quota pool the coordinator may charge its work to. It is authorization,
+// exactly as a model allowlist is: it says which pool an instance is allowed
+// to draw from, never that the instance is installed, signed in or available.
+const QuotaBindingsField = "quota_bindings"
 
 // RequiredProfiles are the profiles the contract insists every fleet document
 // defines, so that a host always has a named class to belong to.
@@ -199,6 +211,11 @@ type Profile struct {
 	// or advertised.
 	Models     map[string][]string
 	QuotaPools []string
+	// QuotaBindings maps a provider instance to the quota pool the coordinator
+	// charges it to. Every instance named is one the profile runs and every
+	// pool named is one it joins. An instance with no binding is authorized
+	// but unbound, which the coordinator reports rather than infers around.
+	QuotaBindings map[string]string
 }
 
 // Host is one worker host's intent.
@@ -456,7 +473,7 @@ func (d *Document) parseProfiles(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet profile name")
 		}
-		if missing, unknown := checkKeys(entry, ProfileFields, nil); missing != "" || unknown != "" {
+		if missing, unknown := checkKeys(entry, ProfileFields, ProfileOptionalFields); missing != "" || unknown != "" {
 			return fieldError("fleet profile "+name, missing, unknown)
 		}
 		profile, err := parseProfileBody(name, entry)
@@ -500,6 +517,10 @@ func parseProfileBody(name string, entry map[string]any) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
+	bindings, err := parseQuotaBindings(entry[QuotaBindingsField], instances, pools, name)
+	if err != nil {
+		return Profile{}, err
+	}
 	return Profile{
 		CPUClass:          class,
 		ExecutorSlots:     slots,
@@ -507,7 +528,43 @@ func parseProfileBody(name string, entry map[string]any) (Profile, error) {
 		ProviderInstances: instances,
 		Models:            models,
 		QuotaPools:        pools,
+		QuotaBindings:     bindings,
 	}, nil
+}
+
+// parseQuotaBindings reads the instance-to-pool map. An absent key is no
+// bindings. A binding may only name an instance the profile runs and a pool
+// it joins: a binding to a pool the worker never joins is one the coordinator
+// could never honor, and a binding for an instance that is not there is the
+// same dead authorization parseModels refuses.
+func parseQuotaBindings(value any, instances, pools []string, context string) (map[string]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return nil, failure.Value("fleet profile %s %s must be an object", context, QuotaBindingsField)
+	}
+	bindings := map[string]string{}
+	for _, instance := range sortedKeys(entry) {
+		if !contains(instances, instance) {
+			return nil, failure.Value(
+				"fleet profile %s binds an instance it does not run: %s", context, instance)
+		}
+		pool, isString := entry[instance].(string)
+		if !isString {
+			return nil, failure.Value(
+				"fleet profile %s %s must map each instance to one pool name",
+				context, QuotaBindingsField)
+		}
+		if !contains(pools, pool) {
+			return nil, failure.Value(
+				"fleet profile %s binds %s to a quota pool it does not join: %s",
+				context, instance, pool)
+		}
+		bindings[instance] = pool
+	}
+	return bindings, nil
 }
 
 // parseModels reads a desired model allowlist. Every provider instance it
@@ -621,7 +678,10 @@ func (d *Document) parseExceptions(name, profile string, value any) (map[string]
 	}
 	base := d.rawProfiles[profile]
 	for _, key := range sortedKeys(entry) {
-		if _, present := base[key]; !present {
+		// An optional profile key may be introduced by the exception alone:
+		// a host is the reviewed place one worker's binding differs from its
+		// class, whether or not the class binds anything.
+		if _, present := base[key]; !present && !contains(ProfileOptionalFields, key) {
 			return nil, failure.Value(
 				"fleet host %s overrides a key its profile does not have: %s", name, key)
 		}
@@ -773,6 +833,19 @@ func fieldError(context, missing, unknown string) error {
 			context, strconv.Quote(unknown), referencesOnly)
 	}
 	return failure.Value("%s is missing %s", context, missing)
+}
+
+// IsIdentifier reports whether a value is a provider instance, quota pool or
+// capability name this contract accepts. It is exported for the commands that
+// author an entry, so their refusal can name the flag an operator typed
+// instead of the field the parser would have found it in.
+func IsIdentifier(value string) bool { return identifierPattern.MatchString(value) }
+
+// IsModel reports whether a value is a model identifier this contract accepts.
+// "*" is the whole-allowlist wildcard and is accepted only on its own, which
+// parseModels enforces; this reports the identifier grammar alone.
+func IsModel(value string) bool {
+	return value == "*" || len(value) <= 128 && modelPattern.MatchString(value)
 }
 
 func identifierList(value any, context string) ([]string, error) {
