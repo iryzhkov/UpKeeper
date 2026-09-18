@@ -70,11 +70,14 @@ still holds a retained assignment, paused or parked. The steps are:
 2. Unblock each one as the receipt says: wait for a paused attempt's pause to lift or a
    parked attempt's wait to settle, or cancel its task with
    `t3-steward backlog cancel <run>/<task> --reason TEXT`.
-3. Ask the coordinator again with `t3-steward coordinator reload --json` on the coordinator
-   host (exit 0 on `accepted` or `unchanged`, 8 on `rejected`), or re-run the pull, which
-   signals again only when the projection file changes; the reload verb is the one to use
-   when the file is already current.
-4. Re-enroll the touched workers as `fleet-plan` listed them.
+3. Re-run the pull for that host, `upkeeper pull --hosts <coordinator>`. The rejected reload
+   rolled the projection back, so the release's catalog is no longer on the host at all: asking
+   the coordinator again with `t3-steward coordinator reload --json` would re-read the *old*
+   projection and answer `accepted` or `unchanged` with exit 0, which says nothing about the
+   release and leaves its catalog unapplied. The pull writes the projection again, the file
+   therefore changes, and the component signals the coordinator and reports the new verdict.
+   Use the reload verb only to get a verdict on the file that is already on the host.
+4. Once that reload is accepted, re-enroll the touched workers as `fleet-plan` listed them.
 
 If the failure instead begins with "rollback failed", the refused projection could not be
 replaced: it is still the file the coordinator would read at its next start. Put the retained
