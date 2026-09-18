@@ -33,6 +33,15 @@ const ProjectAddedAdvice = "will be loaded by the coordinator with default local
 	"(no credentials, resource locks or directory resources) unless backlog_v2.projects " +
 	"binds it explicitly"
 
+// ReloadRefusalAdvice is what the plan says under a coordinator catalog change:
+// the coordinator re-reads the projection on SIGHUP but refuses the reload
+// while a worker whose catalog changes still holds a retained assignment, and
+// its receipt (read by the convergence, and by "t3-steward coordinator
+// identity --json") names each one and how to unblock it.
+const ReloadRefusalAdvice = "the coordinator refuses the reload while a worker whose catalog changes " +
+	"holds a retained assignment (one not completed or released); its reload receipt names each " +
+	"one and the command that unblocks it, and the convergence fails with that receipt"
+
 // reenrollAdvice names the one command that brings a worker's enrollment up to
 // a changed catalog, and where it runs. A project change alters the catalog
 // digest of every worker it is eligible for, so each of them is stale until
@@ -322,6 +331,9 @@ func projectChanges(proposed, previous *Document) []string {
 	sort.Strings(workers)
 	for _, worker := range workers {
 		changes = append(changes, reenrollAdvice(worker))
+	}
+	if len(workers) != 0 {
+		changes = append(changes, ReloadRefusalAdvice)
 	}
 	return changes
 }

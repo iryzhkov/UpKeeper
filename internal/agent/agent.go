@@ -94,9 +94,30 @@ type Context struct {
 	Env        []string
 	Runtime    string
 	Runner     procx.Runner
+	// Now and Sleep are the clock a component waits by. Nil means the real
+	// one; a test that waits for something sets both so that it never waits.
+	Now   func() time.Time
+	Sleep func(time.Duration)
 
 	lockDirectory string
 	lockOwned     bool
+}
+
+// now reads the context's clock.
+func (c *Context) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
+// sleep pauses by the context's clock.
+func (c *Context) sleep(d time.Duration) {
+	if c.Sleep != nil {
+		c.Sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 // Spec returns the manifest entry for a component, or nil when the release does

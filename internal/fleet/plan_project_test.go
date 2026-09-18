@@ -40,6 +40,9 @@ func TestEnrollmentPlanExplainsAnAddedProject(t *testing.T) {
 		"t3-steward worker enroll homelab --current-catalog",
 		"t3-steward worker enroll omarchy-pc --current-catalog",
 		"on the coordinator host",
+		// F-3: a coordinator catalog change is refused while a touched worker
+		// holds a retained assignment, and the plan says so before anyone pushes.
+		fleet.ReloadRefusalAdvice,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("the plan does not say %q:\n%s", expected, text)

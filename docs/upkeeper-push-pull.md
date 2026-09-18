@@ -89,6 +89,28 @@ The T3 component seeds an absent t3code.service when the pinned package is insta
 with loopback binding and optional host-local oauth.env, warning when that file is
 missing. Existing units are preserved. Pull does not enroll workers.
 
+### Coordinator reload
+
+When a pull changes the coordinator's catalog input
+(`~/.config/t3-steward/coordinator-fleet.json`) on the coordinator host and
+`t3-steward.service` is active, the `steward-fleet-configuration` component sends the unit
+SIGHUP and then waits, up to 30 seconds and polling every 500 ms, for the receipt the
+coordinator writes for that signal at
+`~/.local/state/t3-steward/coordinator/reload-receipt.json`. The coordinator owns the
+verdict; UpKeeper only reads it, and only a receipt whose `requestedAt` is at or after the
+signal counts. An `accepted` or `unchanged` receipt converges the component, the action
+reads "coordinator reloaded its configuration (digest ...)" and the result carries
+`coordinator_reload` with the outcome and the digest now in effect. A `rejected` receipt
+fails the component with the coordinator's error and every blocking assignment, one per
+line, each with the worker, assignment, attempt, its state and the command that unblocks it;
+the effective configuration and its digest are unchanged. No receipt in time fails the
+component as unverified, naming `t3-steward coordinator reload --json` to run on the host
+and saying whether a receipt file existed at all, which is how a coordinator older than
+rc.69 (one that writes no receipt) is told apart from a slow one. A dry run neither signals
+nor waits, and an inactive unit is not signalled: it reads the projection when it next
+starts. `fleet-plan` says, under a coordinator catalog change, that the reload is refused
+while a worker whose catalog changes holds a retained assignment.
+
 ## Records and recovery
 
 Controller results are redacted under ~/.local/state/dev-fleet/runs/. Environment

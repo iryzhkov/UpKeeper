@@ -52,3 +52,29 @@ every later scheduled run refuses that host until the marker is cleared. The ste
 
 A release commit for `rollback --to` or `fleet-plan --previous` is any revision git resolves
 to a commit in the checkout's history: a hash, a tag such as `v0.1.8`, a branch or `HEAD`.
+
+## Coordinator reload rejected
+
+A pull that changes the coordinator's catalog input fails its `steward-fleet-configuration`
+component with "coordinator rejected the reload" when the coordinator refused to activate the
+new catalog. The projection file on the host is already the new one; the coordinator keeps
+serving the previous configuration, and the failure quotes the coordinator's receipt: the
+error, then one line per blocking assignment with its worker, assignment, attempt, the
+attempt's state and the action that unblocks it. Typically a worker whose catalog changes
+still holds a retained assignment, paused or parked. The steps are:
+
+1. Read the blockers in the run record, or on the coordinator host with
+   `t3-steward coordinator identity --json` (field `lastReload`).
+2. Unblock each one as the receipt says: wait for a paused attempt's pause to lift or a
+   parked attempt's wait to settle, or cancel its task with
+   `t3-steward backlog cancel <run>/<task> --reason TEXT`.
+3. Ask the coordinator again with `t3-steward coordinator reload --json` on the coordinator
+   host (exit 0 on `accepted` or `unchanged`, 8 on `rejected`), or re-run the pull, which
+   signals again only when the projection file changes; the reload verb is the one to use
+   when the file is already current.
+4. Re-enroll the touched workers as `fleet-plan` listed them.
+
+A component that failed as "coordinator reload unverified" got no receipt within 30 seconds:
+run `t3-steward coordinator reload --json` on the host to see the verdict. If the message
+says no receipt file exists, the coordinator predates the receipt (t3-steward before rc.69)
+and its journal (`journalctl --user -u t3-steward.service`) is the only record of the reload.

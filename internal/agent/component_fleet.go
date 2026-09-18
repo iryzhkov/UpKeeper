@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -100,7 +101,7 @@ func fleetProjection(
 	for _, planned := range documents {
 		changed = changed || planned.changed
 	}
-	reload := ""
+	var reload any
 	if !dryRun {
 		if changed {
 			if err := fleetWriteProjection(c, runID, documents); err != nil {
@@ -137,7 +138,7 @@ func fleetProjection(
 				"purpose": fleet.CoordinatorPurpose, "sha256": agentenv.Digest(catalog),
 			},
 		}
-		if reload != "" {
+		if reload != nil {
 			result["coordinator_reload"] = reload
 		}
 		return result, nil
@@ -146,7 +147,7 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
-	if reload != "" {
+	if reload != nil {
 		result["coordinator_reload"] = reload
 	}
 	return result, nil
@@ -168,25 +169,141 @@ func fleetCatalogChanged(documents []*fleetDocument) bool {
 	return false
 }
 
+// fleetReloadReceiptPath is where the coordinator writes its verdict on every
+// SIGHUP (t3-steward contract 2), relative to the home directory. UpKeeper
+// only reads it: the coordinator owns the verdict, and this component never
+// decides the outcome or restarts the unit to force one.
+const fleetReloadReceiptPath = ".local/state/t3-steward/coordinator/reload-receipt.json"
+
+// fleetReloadWait bounds how long the component waits for a receipt newer
+// than its signal, polling every fleetReloadPoll.
+const (
+	fleetReloadWait = 30 * time.Second
+	fleetReloadPoll = 500 * time.Millisecond
+)
+
+// fleetReloadReceipt is the receipt the coordinator writes. Times are RFC 3339
+// strings on the wire and are compared as instants.
+type fleetReloadReceipt struct {
+	RequestedAt         string               `json:"requestedAt"`
+	CompletedAt         string               `json:"completedAt"`
+	Outcome             string               `json:"outcome"`
+	Error               string               `json:"error"`
+	ConfigurationDigest string               `json:"configurationDigest"`
+	PreviousDigest      string               `json:"previousDigest"`
+	Release             string               `json:"release"`
+	Blockers            []fleetReloadBlocker `json:"blockers"`
+}
+
+// fleetReloadBlocker is one retained assignment the coordinator named as the
+// reason it refused a catalog change.
+type fleetReloadBlocker struct {
+	WorkerID     string `json:"workerId"`
+	AssignmentID string `json:"assignmentId"`
+	AttemptID    string `json:"attemptId"`
+	Progress     string `json:"progress"`
+	Control      string `json:"control"`
+	JournalPhase string `json:"journalPhase"`
+	Unblock      string `json:"unblock"`
+}
+
 // fleetReloadCoordinator asks a running coordinator to re-read its
-// configuration after its catalog input changed on disk. Without this, a
+// configuration after its catalog input changed on disk, then waits for the
+// receipt the coordinator writes for that signal. Without the signal, a
 // projection that changes while the binary does not is never loaded: the
 // steward component only restarts the unit when it installs a new release,
 // and even then it restarts before this component has written the file.
 //
-// The coordinator validates the reload itself and keeps its effective
-// configuration when a worker still holds an assignment against the old
-// catalog, so this is a request the coordinator's journal answers, not a
-// guarantee. An inactive unit reads the projection when it next starts.
-func fleetReloadCoordinator(c *Context) (string, error) {
+// The coordinator owns the verdict. An accepted or unchanged receipt converges
+// the component and reports the digest; a rejected one fails it with the
+// coordinator's error and blockers; no receipt requested at or after the
+// signal within fleetReloadWait fails it as unverified, naming the command
+// that shows the verdict on the host. An inactive unit reads the projection
+// when it next starts, and is reported as such rather than signalled.
+func fleetReloadCoordinator(c *Context) (any, error) {
 	if !c.UnitActive(stewardCoordinatorUnit) {
 		return "unit inactive; the projection is read at the next start", nil
 	}
+	// The signal time is taken just before the signal, so a receipt requested
+	// at or after it can only answer this signal or a later one.
+	signalledAt := c.now()
 	if _, err := c.Must([]string{"systemctl", "--user", "kill", "-s", "HUP", stewardCoordinatorUnit},
 		0, "", "reload coordinator configuration"); err != nil {
-		return "", err
+		return nil, err
 	}
-	return "signalled", nil
+	receipt, existed, found := fleetAwaitReloadReceipt(c, signalledAt)
+	if !found {
+		why := "no receipt file exists; the coordinator may predate the reload receipt (t3-steward before rc.69)"
+		if existed {
+			why = "a receipt file exists but its requestedAt is older than the signal"
+		}
+		return nil, Failf("coordinator reload unverified: no receipt requested at or after %s appeared at %s within %s (%s); run `t3-steward coordinator reload --json` on %s to see the verdict",
+			signalledAt.UTC().Format(time.RFC3339), c.Path(fleetReloadReceiptPath), fleetReloadWait, why, c.Host.Name)
+	}
+	switch receipt.Outcome {
+	case "accepted", "unchanged":
+		return map[string]any{
+			"outcome":      receipt.Outcome,
+			"digest":       receipt.ConfigurationDigest,
+			"requested_at": receipt.RequestedAt,
+			"completed_at": receipt.CompletedAt,
+		}, nil
+	case "rejected":
+		lines := []string{"coordinator rejected the reload: " + receipt.Error}
+		for _, blocker := range receipt.Blockers {
+			state := blocker.Progress
+			if blocker.Control != "" {
+				state += "/" + blocker.Control
+			}
+			if blocker.JournalPhase != "" {
+				state += ", worker journal " + blocker.JournalPhase
+			}
+			lines = append(lines, "  worker "+blocker.WorkerID+" assignment "+blocker.AssignmentID+
+				" attempt "+blocker.AttemptID+" ("+state+"): "+blocker.Unblock)
+		}
+		lines = append(lines, "  the effective configuration and its digest are unchanged ("+receipt.ConfigurationDigest+")")
+		return nil, Failf("%s", strings.Join(lines, "\n"))
+	default:
+		return nil, Failf("coordinator reload receipt at %s carries an unknown outcome %q; run `t3-steward coordinator reload --json` on %s",
+			c.Path(fleetReloadReceiptPath), receipt.Outcome, c.Host.Name)
+	}
+}
+
+// fleetAwaitReloadReceipt polls the receipt file until one requested at or
+// after since appears, or fleetReloadWait elapses by the context's clock. It
+// reports whether any receipt file existed at all, so an old steward that
+// writes none can be told apart from a slow one.
+func fleetAwaitReloadReceipt(c *Context, since time.Time) (receipt fleetReloadReceipt, existed, found bool) {
+	path := c.Path(fleetReloadReceiptPath)
+	deadline := since.Add(fleetReloadWait)
+	for {
+		if current, ok := fleetReadReloadReceipt(path); ok {
+			existed = true
+			if requested, err := time.Parse(time.RFC3339Nano, current.RequestedAt); err == nil && !requested.Before(since) {
+				return current, true, true
+			}
+		} else if _, err := os.Lstat(path); err == nil {
+			existed = true
+		}
+		if !c.now().Before(deadline) {
+			return fleetReloadReceipt{}, existed, false
+		}
+		c.sleep(fleetReloadPoll)
+	}
+}
+
+// fleetReadReloadReceipt decodes the receipt file. A missing or malformed file
+// is simply not a receipt yet.
+func fleetReadReloadReceipt(path string) (fleetReloadReceipt, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fleetReloadReceipt{}, false
+	}
+	var receipt fleetReloadReceipt
+	if err := json.Unmarshal(raw, &receipt); err != nil || receipt.RequestedAt == "" || receipt.Outcome == "" {
+		return fleetReloadReceipt{}, false
+	}
+	return receipt, true
 }
 
 // fleetRetireCoordinator removes only the private coordinator projection when
@@ -742,10 +859,9 @@ func fleetApply(
 			"host-scoped fleet projections applied; "+
 				"enrollment stays an explicit Steward operation")
 	}
-	if reload, _ := result["coordinator_reload"].(string); reload == "signalled" {
-		*actions = append(*actions,
-			"coordinator catalog input changed; asked "+stewardCoordinatorUnit+
-				" to reload its configuration (the coordinator validates the reload)")
+	if reload, _ := result["coordinator_reload"].(map[string]any); reload != nil {
+		digest, _ := reload["digest"].(string)
+		*actions = append(*actions, "coordinator reloaded its configuration (digest "+digest+")")
 	}
 	state, _ := result["state"].(string)
 	return state, nil

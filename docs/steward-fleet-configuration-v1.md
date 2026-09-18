@@ -85,6 +85,13 @@ entry, which is preserved exactly as before.
 CPU classes use Steward's `low`, `medium`, `high` vocabulary; profile names remain arbitrary.
 The projection never claims that desired models are installed, authenticated or available.
 A changed catalog leaves enrollment stale until the existing revision-fenced operation is applied.
+The coordinator projection's return channel is the coordinator's reload receipt,
+`~/.local/state/t3-steward/coordinator/reload-receipt.json`: after writing a changed projection
+on an active coordinator host the component sends SIGHUP and reads the receipt whose
+`requestedAt` is at or after the signal (`accepted` or `unchanged` converge with the digest,
+`rejected` fails with the coordinator's error and blockers, no receipt within 30 s fails as
+unverified). The coordinator owns that verdict; UpKeeper never decides it and never restarts
+the unit to force one.
 Staging writes to a temporary path in the destination directory, validates, then renames
 atomically, retaining the previous document under the run's private state directory the way
 `worker-configuration` v1 already retains `prior.json`.
