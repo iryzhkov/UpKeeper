@@ -26,6 +26,7 @@ func TestHelpPrintsOnStdoutAndSucceeds(t *testing.T) {
 		{"scheduled-pull", "--help"},
 		{"install-self-timer", "--help"},
 		{"install-pull-timer", "--help"},
+		{"hold", "--help"},
 		{"version", "--help"},
 	} {
 		var out, errs bytes.Buffer

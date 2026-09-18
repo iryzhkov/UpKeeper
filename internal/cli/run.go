@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agent"
@@ -21,6 +22,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/redact"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 	"github.com/iryzhkov/UpKeeper/internal/report"
+	"github.com/iryzhkov/UpKeeper/internal/runstore"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
 	"github.com/iryzhkov/UpKeeper/internal/selfconv"
 	"github.com/iryzhkov/UpKeeper/internal/units"
@@ -95,6 +97,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":
 		return runScheduledPull(parsed, streams)
+	case "hold":
+		return runHold(parsed, streams)
 	case "install-self-timer", "install-pull-timer":
 		return runInstallTimer(parsed, streams)
 	default:
@@ -267,7 +271,7 @@ func previousFleetIntent(parsed *arguments) (*fleet.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, _, _, err := release.LoadHistorical(root, parsed.previousRelease, procx.Run)
+	value, _, _, err := release.LoadHistorical(root, parsed.previousRelease, "--previous", procx.Run)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +356,7 @@ func releaseFor(
 		if err != nil {
 			return release.Release{}, nil, nil, err
 		}
-		value, commit, stored, err := release.LoadHistorical(root, revision, procx.Run)
+		value, commit, stored, err := release.LoadHistorical(root, revision, "", procx.Run)
 		if err != nil {
 			return release.Release{}, nil, nil, err
 		}
@@ -369,7 +373,7 @@ func releaseFor(
 		return value, &commit, stored, nil
 	}
 	if parsed.command == "rollback" {
-		value, commit, stored, err := release.LoadHistorical(root, parsed.to, procx.Run)
+		value, commit, stored, err := release.LoadHistorical(root, parsed.to, "--to", procx.Run)
 		if err != nil {
 			return release.Release{}, nil, nil, err
 		}
@@ -435,20 +439,20 @@ func manifestCommit(root string) *string {
 func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 	root, err := CheckoutRoot()
 	if err != nil {
-		return reportScheduledFailure(streams, "self-schedule", err)
+		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	config, err := inventory.Load(root)
 	if err != nil {
-		return reportScheduledFailure(streams, "self-schedule", err)
+		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	// Exactly one local inventory identity, established before any network.
 	if _, err := selfconv.LocalHost(config); err != nil {
-		return reportScheduledFailure(streams, "self-schedule", err)
+		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	if !parsed.dryRun && !parsed.convergeOnly {
 		refreshed, err := selfconv.Refresh(root, procx.Run)
 		if err != nil {
-			return reportScheduledFailure(streams, "self-schedule", err)
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
 		// Run the gated code, never an old program against a new manifest.
 		// The Python launcher was the checkout, so re-executing it after the
@@ -456,31 +460,35 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		// so the identity is checked instead.
 		if err := selfconv.VerifyProgram(
 			root, buildinfo.SourceCommit(), refreshed, procx.Run); err != nil {
-			return reportScheduledFailure(streams, "self-schedule", err)
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
 	}
 	document, code, err := selfconv.ConvergeSelf(root, parsed.dryRun, procx.Run)
 	if err != nil {
-		return reportScheduledFailure(streams, "self-schedule", err)
+		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	if err := printJSON(streams.Out, document); err != nil {
 		return 1, err
 	}
+	printScheduledSummary(streams.Err, parsed.command, document,
+		scheduledRecordPath(parsed, document), code)
 	return code, nil
 }
 
 func runScheduledPull(parsed *arguments, streams Streams) (int, error) {
 	root, err := CheckoutRoot()
 	if err != nil {
-		return reportScheduledFailure(streams, "scheduled-pull", err)
+		return reportScheduledFailure(streams, parsed.command, "scheduled-pull", err)
 	}
 	document, code, err := selfconv.ConvergeFleet(root, parsed.dryRun, procx.Run)
 	if err != nil {
-		return reportScheduledFailure(streams, "scheduled-pull", err)
+		return reportScheduledFailure(streams, parsed.command, "scheduled-pull", err)
 	}
 	if err := printJSON(streams.Out, document); err != nil {
 		return 1, err
 	}
+	printScheduledSummary(streams.Err, parsed.command, document,
+		scheduledRecordPath(parsed, document), code)
 	if parsed.dryRun {
 		return code, nil
 	}
@@ -517,14 +525,94 @@ func runInstallTimer(parsed *arguments, streams Streams) (int, error) {
 }
 
 // reportScheduledFailure keeps an unattended run's output machine readable: a
-// timer has nobody to read a traceback, so a failure is a report too.
-func reportScheduledFailure(streams Streams, command string, err error) (int, error) {
+// timer has nobody to read a traceback, so a failure is a report too. The
+// same failure is repeated as one line on stderr, where the journal shows it
+// without anyone having to read the document.
+func reportScheduledFailure(
+	streams Streams, verb, command string, err error,
+) (int, error) {
+	message := redact.Text(err.Error())
 	_ = printJSON(streams.Out, map[string]any{
 		"command":   command,
-		"error":     redact.Text(err.Error()),
+		"error":     message,
 		"exit_code": exitcode.Preflight,
 	})
+	fmt.Fprintf(streams.Err, "upkeeper %s: failed before dispatch: %s; exit %d\n",
+		verb, firstLineOf(message), exitcode.Preflight)
 	return exitcode.Preflight, nil
+}
+
+// scheduledRecordPath is where the run record of a scheduled convergence
+// was written, or "" for a dry run, which writes none.
+func scheduledRecordPath(parsed *arguments, document map[string]any) string {
+	if parsed.dryRun {
+		return ""
+	}
+	store, err := runstore.Default()
+	if err != nil {
+		return ""
+	}
+	return store.Path(text(document["run_id"]))
+}
+
+// scheduledFailureStates are the component and host outcomes worth a line on
+// stderr. A deferral is not a failure: the run said why it waited.
+var scheduledFailureStates = map[string]bool{
+	"failed": true, "rolled-back": true, "rollback-failed": true, "lock-contention": true,
+}
+
+// printScheduledSummary writes the failure summary of a scheduled run to
+// stderr: one line per failed component, or per failed host when no component
+// got as far as failing, and a final line naming the run record and the exit
+// code. The JSON document on stdout is untouched; this is the part a person
+// reads in the journal. A clean run writes nothing.
+func printScheduledSummary(
+	err io.Writer, command string, document map[string]any, recordPath string, code int,
+) {
+	lines := []string{}
+	for _, item := range list(document["hosts"]) {
+		host, _ := item.(map[string]any)
+		name := text(host["host"])
+		componentFailed := false
+		for _, entry := range list(host["components"]) {
+			component, _ := entry.(map[string]any)
+			state := text(component["state"])
+			if !scheduledFailureStates[state] {
+				continue
+			}
+			componentFailed = true
+			lines = append(lines, fmt.Sprintf("upkeeper %s: %s %s %s: %s",
+				command, name, text(component["name"]), state, firstLineOf(text(component["error"]))))
+		}
+		if componentFailed || !scheduledFailureStates[text(host["result"])] {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("upkeeper %s: %s %s: %s",
+			command, name, text(host["result"]), firstLineOf(errorText(host))))
+	}
+	if len(lines) == 0 && code == exitcode.Success {
+		return
+	}
+	for _, line := range lines {
+		fmt.Fprintln(err, line)
+	}
+	if recordPath == "" {
+		fmt.Fprintf(err, "upkeeper %s: run %s not recorded (dry run); exit %d\n",
+			command, text(document["run_id"]), code)
+		return
+	}
+	fmt.Fprintf(err, "upkeeper %s: run %s recorded at %s; exit %d\n",
+		command, text(document["run_id"]), recordPath, code)
+}
+
+// firstLineOf keeps the first line of a message whole: the line is what the
+// journal shows, and a refusal's remediation lives on it.
+func firstLineOf(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if index := strings.IndexByte(trimmed, '\n'); index >= 0 {
+		return strings.TrimSpace(trimmed[:index])
+	}
+	return trimmed
 }
 
 func trimNewline(value string) string {

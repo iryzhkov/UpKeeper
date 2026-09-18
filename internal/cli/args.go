@@ -53,6 +53,11 @@ type arguments struct {
 
 	// fleet-plan
 	previousRelease string
+
+	// hold
+	holdAction string
+	holdHost   string
+	holdReason string
 }
 
 // Commands are the subcommands `upkeeper` accepts. The two names beginning
@@ -61,7 +66,7 @@ type arguments struct {
 var Commands = []string{
 	"doctor", "status", "push", "pull", "rollback", "fleet-plan",
 	"self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
-	"version",
+	"hold", "version",
 }
 
 const agentCommand = "__agent"
@@ -102,6 +107,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseFleetPlan(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
+	case "hold":
+		return parsed, parseHold(parsed, rest)
 	case "install-self-timer", "install-pull-timer", agentCommand, probeCommand, "version":
 		if len(rest) > 0 {
 			return nil, usagef("unrecognized arguments: %s", strings.Join(rest, " "))
@@ -292,6 +299,55 @@ func parseScheduled(parsed *arguments, argv []string) error {
 		default:
 			return unrecognized(token)
 		}
+	}
+	return nil
+}
+
+// parseHold reads `hold show [--json]` and `hold clear HOST --reason TEXT
+// [--json]`. The reason is required on the command line, not prompted for: a
+// cleared hold with no recorded reason is the gap this command exists to close.
+func parseHold(parsed *arguments, argv []string) error {
+	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+		return usagef("the following arguments are required: action (show or clear)")
+	}
+	parsed.holdAction = argv[0]
+	rest := argv[1:]
+	switch parsed.holdAction {
+	case "show":
+		for _, token := range rest {
+			if token != "--json" {
+				return unrecognized(token)
+			}
+			parsed.asJSON = true
+		}
+	case "clear":
+		for index := 0; index < len(rest); index++ {
+			token := rest[index]
+			switch {
+			case token == "--json":
+				parsed.asJSON = true
+			case token == "--reason":
+				value, next, err := takeValue(rest, index, "--reason")
+				if err != nil {
+					return err
+				}
+				parsed.holdReason = value
+				index = next
+			case strings.HasPrefix(token, "-") || parsed.holdHost != "":
+				return unrecognized(token)
+			default:
+				parsed.holdHost = token
+			}
+		}
+		if parsed.holdHost == "" {
+			return usagef("the following arguments are required: HOST")
+		}
+		if strings.TrimSpace(parsed.holdReason) == "" {
+			return usagef("the following arguments are required: --reason")
+		}
+	default:
+		return usagef("argument action: invalid choice: %q (choose from \"show\", \"clear\")",
+			parsed.holdAction)
 	}
 	return nil
 }

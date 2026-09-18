@@ -51,13 +51,20 @@ func printStatus(out io.Writer, report map[string]any) {
 			continue
 		}
 		summaries := []string{}
+		reasons := []string{}
 		for _, entry := range list(host["components"]) {
 			component, _ := entry.(map[string]any)
 			summaries = append(summaries,
 				text(component["name"])+"="+text(component["state"]))
+			if reason := text(component["reason"]); reason != "" {
+				reasons = append(reasons, "  "+text(component["name"])+": "+reason)
+			}
 		}
 		fmt.Fprintf(out, "%s: %s [%s]\n",
 			text(host["name"]), text(host["result"]), join(summaries, ", "))
+		for _, reason := range reasons {
+			fmt.Fprintln(out, reason)
+		}
 	}
 }
 

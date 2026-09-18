@@ -512,3 +512,86 @@ func TestStewardVersionOrdering(t *testing.T) {
 		t.Fatal("a prerelease is not a stable numeric T3 version")
 	}
 }
+
+// A pair-range refusal has to say what was observed and what to do about it.
+// The fixed sentence it replaced hid a deleted T3 binary behind "outside
+// candidate steward range" for a whole day.
+func TestStewardRunningT3RangeRefusalsSayWhatWasObserved(t *testing.T) {
+	cases := []struct {
+		name     string
+		observed map[string]any
+		want     string
+	}{
+		{
+			name:     "a served version outside the range is named with the range",
+			observed: map[string]any{"check_ok": true, "served": "0.0.40"},
+			want: "running T3 0.0.40 is outside the candidate steward's T3 range " +
+				"0.0.38..0.0.39; no safe pair transition",
+		},
+		{
+			name: "a failed check quotes the steward's first line",
+			observed: map[string]any{
+				"check_ok":    false,
+				"check_error": "dial tcp 127.0.0.1:7391: connection refused",
+			},
+			want: "running T3 version could not be observed (t3-steward check failed: " +
+				"dial tcp 127.0.0.1:7391: connection refused); no safe pair transition",
+		},
+		{
+			name:     "a check that answered without a version says so",
+			observed: map[string]any{"check_ok": true},
+			want: "running T3 version could not be observed (t3-steward check reported " +
+				"no T3 server version); no safe pair transition",
+		},
+		{
+			name: "a failed check with the program missing on disk names the program",
+			observed: map[string]any{
+				"check_ok":              false,
+				"check_error":           "exec: no such file or directory",
+				"installed_path":        "/home/igor/.local/share/mise/installs/node/26.7.0/bin/node",
+				"installed_path_exists": false,
+			},
+			want: "running T3 binary missing on disk: /home/igor/.local/share/mise/installs/node/26.7.0/bin/node " +
+				"(installed 0.0.38 from the manifest); restart T3 after reinstalling, then retry",
+		},
+		{
+			name: "a check without a version and the program missing names the program too",
+			observed: map[string]any{
+				"check_ok": true, "installed_path": "/x/node", "installed_path_exists": false,
+			},
+			want: "running T3 binary missing on disk: /x/node (installed 0.0.38 from the manifest)",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			err := stewardRunningT3InRange(test.observed, "0.0.38", "0.0.39", "0.0.38")
+			if err == nil || !strings.HasPrefix(err.Error(), test.want) {
+				t.Fatalf("want a refusal starting with %q, got %v", test.want, err)
+			}
+			if !strings.HasSuffix(err.Error(), "then retry") {
+				t.Fatalf("the refusal carries no remediation: %v", err)
+			}
+		})
+	}
+	inRange := map[string]any{"check_ok": true, "served": "0.0.38", "installed_path_exists": true}
+	if err := stewardRunningT3InRange(inRange, "0.0.38", "0.0.39", "0.0.38"); err != nil {
+		t.Fatalf("a running T3 inside the range was refused: %v", err)
+	}
+	// A server that still answers from a deleted program is inside the range
+	// and proceeds; the missing program is a warning, not a new precondition.
+	stillServing := map[string]any{
+		"check_ok": true, "served": "0.0.38",
+		"installed_path": "/x/node", "installed_path_exists": false,
+	}
+	if err := stewardRunningT3InRange(stillServing, "0.0.38", "0.0.39", "0.0.38"); err != nil {
+		t.Fatalf("an answering in-range T3 was refused for its missing program: %v", err)
+	}
+	outOfRange := map[string]any{
+		"check_ok": true, "served": "0.0.40",
+		"installed_path": "/x/node", "installed_path_exists": false,
+	}
+	err := stewardRunningT3InRange(outOfRange, "0.0.38", "0.0.39", "0.0.38")
+	if err == nil || !strings.HasPrefix(err.Error(), "running T3 0.0.40 is outside") {
+		t.Fatalf("an answering out-of-range T3 got %v", err)
+	}
+}

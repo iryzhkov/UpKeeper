@@ -628,8 +628,21 @@ def apply_pinned_steward(spec, before, actions):
                 hook_candidate = stage_session_hook(tar, stage, spec)
             bounds = verify_pair_binary(candidate)
             current_t3 = observe_t3(COMPONENTS.get("t3", {"service": "t3code.service"}))
-            if (not current_t3["check_ok"] or not current_t3["served"] or not numeric_version(bounds[0]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds[1])):
-                raise StepFailed("running T3 is outside candidate steward range; no safe pair transition")
+            # The compiled binary also reports a T3 program deleted from under
+            # its unit; the reference path names what it observed and how.
+            if not current_t3["check_ok"] or not current_t3["served"]:
+                cause = ("t3-steward check failed" if not current_t3["check_ok"]
+                         else "t3-steward check reported no T3 server version")
+                raise StepFailed(
+                    f"running T3 version could not be observed ({cause}); no safe pair "
+                    "transition. Check that T3 is serving and that the steward reaches it, "
+                    "then retry")
+            if not numeric_version(bounds[0]) <= numeric_version(current_t3["served"]) <= numeric_version(bounds[1]):
+                raise StepFailed(
+                    f"running T3 {current_t3['served']} is outside the candidate steward's "
+                    f"T3 range {bounds[0]}..{bounds[1]}; no safe pair transition. Install a T3 "
+                    f"inside that range or publish a steward tested with T3 "
+                    f"{current_t3['served']}, then retry")
         except StepFailed:
             raise
         except Exception as exc:

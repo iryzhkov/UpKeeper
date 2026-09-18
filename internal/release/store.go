@@ -15,7 +15,10 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
-var historicalRevisionPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+// historicalRevisionPattern is the shape a revision must have before it is
+// handed to git: no option-like prefix, no whitespace, no control characters.
+// Which revisions exist is git's question, not a regular expression's.
+var historicalRevisionPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/@{}^~-]*$`)
 
 // Load reads and validates the published manifest in a checkout, and verifies
 // that every companion file it names still matches the digest it was published
@@ -101,15 +104,24 @@ func ExistingOrDefault(root string) (map[string]any, error) {
 //
 // Nothing about the checkout moves: a rollback must be able to read an older
 // release without disturbing whatever the working tree currently holds.
+//
+// revision is anything git resolves to a commit: a hash, a tag, a branch or a
+// symbolic ref such as HEAD. flag names the option the operator typed it
+// after ("--to", "--previous"), so a refusal names that option; an empty flag
+// means the revision was the checkout's own and the message says so.
 func LoadHistorical(
-	root, revision string, runner procx.Runner,
+	root, revision, flag string, runner procx.Runner,
 ) (Release, string, map[string]string, error) {
 	if runner == nil {
 		runner = procx.Run
 	}
+	label := flag
+	if label == "" {
+		label = "the checkout revision"
+	}
 	if !historicalRevisionPattern.MatchString(revision) {
 		return Release{}, "", nil, failure.Validation(
-			"--to must be a release commit hash (7 to 40 hex characters)")
+			"%s must name a commit: a hash, tag, branch or symbolic ref such as HEAD", label)
 	}
 	unavailable := failure.Validation("historical release or companion file is unavailable")
 	git := func(arguments ...string) (string, error) {
@@ -122,13 +134,15 @@ func LoadHistorical(
 		}
 		return result.Stdout, nil
 	}
-	commitOutput, err := git("rev-parse", "--verify", revision+"^{commit}")
+	commitOutput, err := git("rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
 	if err != nil {
-		return Release{}, "", nil, err
+		return Release{}, "", nil, failure.Validation(
+			"%s %s does not resolve to a commit in this checkout", label, revision)
 	}
 	commit := strings.TrimSpace(commitOutput)
 	if _, err := git("merge-base", "--is-ancestor", commit, "HEAD"); err != nil {
-		return Release{}, "", nil, err
+		return Release{}, "", nil, failure.Validation(
+			"%s %s (%s) is not in this checkout's history", label, revision, commit)
 	}
 	manifestBytes, err := git("show", commit+":"+File)
 	if err != nil {

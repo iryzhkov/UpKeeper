@@ -28,3 +28,27 @@ unattended service outside this session's scope.
 If GitHub mirroring cannot be created safely, create an encrypted git bundle in a later explicit
 operation. Its age private key must not live only in the house, and restore testing is part of the
 design rather than merely producing a bundle.
+
+## Recovering a host from a failed scheduled run
+
+A scheduled run that failed, died or lost its output leaves
+`~/.local/state/dev-fleet/scheduled-holds/<host>.hold` on the host that dispatched it, and
+every later scheduled run refuses that host until the marker is cleared. The steps are:
+
+1. Read the failure. The journal of `upkeeper-self.service` (or `upkeeper-pull.service` on
+   Normandy) carries one stderr line per failed component, the run record path and the exit
+   code; the run record under `~/.local/state/dev-fleet/runs/` carries the full report.
+2. Read the hold with `upkeeper hold show`. It names the run that left it.
+3. Fix what the failure names. The T3 pair refusals say which of three things happened: the
+   running T3 is outside the candidate steward's tested range (install a T3 in the range or
+   publish a steward tested with the running one), the T3 version could not be observed (T3 is
+   not serving or the steward cannot reach it), or the program the T3 unit starts is missing
+   from disk, which is what a Node upgrade under mise leaves behind (reinstall T3, restart
+   `t3code.service`).
+4. Clear the marker with `upkeeper hold clear <host> --reason "what you observed and fixed"`.
+   The reason, your user and the time are appended to `<host>.hold.cleared`.
+5. Run `upkeeper self-pull` (or wait for the timer) and confirm with `upkeeper status`, which
+   prints a reason beside any component still drifting.
+
+A release commit for `rollback --to` or `fleet-plan --previous` is any revision git resolves
+to a commit in the checkout's history: a hash, a tag such as `v0.1.8`, a branch or `HEAD`.

@@ -98,6 +98,12 @@ func (s *Store) Write(record *Record) (string, error) {
 	return target, nil
 }
 
+// Path is where a record with this run identifier lives, whether or not it
+// has been written.
+func (s *Store) Path(runID string) string {
+	return filepath.Join(s.Root, runID+".json")
+}
+
 // Read returns a previously written record as a decoded document.
 func (s *Store) Read(runID string) (map[string]any, error) {
 	if _, err := safety.ValidateRunID(runID); err != nil {

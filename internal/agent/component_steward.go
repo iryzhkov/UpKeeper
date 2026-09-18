@@ -342,19 +342,53 @@ func stewardStage(
 	if err != nil {
 		return "", "", err
 	}
-	if err := stewardRunningT3InRange(current, low, high); err != nil {
+	if err := stewardRunningT3InRange(
+		current, low, high, adapterSpecString(t3Spec, "version")); err != nil {
 		return "", "", err
 	}
 	return candidate, hookCandidate, nil
 }
 
 // stewardRunningT3InRange refuses a pair transition the running T3 cannot take.
-func stewardRunningT3InRange(current map[string]any, low, high string) error {
-	refusal := Failf("running T3 is outside candidate steward range; no safe pair transition")
+//
+// The precondition is unchanged from the original: a served version inside
+// the candidate's range proceeds. What changed is what a refusal says. An
+// observation that could not be made is reported as such, because "outside
+// the range" and "could not be read" call for different remedies; and when the
+// version could not be read because the program behind the T3 unit has been
+// deleted, that is named outright, since the steward's check cannot tell it
+// from a server that is merely down. A missing program under a server that
+// still answers is a warning in the observation, not a refusal.
+func stewardRunningT3InRange(current map[string]any, low, high, pinned string) error {
+	service, _ := current["service"].(string)
+	if service == "" {
+		service = "t3code.service"
+	}
+	unobserved := func(cause string) error {
+		if exists, known := current["installed_path_exists"].(bool); known && !exists {
+			path, _ := current["installed_path"].(string)
+			installed := pinned
+			if installed == "" {
+				installed = "an unknown version"
+			}
+			return Failf("running T3 binary missing on disk: %s (installed %s from the manifest); "+
+				"restart T3 after reinstalling, then retry", path, installed)
+		}
+		return Failf("running T3 version could not be observed (%s); no safe pair transition. "+
+			"Check that T3 is serving (systemctl --user status %s) and that the steward "+
+			"reaches it, then retry", cause, service)
+	}
 	checkOK, _ := current["check_ok"].(bool)
+	if !checkOK {
+		cause, _ := current["check_error"].(string)
+		if cause == "" {
+			cause = "no output"
+		}
+		return unobserved("t3-steward check failed: " + cause)
+	}
 	served, _ := current["served"].(string)
-	if !checkOK || served == "" {
-		return refusal
+	if served == "" {
+		return unobserved("t3-steward check reported no T3 server version")
 	}
 	lowest, err := stewardNumericVersion(low)
 	if err != nil {
@@ -370,7 +404,9 @@ func stewardRunningT3InRange(current map[string]any, low, high string) error {
 	}
 	if stewardCompareVersions(lowest, running) > 0 ||
 		stewardCompareVersions(running, highest) > 0 {
-		return refusal
+		return Failf("running T3 %s is outside the candidate steward's T3 range %s..%s; "+
+			"no safe pair transition. Install a T3 inside that range or publish a steward "+
+			"tested with T3 %s, then retry", served, low, high, served)
 	}
 	return nil
 }

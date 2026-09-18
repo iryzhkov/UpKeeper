@@ -56,6 +56,30 @@ func TestStatusText(t *testing.T) {
 	}
 }
 
+// A drifting component's reason is printed under its host so an operator does
+// not have to open the JSON to learn why the scheduled pull has not converged it.
+func TestStatusTextShowsDriftReasons(t *testing.T) {
+	var out bytes.Buffer
+	printStatus(&out, map[string]any{
+		"run_id": "20260914T090000Z-0a1b2c3d", "controller": "normandy",
+		"result": "drift", "exit_code": 10,
+		"hosts": []any{map[string]any{
+			"name": "laptop", "reachable": true, "result": "drift",
+			"components": []any{
+				map[string]any{"name": "huyang", "state": "converged"},
+				map[string]any{"name": "t3-steward", "state": "drift",
+					"reason": "scheduled hold marker present for 26h0m0s; clear it with: upkeeper hold clear laptop --reason TEXT"},
+			},
+		}},
+	})
+	expected := "run 20260914T090000Z-0a1b2c3d controller=normandy status=drift exit=10\n" +
+		"laptop: drift [huyang=converged, t3-steward=drift]\n" +
+		"  t3-steward: scheduled hold marker present for 26h0m0s; clear it with: upkeeper hold clear laptop --reason TEXT\n"
+	if out.String() != expected {
+		t.Errorf("produced\n%s\nexpected\n%s", out.String(), expected)
+	}
+}
+
 func TestPushTextSaysNothingAboutCommitsAManifestOnlyRunNeverConsidered(t *testing.T) {
 	var out bytes.Buffer
 	printPush(&out, map[string]any{

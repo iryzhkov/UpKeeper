@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -214,5 +216,160 @@ func TestT3IdleNeedsAProvenCount(t *testing.T) {
 	}
 	if !t3Idle(map[string]any{"check_ok": true, "running_threads": 0}) {
 		t.Fatal("a proven zero is idle")
+	}
+}
+
+// t3TestUnit answers systemd's questions about the T3 unit for one test: the
+// ExecStart program, the main process, and what mise says t3 is.
+type t3TestUnit struct {
+	execStart string
+	mainPID   string
+	miseWhich procx.Result
+}
+
+func (u t3TestUnit) handle(inner func(procx.Command) procx.Result) func(procx.Command) procx.Result {
+	return func(command procx.Command) procx.Result {
+		switch {
+		case adapterTestMatches(command.Argv, "show", "t3code.service", "ExecStart"):
+			if u.execStart == "" {
+				return procx.Result{}
+			}
+			return procx.Result{Stdout: "{ path=" + u.execStart + " ; argv[]=" + u.execStart +
+				" serve --host 127.0.0.1 --port 7391 ; ignore_errors=no ; pid=0 }\n"}
+		case adapterTestMatches(command.Argv, "show", "t3code.service", "MainPID"):
+			return procx.Result{Stdout: u.mainPID + "\n"}
+		case adapterTestMatches(command.Argv, "which", "t3"):
+			return u.miseWhich
+		default:
+			return inner(command)
+		}
+	}
+}
+
+// t3TestProc builds a /proc lookalike with one process whose exe link points
+// at target, which may carry the kernel's " (deleted)" suffix.
+func t3TestProc(t *testing.T, pid, target string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, pid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, pid, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	saved := t3ProcRoot
+	t3ProcRoot = root
+	t.Cleanup(func() { t3ProcRoot = saved })
+}
+
+// The program that runs T3 is not the unit's ExecStart on this fleet: the
+// unit starts the mise shim, a symlink to /usr/bin/mise, and both survive the
+// Node upgrade that deletes the Node prefix T3 lives under. The observation
+// has to look past the launcher, and must never vouch for mise as T3.
+func TestT3ObserveLooksPastTheMiseShimToTheRealProgram(t *testing.T) {
+	context, runner := t3TestPrepare(t, t3TestHost{
+		installed: t3TestPinned, served: t3TestPinned, checkOK: false, active: true,
+	})
+	inner := runner.handle
+	shim := context.Path(".local/share/mise/shims/t3")
+	mise := context.Path("usr/bin/mise")
+	adapterTestWrite(t, mise, "#!/bin/sh\n")
+	if err := os.MkdirAll(filepath.Dir(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mise, shim); err != nil {
+		t.Fatal(err)
+	}
+	node := context.Path(".local/share/mise/installs/node/26.7.0/bin/node")
+	t3 := context.Path(".local/share/mise/installs/node/26.7.0/bin/t3")
+
+	// The reviewer's case: the server is still running from a Node install
+	// that a mise upgrade removed. The kernel marks its program deleted.
+	t3TestProc(t, "4242", node+" (deleted)")
+	runner.handle = t3TestUnit{execStart: shim, mainPID: "4242"}.handle(inner)
+	observed, err := t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path"] != node || observed["installed_path_exists"] != false {
+		t.Fatalf("a deleted running program was not reported: %v", observed)
+	}
+	if warning, _ := observed["warning"].(string); !strings.Contains(warning, "missing on disk") {
+		t.Fatalf("the observation carries no warning: %v", observed)
+	}
+	refusal := stewardRunningT3InRange(observed, t3TestPinned, t3TestPinned, t3TestPinned)
+	if refusal == nil || !strings.HasPrefix(refusal.Error(),
+		"running T3 binary missing on disk: "+node+" (installed "+t3TestPinned+" from the manifest)") {
+		t.Fatalf("the refusal does not name the deleted program: %v", refusal)
+	}
+
+	// A running program that is still on disk is reported as present.
+	adapterTestWrite(t, node, "#!/bin/sh\n")
+	t3TestProc(t, "4243", node)
+	runner.handle = t3TestUnit{execStart: shim, mainPID: "4243"}.handle(inner)
+	observed, _ = t3Observe(context, context.Spec("t3"))
+	if observed["installed_path"] != node || observed["installed_path_exists"] != true {
+		t.Fatalf("a present running program was not reported: %v", observed)
+	}
+
+	// No process (the unit is down): mise is asked which t3 it would run, and
+	// its answer is checked on disk.
+	runner.handle = t3TestUnit{execStart: shim, mainPID: "0",
+		miseWhich: procx.Result{Stdout: t3 + "\n"}}.handle(inner)
+	observed, _ = t3Observe(context, context.Spec("t3"))
+	if observed["installed_path"] != t3 || observed["installed_path_exists"] != false {
+		t.Fatalf("a missing mise-managed t3 was not reported: %v", observed)
+	}
+	adapterTestWrite(t, t3, "#!/bin/sh\n")
+	observed, _ = t3Observe(context, context.Spec("t3"))
+	if observed["installed_path_exists"] != true {
+		t.Fatalf("a present mise-managed t3 was not reported: %v", observed)
+	}
+
+	// A mise that cannot answer leaves the question open: the shim resolving
+	// to an existing mise binary is never evidence that T3 exists.
+	runner.handle = t3TestUnit{execStart: shim, mainPID: "0",
+		miseWhich: procx.Result{Code: 1, Stderr: "mise ERROR t3 is not a tool"}}.handle(inner)
+	observed, _ = t3Observe(context, context.Spec("t3"))
+	if observed["installed_path"] != shim || observed["installed_path_exists"] != nil {
+		t.Fatalf("mise itself was taken for T3: %v", observed)
+	}
+}
+
+// The service unit names the T3 program it starts. Whether that program still
+// exists on disk is the one fact that separates "T3 is not answering" from "a
+// Node upgrade deleted T3", so the observation carries it.
+func TestT3ObserveReportsWhetherTheServiceBinaryExists(t *testing.T) {
+	context, runner := t3TestPrepare(t, t3TestHost{
+		installed: t3TestPinned, served: t3TestPinned, checkOK: true, active: true,
+	})
+	binary := context.Path(".local/share/mise/shims/t3")
+	inner := runner.handle
+	runner.handle = t3TestUnit{execStart: binary, mainPID: "0"}.handle(inner)
+	observed, err := t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path"] != binary || observed["installed_path_exists"] != false {
+		t.Fatalf("a missing service binary was not reported: %v", observed)
+	}
+	adapterTestWrite(t, binary, "#!/bin/sh\n")
+	observed, err = t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path_exists"] != true {
+		t.Fatalf("a present service binary was not reported: %v", observed)
+	}
+
+	// A unit systemd cannot describe leaves the question open rather than
+	// answering it either way.
+	runner.handle = inner
+	observed, err = t3Observe(context, context.Spec("t3"))
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observed["installed_path"] != nil || observed["installed_path_exists"] != nil {
+		t.Fatalf("an unknown service binary was guessed at: %v", observed)
 	}
 }

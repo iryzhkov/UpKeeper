@@ -40,7 +40,7 @@ func ConvergeSelf(
 	if err != nil {
 		return nil, 0, err
 	}
-	value, commit, stored, err := release.LoadHistorical(root, revision, runner)
+	value, commit, stored, err := release.LoadHistorical(root, revision, "", runner)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -57,6 +57,7 @@ func ConvergeSelf(
 	}
 	return converge.Fleet(config, value, converge.Options{
 		Hosts:          []string{host},
+		Command:        "self-pull",
 		SelfOnly:       true,
 		DryRun:         dryRun,
 		Timeout:        DefaultTimeout,
@@ -87,7 +88,7 @@ func ConvergeFleet(
 	if host != "normandy" {
 		return nil, 0, failure.Value("the fleet convergence timer belongs on normandy only")
 	}
-	value, commit, stored, err := release.LoadHistorical(root, revision, runner)
+	value, commit, stored, err := release.LoadHistorical(root, revision, "", runner)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -104,6 +105,7 @@ func ConvergeFleet(
 	}
 	return converge.Fleet(config, value, converge.Options{
 		Hosts:           config.HostNames(),
+		Command:         "scheduled-pull",
 		DryRun:          dryRun,
 		Timeout:         DefaultTimeout,
 		ManifestCommit:  &commit,
