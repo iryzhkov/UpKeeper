@@ -19,7 +19,29 @@ const CoordinatorPurpose = "authored coordinator configuration; enrollment remai
 // one instead.
 const FenceAdvice = "UpKeeper cannot compute the coordinator's catalog revision; " +
 	"read it from `t3-steward backlog workers --json` and pass it to " +
-	"`t3-steward worker enroll --catalog-revision <revision>`"
+	"`t3-steward worker enroll --catalog-revision <revision>`, or run " +
+	"`t3-steward worker enroll <worker> --current-catalog` on the coordinator host, " +
+	"which reads it itself"
+
+// ProjectAddedAdvice is what the plan says under a project that the previous
+// release did not carry. The coordinator loads such a project with default
+// local bindings (no credentials, resource locks or directory resources) until
+// its operator binds it explicitly in backlog_v2.projects, so the plan says
+// that outright rather than leaving it to be discovered from a warning in the
+// coordinator's log.
+const ProjectAddedAdvice = "will be loaded by the coordinator with default local bindings " +
+	"(no credentials, resource locks or directory resources) unless backlog_v2.projects " +
+	"binds it explicitly"
+
+// reenrollAdvice names the one command that brings a worker's enrollment up to
+// a changed catalog, and where it runs. A project change alters the catalog
+// digest of every worker it is eligible for, so each of them is stale until
+// re-enrolled; naming the command per worker is what turns the diff into the
+// list of actions an operator runs next.
+func reenrollAdvice(worker string) string {
+	return "worker " + worker + " needs re-enrollment for the changed catalog: run " +
+		"`t3-steward worker enroll " + worker + " --current-catalog --reason TEXT` on the coordinator host"
+}
 
 // ModelSets is what one host is authorized to run and, separately, what was
 // observed on it.
@@ -247,15 +269,23 @@ func slotChanges(proposed, previous *Document, name string) []string {
 
 func projectChanges(proposed, previous *Document) []string {
 	changes := []string{}
+	// reenroll collects, once per worker, every worker whose catalog changes
+	// because a project it is eligible for was added, removed or re-scoped.
+	reenroll := map[string]bool{}
 	for _, name := range proposed.ProjectNames() {
 		project := proposed.Projects[name]
-		if previous == nil {
-			changes = append(changes, "project "+name+" is added at "+project.Repository)
-			continue
+		var earlier Project
+		known := false
+		if previous != nil {
+			earlier, known = previous.Projects[name]
 		}
-		earlier, known := previous.Projects[name]
 		if !known {
-			changes = append(changes, "project "+name+" is added at "+project.Repository)
+			changes = append(changes,
+				"project "+name+" is added at "+project.Repository,
+				"project "+name+" "+ProjectAddedAdvice)
+			for _, worker := range project.EligibleWorkers {
+				reenroll[worker] = true
+			}
 			continue
 		}
 		if earlier.Repository != project.Repository {
@@ -268,18 +298,30 @@ func projectChanges(proposed, previous *Document) []string {
 		}
 		for _, added := range difference(project.EligibleWorkers, earlier.EligibleWorkers) {
 			changes = append(changes, "project "+name+" becomes eligible for "+added)
+			reenroll[added] = true
 		}
 		for _, dropped := range difference(earlier.EligibleWorkers, project.EligibleWorkers) {
 			changes = append(changes, "project "+name+" stops being eligible for "+dropped)
+			reenroll[dropped] = true
 		}
 	}
-	if previous == nil {
-		return changes
-	}
-	for _, name := range previous.ProjectNames() {
-		if _, kept := proposed.Projects[name]; !kept {
-			changes = append(changes, "project "+name+" is removed")
+	if previous != nil {
+		for _, name := range previous.ProjectNames() {
+			if _, kept := proposed.Projects[name]; !kept {
+				changes = append(changes, "project "+name+" is removed")
+				for _, worker := range previous.Projects[name].EligibleWorkers {
+					reenroll[worker] = true
+				}
+			}
 		}
+	}
+	workers := make([]string, 0, len(reenroll))
+	for worker := range reenroll {
+		workers = append(workers, worker)
+	}
+	sort.Strings(workers)
+	for _, worker := range workers {
+		changes = append(changes, reenrollAdvice(worker))
 	}
 	return changes
 }

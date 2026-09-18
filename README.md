@@ -34,7 +34,18 @@ See [the release guide](docs/upkeeper-push-pull.md) and
 ```bash
 ./bin/upkeeper fleet-plan                                # report what the fleet authorizes
 ./bin/upkeeper fleet-plan --previous 6bcd2f8 --json      # and what enrolling it would change
+./bin/upkeeper project add NAME --repository URL --default-ref REF --workers a,b [--setup-profile P]
+./bin/upkeeper project remove NAME                       # both edit desired/release.json and print the plan
 ```
+
+`project add` and `project remove` edit the `projects` entry of the fleet intent through the
+release model, validate the manifest with the parser `fleet-plan` uses, write it back in its
+canonical encoding, and print the `fleet-plan` diff against the release committed at `HEAD`.
+An unknown worker is refused and nothing is written. They commit, push, pull and enroll
+nothing: review `git diff desired/release.json`, commit, and publish with `push`. An added
+project is loaded by the coordinator with default local bindings, and each worker it is
+eligible for needs `t3-steward worker enroll <worker> --current-catalog` on the coordinator
+host once the release has converged there.
 
 The `steward-fleet-configuration` component holds the authored, non-secret intent for the
 whole Steward fleet: the coordinator and its client endpoint, reusable host profiles, one

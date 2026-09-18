@@ -93,6 +93,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runConvergence(parsed, streams)
 	case "fleet-plan":
 		return runFleetPlan(parsed, streams)
+	case "project":
+		return runProject(parsed, streams)
 	case "self-pull":
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":
