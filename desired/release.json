@@ -1640,14 +1640,6 @@
                 "*"
               ]
             },
-            "provider_instances": [
-              "claudeAgent",
-              "codex",
-              "opencode"
-            ],
-            "quota_bindings": {
-              "opencode": "opencode-free"
-            },
             "quota_pools": [
               "claude-main",
               "codex-main",
@@ -1691,9 +1683,6 @@
             "codex",
             "opencode"
           ],
-          "quota_bindings": {
-            "opencode": "opencode-free"
-          },
           "quota_pools": [
             "claude-main",
             "codex-main",
@@ -1714,22 +1703,16 @@
             "codex": [
               "*"
             ],
-            "opencode": [
-              "*"
-            ]
+            "opencode": []
           },
           "provider_instances": [
             "claudeAgent",
             "codex",
             "opencode"
           ],
-          "quota_bindings": {
-            "opencode": "opencode-free"
-          },
           "quota_pools": [
             "claude-main",
-            "codex-main",
-            "opencode-free"
+            "codex-main"
           ]
         }
       },
