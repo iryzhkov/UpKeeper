@@ -61,3 +61,20 @@ release tags (`v0.1.x`).
   pools, executor slots, capabilities, cpu class or provider instances), that
   the coordinator refuses the reload while that worker holds a retained
   assignment and that the receipt names each one (F-3).
+
+### Fixed
+
+- A rejected coordinator reload no longer leaves the refused projection on the
+  host. The `steward-fleet-configuration` component puts back the
+  `coordinator-fleet.json` the run replaced, or removes the file when the run
+  created it, and says which in the failure beside the coordinator's error and
+  blockers. The component still fails, and the coordinator's own configuration
+  is untouched either way: it never loaded the refused document. Before this,
+  the refused bytes stayed on disk and were what the coordinator read the next
+  time it started, so a reload that was merely rejected became a coordinator
+  that could not load its configuration at all, with `t3-steward check` failing
+  and the steward pair gate that would repair the host blocked behind that
+  check. A reload whose verdict never arrived is unchanged: the projection
+  stays, because an unverified reload does not say whether the coordinator
+  loaded it, and reverting it could silently undo a catalog the coordinator is
+  running (R7).

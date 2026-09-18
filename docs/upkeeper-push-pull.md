@@ -103,7 +103,9 @@ reads "coordinator reloaded its configuration (digest ...)" and the result carri
 `coordinator_reload` with the outcome and the digest now in effect. A `rejected` receipt
 fails the component with the coordinator's error and every blocking assignment, one per
 line, each with the worker, assignment, attempt, its state and the command that unblocks it;
-the effective configuration and its digest are unchanged. No receipt in time fails the
+the effective configuration and its digest are unchanged, and the projection is put back to
+the document that run replaced (or removed, when the run created it) so that the file the
+coordinator reads at its next start is one it can load. No receipt in time fails the
 component as unverified, naming `t3-steward coordinator reload --json` to run on the host
 and saying whether a receipt file existed at all, which is how a coordinator older than
 rc.69 (one that writes no receipt) is told apart from a slow one. A dry run neither signals

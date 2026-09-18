@@ -77,7 +77,9 @@ coordinator.
 field.** It reads `coordinator-fleet.json` with unknown fields refused, so a projection that
 carries `quota_bindings` is rejected by a coordinator that predates that change, its reload
 receipt says so, and the `steward-fleet-configuration` convergence on the coordinator host
-fails with that receipt rather than applying half of the intent. Authoring a binding is
+fails with that receipt rather than applying half of the intent. The refused projection is
+put back to the document that run replaced, so that coordinator still starts from a
+configuration it can read; the release edit, not the host, is what has to be fixed. Authoring a binding is
 therefore safe only once the coordinator accepts the field; the intended contract on that
 side is that the projected binding is used when `backlog_v2.workers.<w>.providers.<instance>`
 carries no explicit `quota_pool`, that an explicit `quota_pool` in the coordinator's own
@@ -130,6 +132,13 @@ on an active coordinator host the component sends SIGHUP and reads the receipt w
 `rejected` fails with the coordinator's error and blockers, no receipt within 30 s fails as
 unverified). The coordinator owns that verdict; UpKeeper never decides it and never restarts
 the unit to force one.
+A `rejected` verdict also puts the projection back to the document the run replaced, or
+removes it when the run created it, and the failure says which: the coordinator never loaded
+the refused bytes, and a projection it has refused must not be what it reads at its next
+start, which would turn a rejected reload into a coordinator that cannot start. An unverified
+reload leaves the projection in place on purpose, because no verdict means no evidence about
+what the coordinator is running, and reverting the file could undo an accepted catalog
+silently.
 Staging writes to a temporary path in the destination directory, validates, then renames
 atomically, retaining the previous document under the run's private state directory the way
 `worker-configuration` v1 already retains `prior.json`.
