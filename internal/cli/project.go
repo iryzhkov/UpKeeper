@@ -123,7 +123,7 @@ func committedFleetIntent(root string) (*fleet.Document, error) {
 		return nil, failure.Validation(
 			"the checkout at %s has no commit at HEAD to diff against", root)
 	}
-	value, _, _, err := release.LoadHistorical(root, strings.TrimSpace(result.Stdout), procx.Run)
+	value, _, _, err := release.LoadHistorical(root, strings.TrimSpace(result.Stdout), "", procx.Run)
 	if err != nil {
 		return nil, err
 	}
