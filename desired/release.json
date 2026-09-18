@@ -1793,6 +1793,14 @@
           "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
           "setup_profile": "git-status"
         },
+        "scratch-ha-validation": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab"
+          ],
+          "repository": "ssh://igor@normandy/home/igor/.cache/track-s-campaign/dogfood-repo",
+          "setup_profile": "git-status"
+        },
         "steward-tests-homelab": {
           "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
           "eligible_workers": [
