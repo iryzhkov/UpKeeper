@@ -64,7 +64,7 @@ attempt's state and the action that unblocks it. Typically a worker whose catalo
 still holds a retained assignment, paused or parked. The steps are:
 
 1. Read the blockers in the run record, or on the coordinator host with
-   `t3-steward coordinator identity --json` (field `lastReload`).
+   `t3-steward coordinator identity --json` (field `lastReloadReceipt`).
 2. Unblock each one as the receipt says: wait for a paused attempt's pause to lift or a
    parked attempt's wait to settle, or cancel its task with
    `t3-steward backlog cancel <run>/<task> --reason TEXT`.
