@@ -58,6 +58,37 @@ func TestEnrollmentPlanExplainsAnAddedProject(t *testing.T) {
 	}
 }
 
+// A change to a worker's own catalog entry (models here; also quota pools,
+// executor slots, capabilities, cpu class or provider instances) changes the
+// coordinator's catalog revision for that worker, so the coordinator refuses
+// the reload the same way it does for a project change while that worker holds
+// a retained assignment. The plan says so under a models-only change, once.
+func TestEnrollmentPlanWarnsOfTheReloadRefusalUnderAModelChange(t *testing.T) {
+	previous, err := fleet.Parse(edit(t, func(document map[string]any) {
+		object(t, document, "profiles", "standard")["models"].(map[string]any)["claudeAgent"] =
+			[]any{"claude-sonnet-4-5"}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := parsed(t).EnrollmentPlan(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, _ := plan["authorization_changes"].([]any)
+	advice := 0
+	model := false
+	for _, change := range changes {
+		if change == fleet.ReloadRefusalAdvice {
+			advice++
+		}
+		model = model || strings.Contains(change.(string), "is authorized for claudeAgent model claude-opus-4-5")
+	}
+	if !model || advice != 1 {
+		t.Fatalf("a models-only change carries the refusal advice %d times (want 1) in %v", advice, changes)
+	}
+}
+
 // A worker that becomes eligible for an existing project also has a changed
 // catalog, so it is told to re-enroll too.
 func TestEnrollmentPlanNamesReenrollmentForANewlyEligibleWorker(t *testing.T) {

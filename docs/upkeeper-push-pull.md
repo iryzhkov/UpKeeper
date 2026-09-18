@@ -108,8 +108,10 @@ component as unverified, naming `t3-steward coordinator reload --json` to run on
 and saying whether a receipt file existed at all, which is how a coordinator older than
 rc.69 (one that writes no receipt) is told apart from a slow one. A dry run neither signals
 nor waits, and an inactive unit is not signalled: it reads the projection when it next
-starts. `fleet-plan` says, under a coordinator catalog change, that the reload is refused
-while a worker whose catalog changes holds a retained assignment.
+starts. `fleet-plan` says, under any change that alters a worker's catalog revision (a
+project it is eligible for, or its own models, quota pools, executor slots, capabilities, cpu
+class or provider instances), that the reload is refused while that worker holds a retained
+assignment.
 
 ## Records and recovery
 

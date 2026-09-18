@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"reflect"
 	"sort"
 	"strconv"
 )
@@ -33,11 +34,13 @@ const ProjectAddedAdvice = "will be loaded by the coordinator with default local
 	"(no credentials, resource locks or directory resources) unless backlog_v2.projects " +
 	"binds it explicitly"
 
-// ReloadRefusalAdvice is what the plan says under a coordinator catalog change:
-// the coordinator re-reads the projection on SIGHUP but refuses the reload
-// while a worker whose catalog changes still holds a retained assignment, and
-// its receipt (read by the convergence, and by "t3-steward coordinator
-// identity --json") names each one and how to unblock it.
+// ReloadRefusalAdvice is what the plan says under any change that alters a
+// worker's catalog revision: a project it is eligible for, or its own entry
+// (models, quota pools, executor slots, capabilities, cpu class, provider
+// instances). The coordinator re-reads the projection on SIGHUP but refuses
+// the reload while a worker whose catalog changes still holds a retained
+// assignment, and its receipt (read by the convergence, and by "t3-steward
+// coordinator identity --json") names each one and how to unblock it.
 const ReloadRefusalAdvice = "the coordinator refuses the reload while a worker whose catalog changes " +
 	"holds a retained assignment (one not completed or released); its reload receipt names each " +
 	"one and the command that unblocks it, and the convergence fails with that receipt"
@@ -216,6 +219,10 @@ func (d *Document) observedCoordinator(key string) any {
 // has to read before enrolling, not a full document diff.
 func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 	changes := []string{}
+	// refusable is set once any worker the coordinator already knows has its
+	// catalog revision changed by this document, whether through its own
+	// entry or through a project; the advice is then said once, at the end.
+	refusable := false
 	if previous != nil && previous.Coordinator.ID != d.Coordinator.ID {
 		changes = append(changes,
 			"coordinator identity "+previous.Coordinator.ID+" becomes "+d.Coordinator.ID)
@@ -241,6 +248,11 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 		}
 		changes = append(changes, modelChanges(name, earlier.Desired, proposed.Desired)...)
 		changes = append(changes, slotChanges(d, previous, name)...)
+		changed, err := workerEntryChanged(d, previous, name)
+		if err != nil {
+			return nil, err
+		}
+		refusable = refusable || changed
 	}
 	if previous != nil {
 		for _, name := range previous.HostNames() {
@@ -249,8 +261,30 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 			}
 		}
 	}
-	changes = append(changes, projectChanges(d, previous)...)
+	projectLines, touched := projectChanges(d, previous)
+	changes = append(changes, projectLines...)
+	if refusable || touched {
+		changes = append(changes, ReloadRefusalAdvice)
+	}
 	return changes, nil
+}
+
+// workerEntryChanged reports whether a worker's entry in the coordinator
+// projection differs between the two documents. The entry is the whole of
+// what the coordinator hashes into that worker's catalog revision from this
+// document, so this is the test for "the reload touches this worker" that
+// the per-field diff lines above only partly cover (they do not list
+// capabilities, cpu class or provider instances).
+func workerEntryChanged(proposed, previous *Document, name string) (bool, error) {
+	now, err := proposed.coordinatorWorkerEntry(name)
+	if err != nil {
+		return false, err
+	}
+	before, err := previous.coordinatorWorkerEntry(name)
+	if err != nil {
+		return false, err
+	}
+	return !reflect.DeepEqual(now, before), nil
 }
 
 func slotChanges(proposed, previous *Document, name string) []string {
@@ -276,7 +310,10 @@ func slotChanges(proposed, previous *Document, name string) []string {
 	return changes
 }
 
-func projectChanges(proposed, previous *Document) []string {
+// projectChanges lists the project differences and reports whether any of
+// them touched a worker the coordinator already knows, which is when the
+// reload can be refused for retained work on that worker.
+func projectChanges(proposed, previous *Document) ([]string, bool) {
 	changes := []string{}
 	// reenroll collects, once per worker, every worker whose catalog changes
 	// because a project it is eligible for was added, removed or re-scoped.
@@ -332,10 +369,7 @@ func projectChanges(proposed, previous *Document) []string {
 	for _, worker := range workers {
 		changes = append(changes, reenrollAdvice(worker))
 	}
-	if len(workers) != 0 {
-		changes = append(changes, ReloadRefusalAdvice)
-	}
-	return changes
+	return changes, len(workers) != 0
 }
 
 func modelChanges(host string, before, now map[string][]string) []string {

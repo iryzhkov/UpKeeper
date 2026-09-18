@@ -141,23 +141,11 @@ func (d *Document) ClientBytes(name string) ([]byte, error) {
 func (d *Document) CoordinatorProjection() (map[string]any, error) {
 	workers := map[string]any{}
 	for _, name := range d.HostNames() {
-		profile, err := d.Resolved(name)
+		entry, err := d.coordinatorWorkerEntry(name)
 		if err != nil {
 			return nil, err
 		}
-		models := map[string]any{}
-		for _, instance := range profile.ProviderInstances {
-			models[instance] = sortedUnique(profile.Models[instance])
-		}
-		workers[name] = map[string]any{
-			"worker_id":          name,
-			"cpu_class":          profile.CPUClass,
-			"executor_slots":     profile.ExecutorSlots,
-			"capabilities":       sortedUnique(profile.Capabilities),
-			"provider_instances": sortedUnique(profile.ProviderInstances),
-			"desired_models":     models,
-			"quota_pools":        sortedUnique(profile.QuotaPools),
-		}
+		workers[name] = entry
 	}
 	projects := map[string]any{}
 	for _, name := range d.ProjectNames() {
@@ -175,6 +163,30 @@ func (d *Document) CoordinatorProjection() (map[string]any, error) {
 		"coordinator_id": d.Coordinator.ID,
 		"workers":        workers,
 		"projects":       projects,
+	}, nil
+}
+
+// coordinatorWorkerEntry renders one worker's entry of the coordinator
+// projection. Everything in it feeds the coordinator's catalog revision for
+// that worker, so a difference between two documents' entries for the same
+// worker is exactly what changes its revision from this side.
+func (d *Document) coordinatorWorkerEntry(name string) (map[string]any, error) {
+	profile, err := d.Resolved(name)
+	if err != nil {
+		return nil, err
+	}
+	models := map[string]any{}
+	for _, instance := range profile.ProviderInstances {
+		models[instance] = sortedUnique(profile.Models[instance])
+	}
+	return map[string]any{
+		"worker_id":          name,
+		"cpu_class":          profile.CPUClass,
+		"executor_slots":     profile.ExecutorSlots,
+		"capabilities":       sortedUnique(profile.Capabilities),
+		"provider_instances": sortedUnique(profile.ProviderInstances),
+		"desired_models":     models,
+		"quota_pools":        sortedUnique(profile.QuotaPools),
 	}, nil
 }
 

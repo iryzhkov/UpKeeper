@@ -19,6 +19,8 @@ release tags (`v0.1.x`).
   per line; no receipt in time fails it as unverified, naming
   `t3-steward coordinator reload --json` to run on the host and saying
   whether a receipt file existed at all. A dry run and an inactive unit are
-  unchanged. `fleet-plan` says, under a coordinator catalog change, that the
-  coordinator refuses the reload while a worker whose catalog changes holds a
-  retained assignment and that the receipt names each one (F-3).
+  unchanged. `fleet-plan` says, under any change that alters a worker's
+  catalog revision (a project it is eligible for, or its own models, quota
+  pools, executor slots, capabilities, cpu class or provider instances), that
+  the coordinator refuses the reload while that worker holds a retained
+  assignment and that the receipt names each one (F-3).
