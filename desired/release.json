@@ -1637,8 +1637,16 @@
                 "*"
               ],
               "opencode": [
-                "*"
+                "glm-4.6"
               ]
+            },
+            "provider_instances": [
+              "claudeAgent",
+              "codex",
+              "opencode"
+            ],
+            "quota_bindings": {
+              "opencode": "opencode-free"
             },
             "quota_pools": [
               "claude-main",
@@ -1675,7 +1683,7 @@
               "*"
             ],
             "opencode": [
-              "*"
+              "glm-4.6"
             ]
           },
           "provider_instances": [
@@ -1683,6 +1691,9 @@
             "codex",
             "opencode"
           ],
+          "quota_bindings": {
+            "opencode": "opencode-free"
+          },
           "quota_pools": [
             "claude-main",
             "codex-main",
@@ -1703,16 +1714,22 @@
             "codex": [
               "*"
             ],
-            "opencode": []
+            "opencode": [
+              "glm-4.6"
+            ]
           },
           "provider_instances": [
             "claudeAgent",
             "codex",
             "opencode"
           ],
+          "quota_bindings": {
+            "opencode": "opencode-free"
+          },
           "quota_pools": [
             "claude-main",
-            "codex-main"
+            "codex-main",
+            "opencode-free"
           ]
         }
       },
