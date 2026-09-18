@@ -108,7 +108,7 @@ func fleetProjection(
 				return nil, err
 			}
 			if coordinator && fleetCatalogChanged(documents) {
-				reload, err = fleetReloadCoordinator(c)
+				reload, err = fleetReloadCoordinator(c, runID)
 				if err != nil {
 					return nil, err
 				}
@@ -216,11 +216,12 @@ type fleetReloadBlocker struct {
 //
 // The coordinator owns the verdict. An accepted or unchanged receipt converges
 // the component and reports the digest; a rejected one fails it with the
-// coordinator's error and blockers; no receipt requested at or after the
-// signal within fleetReloadWait fails it as unverified, naming the command
-// that shows the verdict on the host. An inactive unit reads the projection
-// when it next starts, and is reported as such rather than signalled.
-func fleetReloadCoordinator(c *Context) (any, error) {
+// coordinator's error and blockers, after putting back the projection this run
+// replaced; no receipt requested at or after the signal within fleetReloadWait
+// fails it as unverified, naming the command that shows the verdict on the
+// host. An inactive unit reads the projection when it next starts, and is
+// reported as such rather than signalled.
+func fleetReloadCoordinator(c *Context, runID string) (any, error) {
 	if !c.UnitActive(stewardCoordinatorUnit) {
 		return "unit inactive; the projection is read at the next start", nil
 	}
@@ -237,6 +238,13 @@ func fleetReloadCoordinator(c *Context) (any, error) {
 		if existed {
 			why = "a receipt file exists but its requestedAt is older than the signal"
 		}
+		// The projection stays on disk here, deliberately. Without a verdict
+		// this component does not know whether the coordinator loaded it, and
+		// putting back the previous document would silently revert a catalog
+		// the coordinator may be running: the next restart would then load the
+		// older configuration with nothing saying so. An unverified reload is
+		// answered by reading the verdict on the host, not by guessing it. The
+		// unknown outcome below is the same case for the same reason.
 		return nil, Failf("coordinator reload unverified: no receipt requested at or after %s appeared at %s within %s (%s); run `t3-steward coordinator reload --json` on %s to see the verdict",
 			signalledAt.UTC().Format(time.RFC3339), c.Path(fleetReloadReceiptPath), fleetReloadWait, why, c.Host.Name)
 	}
@@ -262,6 +270,34 @@ func fleetReloadCoordinator(c *Context) (any, error) {
 				" attempt "+blocker.AttemptID+" ("+state+"): "+blocker.Unblock)
 		}
 		lines = append(lines, "  the effective configuration and its digest are unchanged ("+receipt.ConfigurationDigest+")")
+		// The coordinator refused these bytes and kept the configuration it is
+		// running, so the file and the running process now disagree. Left
+		// alone, the refused projection is what the coordinator reads the next
+		// time it starts, and a projection it has already refused is one it
+		// cannot load at all: the unit crash-loops, `t3-steward check` fails
+		// with it, and the pair gate that would install a steward able to read
+		// the file needs that check to observe the running version. So the
+		// document this run replaced goes back, and a refused projection never
+		// outlives the run that wrote it. The component still fails: the
+		// release is wrong and the operator has to fix it.
+		existed, restoreErr := fleetRestoreRetainedDocument(c.Home, runID, fleet.CoordinatorDestination)
+		if restoreErr != nil {
+			// The "rollback failed" prefix is what the agent classifies as
+			// rollback-failed, the loudest outcome a host can report, and it is
+			// the honest one: the refused projection is still the one the
+			// coordinator would read at its next start.
+			return nil, Failf(
+				"rollback failed: %s\n  the refused projection could not be replaced by the document this run found (%v); "+
+					"%s is the projection the coordinator refused and it is what the coordinator would read at its next "+
+					"start, so put back the retained document under %s before that unit is restarted",
+				strings.Join(lines, "\n"), restoreErr, c.Path(fleet.CoordinatorDestination),
+				filepath.Join(fleet.StateDirectory, runID))
+		}
+		if existed {
+			lines = append(lines, "  the previous projection was put back, so the coordinator reads the configuration it is running when it next starts")
+		} else {
+			lines = append(lines, "  this run created the projection, so it was removed; the coordinator reads the configuration it is running when it next starts")
+		}
 		return nil, Failf("%s", strings.Join(lines, "\n"))
 	default:
 		return nil, Failf("coordinator reload receipt at %s carries an unknown outcome %q; run `t3-steward coordinator reload --json` on %s",
@@ -734,6 +770,45 @@ func FleetRestorePrior(home, runID string) error {
 		}
 	}
 	return nil
+}
+
+// fleetRestoreRetainedDocument puts one destination back to what the named run
+// found, and reports whether that run found anything there at all. It reads
+// the same record FleetRestorePrior replays, written before the run wrote
+// anything, and it checks the paths in that record rather than trusting them.
+//
+// It is deliberately narrower than FleetRestorePrior, which puts back every
+// document a run touched. A coordinator that refuses a reload is passing a
+// verdict on the catalog input alone: the worker bootstrap the same run may
+// have written is shared with worker-configuration, which converged earlier in
+// the same run and would be contradicted by reverting it, and the client
+// document has an ownership receipt whose active hash is committed before this
+// point and would no longer describe a reverted file.
+func fleetRestoreRetainedDocument(home, runID, destination string) (bool, error) {
+	record, err := os.ReadFile(filepath.Join(home, fleet.StateDirectory, runID, "prior.json"))
+	if err != nil {
+		return false, err
+	}
+	prior, err := canonjson.DecodeObject(record)
+	if err != nil {
+		return false, err
+	}
+	documents, ok := prior["documents"].([]any)
+	if !ok || len(documents) == 0 {
+		return false, errors.New("retained fleet record names no documents")
+	}
+	for _, item := range documents {
+		entry, isObject := item.(map[string]any)
+		if !isObject {
+			return false, errors.New("retained fleet record is malformed")
+		}
+		if named, _ := entry["destination"].(string); named != destination {
+			continue
+		}
+		existed, _ := entry["existed"].(bool)
+		return existed, fleetRestoreDocument(home, entry)
+	}
+	return false, errors.New("retained fleet record does not name " + destination)
 }
 
 func fleetRestoreDocument(home string, entry map[string]any) error {

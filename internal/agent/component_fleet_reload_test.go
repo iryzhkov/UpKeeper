@@ -188,7 +188,8 @@ func TestCoordinatorReloadReceiptAcceptedAndUnchangedConverge(t *testing.T) {
 }
 
 // A rejected receipt fails the component with the coordinator's error and its
-// blockers, one per line, and says the effective digest is unchanged.
+// blockers, one per line, says the effective digest is unchanged, and says what
+// became of the projection the coordinator refused.
 func TestCoordinatorReloadReceiptRejectedFailsTheComponent(t *testing.T) {
 	context, _, fake := fleetTestCoordinatorContext(t, true)
 	fake.receipt = &fleetReloadReceipt{
@@ -209,14 +210,15 @@ func TestCoordinatorReloadReceiptRejectedFailsTheComponent(t *testing.T) {
 		t.Fatalf("error = %T %v, want a StepFailed", err, err)
 	}
 	lines := strings.Split(err.Error(), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("expected the error, two blockers and the digest line, got %d lines:\n%s", len(lines), err)
+	if len(lines) != 5 {
+		t.Fatalf("expected the error, two blockers, the digest line and the restore line, got %d lines:\n%s", len(lines), err)
 	}
 	for i, want := range []string{
 		"coordinator rejected the reload: 2 retained assignment(s) on 1 worker(s) whose execution catalog would change",
 		"  worker omarchy-pc assignment assignment-1 attempt attempt-1 (active/paused, worker journal stopped): wait for the pause to lift and the attempt to settle, or t3-steward backlog cancel run-1/implement --reason TEXT",
 		"  worker omarchy-pc assignment assignment-2 attempt attempt-2 (waiting-external/waiting-external): wait for the task wait to settle and the attempt to finish, or t3-steward backlog cancel run-2/review --reason TEXT",
 		"  the effective configuration and its digest are unchanged (digest-before)",
+		"  this run created the projection, so it was removed; the coordinator reads the configuration it is running when it next starts",
 	} {
 		if lines[i] != want {
 			t.Fatalf("line %d = %q, want %q", i, lines[i], want)
@@ -227,6 +229,85 @@ func TestCoordinatorReloadReceiptRejectedFailsTheComponent(t *testing.T) {
 			t.Fatalf("a rejected reload was reported as done: %q", action)
 		}
 	}
+}
+
+// R7: a rejected reload used to leave the refused projection on disk. The
+// coordinator keeps serving the configuration it already had, so the file and
+// the running process disagree, and the file is what the coordinator reads the
+// next time it starts: a projection it has already refused, which it cannot
+// load at all. The component still fails with the coordinator's verdict, and
+// the document this run replaced goes back.
+func TestCoordinatorReloadRejectedRestoresThePreviousProjection(t *testing.T) {
+	rejected := func() *fleetReloadReceipt {
+		return &fleetReloadReceipt{
+			Outcome:             "rejected",
+			Error:               `unknown field "quota_bindings"`,
+			ConfigurationDigest: "digest-before", PreviousDigest: "digest-before",
+		}
+	}
+
+	t.Run("the previous projection is put back", func(t *testing.T) {
+		context, _, fake := fleetTestCoordinatorContext(t, true)
+		actions := []string{}
+		if _, err := fleetApply(context, fleetTestComponent(t), nil, &actions); err != nil {
+			t.Fatalf("the accepted first apply: %v", err)
+		}
+		accepted, err := os.ReadFile(context.Path(fleet.CoordinatorDestination))
+		if err != nil {
+			t.Fatalf("the accepted projection: %v", err)
+		}
+
+		// The next release changes this worker's catalog, and the coordinator
+		// refuses the projection that carries it.
+		changed := fleetTestComponent(t)
+		profiles, _ := changed["profiles"].(map[string]any)
+		standard, _ := profiles["standard"].(map[string]any)
+		standard["provider_instances"] = []any{"claudeAgent", "codex", "gemini", "opencode"}
+		context.RunID = "20260918T000002Z-rejected"
+		fake.receipt = rejected()
+		state, failure := fleetApply(context, changed, nil, &actions)
+		if failure == nil {
+			t.Fatalf("a rejected reload converged with state %q", state)
+		}
+		if _, failed := failure.(*StepFailed); !failed {
+			t.Fatalf("error = %T %v, want a StepFailed", failure, failure)
+		}
+		if strings.HasPrefix(failure.Error(), "rollback failed") {
+			t.Fatalf("the restore itself failed: %v", failure)
+		}
+		after, err := os.ReadFile(context.Path(fleet.CoordinatorDestination))
+		if err != nil {
+			t.Fatalf("the projection after the refusal: %v", err)
+		}
+		if string(after) != string(accepted) {
+			t.Fatalf("the refused projection is still on disk:\n%s", after)
+		}
+		if !strings.Contains(failure.Error(), "the previous projection was put back") {
+			t.Fatalf("the failure does not say the projection was put back: %v", failure)
+		}
+		if !strings.Contains(failure.Error(), "coordinator rejected the reload: "+rejected().Error) {
+			t.Fatalf("the failure no longer carries the coordinator's error: %v", failure)
+		}
+	})
+
+	t.Run("a projection this run created is removed", func(t *testing.T) {
+		context, _, fake := fleetTestCoordinatorContext(t, true)
+		fake.receipt = rejected()
+		actions := []string{}
+		_, err := fleetApply(context, fleetTestComponent(t), nil, &actions)
+		if err == nil {
+			t.Fatal("a rejected reload of a first projection converged")
+		}
+		if strings.HasPrefix(err.Error(), "rollback failed") {
+			t.Fatalf("the restore itself failed: %v", err)
+		}
+		if _, statErr := os.Stat(context.Path(fleet.CoordinatorDestination)); statErr == nil {
+			t.Fatal("a refused projection this run created was left on the host")
+		}
+		if !strings.Contains(err.Error(), "this run created the projection, so it was removed") {
+			t.Fatalf("the failure does not say the projection was removed: %v", err)
+		}
+	})
 }
 
 // No receipt newer than the signal within 30 s fails the component as
