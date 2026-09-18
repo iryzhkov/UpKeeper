@@ -80,6 +80,11 @@ func snapshot(t *testing.T, root string) map[string]string {
 			return err
 		}
 		data, readErr := os.ReadFile(path)
+		if os.IsNotExist(readErr) {
+			// A lock file git removed between the walk and the read is not
+			// something the command under test wrote.
+			return nil
+		}
 		if readErr != nil {
 			return readErr
 		}

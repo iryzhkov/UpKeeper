@@ -35,7 +35,10 @@ func projectCheckout(t *testing.T) string {
 	}
 	git("init", "-q")
 	git("add", ".")
-	git("commit", "-q", "-m", "fixture release")
+	// Background maintenance after the commit would create and remove lock
+	// files under .git while a test walks the tree, so it is switched off for
+	// the fixture.
+	git("-c", "gc.auto=0", "-c", "maintenance.auto=false", "commit", "-q", "-m", "fixture release")
 	return root
 }
 
