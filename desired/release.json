@@ -1637,7 +1637,7 @@
                 "*"
               ],
               "opencode": [
-                "glm-4.6"
+                "*"
               ]
             },
             "provider_instances": [
@@ -1683,7 +1683,7 @@
               "*"
             ],
             "opencode": [
-              "glm-4.6"
+              "*"
             ]
           },
           "provider_instances": [
@@ -1715,7 +1715,7 @@
               "*"
             ],
             "opencode": [
-              "glm-4.6"
+              "*"
             ]
           },
           "provider_instances": [
