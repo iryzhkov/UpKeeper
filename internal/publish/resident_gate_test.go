@@ -17,22 +17,41 @@ import (
 // so nothing after the capture can notice that this host had drifted. These
 // tests hold the one place that can notice to refusing.
 
+// divergedHeader and divergedEpilogue are what the generator prints around the
+// block of diverged paths. The epilogue is here because of what its third line
+// looks like: it is indented by the same two spaces as a path line and it is a
+// command, not a path. A fixture that stops at the path block never shows the
+// filter the one line it has to exclude, which is how the converge command came
+// to be listed among the paths an override promotes.
+const divergedHeader = "agents-instructions-gen: checking this host against " +
+	"/home/igor/.local/share/omarchy-setup\n"
+
+const divergedEpilogue = "agents-instructions-gen: this host has diverged from " +
+	"/home/igor/.local/share/omarchy-setup.\n" +
+	"The repository is authoritative. Converge the host with\n" +
+	"  /home/igor/.local/share/omarchy-setup/run.sh   " +
+	"(or: agents-instructions-gen --root /home/igor/.local/share/omarchy-setup)\n" +
+	"and never by editing an installed copy: the next convergence overwrites it, and an\n" +
+	"UpKeeper capture taken from this host would publish it to the whole fleet.\n"
+
+// convergeCommandLine is that indented line. No refusal and no override account
+// may present it as a path this host promotes to the fleet.
+const convergeCommandLine = "/home/igor/.local/share/omarchy-setup/run.sh   (or:"
+
 // divergedSkillReport is what agents-instructions-gen --check prints when a
 // skill has been edited in place on this host.
-const divergedSkillReport = "agents-instructions-gen: checking this host against " +
-	"/home/igor/.local/share/omarchy-setup\n" +
+const divergedSkillReport = divergedHeader +
 	"  ~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from " +
 	"config/claude/skills/t3-backlog/SKILL.md\n" +
-	"agents-instructions-gen: this host has diverged.\n"
+	divergedEpilogue
 
 // divergedClaudeReport is what it prints when the shared instruction file this
 // host installs is behind the checkout that generates it.
-const divergedClaudeReport = "agents-instructions-gen: checking this host against " +
-	"/home/igor/.local/share/omarchy-setup\n" +
+const divergedClaudeReport = divergedHeader +
 	"  ~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from " +
 	"config/claude/CLAUDE.md\n" +
 	"  ~/.config/agents/AGENTS.md: the host copy differs from what this checkout generates\n" +
-	"agents-instructions-gen: this host has diverged.\n"
+	divergedEpilogue
 
 // capturedNothing holds a refused capture to having left no trace: no candidate
 // manifest to review, no staged change, no commit to amend, no branch pushed.
@@ -75,6 +94,39 @@ func TestAConvergedHostIsCheckedAndThenCaptured(t *testing.T) {
 	}
 }
 
+// The check has to be asked about the host this capture is photographing, and
+// about nothing else. HOME is what the generator resolves every path it
+// compares against, so a check that inherited the process's own HOME would
+// report on one machine while the capture published another, and the capture
+// would believe it. OMARCHY_SETUP_ROOT is dropped for the same reason: the
+// checkout is named on the command line, and an inherited value pointing at a
+// different tree would make the answer depend on the shell push was run from.
+func TestTheCheckIsAskedAboutTheCapturedHomeAndNothingElse(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OMARCHY_SETUP_ROOT", "/somewhere/else/entirely")
+	subject := newFixture(t)
+
+	if _, err := publish.Release(subject.root, subject.options()); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if subject.checkEnv == nil {
+		t.Fatalf("the check never ran, so its environment proves nothing: %v", subject.calls)
+	}
+	homes := []string{}
+	for _, entry := range subject.checkEnv {
+		switch {
+		case strings.HasPrefix(entry, "HOME="):
+			homes = append(homes, entry)
+		case strings.HasPrefix(entry, "OMARCHY_SETUP_ROOT="):
+			t.Errorf("the check inherited %s, so its answer depends on the caller's shell", entry)
+		}
+	}
+	if len(homes) != 1 || homes[0] != "HOME="+subject.home {
+		t.Errorf("the check ran with %v rather than with HOME=%s, the home being captured",
+			homes, subject.home)
+	}
+}
+
 // A skill edited in place on this host is the case the gate exists for: nothing
 // installs a repository's skills onto a host, so this is the only moment at
 // which such an edit is still distinguishable from an authored one.
@@ -98,6 +150,10 @@ func TestAHandEditedSkillRefusesTheCapture(t *testing.T) {
 		if !strings.Contains(message, wanted) {
 			t.Errorf("the refusal does not say %q:\n%s", wanted, message)
 		}
+	}
+	if strings.Contains(message, convergeCommandLine) {
+		t.Errorf("the refusal lists the generator's converge command as a diverged path:\n%s",
+			message)
 	}
 	capturedNothing(t, subject)
 }
@@ -174,6 +230,19 @@ func TestACaptureThatCannotBeCheckedIsRefused(t *testing.T) {
 			breakIt: func(t *testing.T, subject *fixture) {
 				subject.checkCode = 3
 				subject.checkStdout = "agents-instructions-gen: something is wrong\n"
+			},
+			wanted: "reported a divergence without naming a path",
+		},
+		{
+			// The shape a real generator would produce if it lost its path
+			// block: the header, then straight to the converge advice. The
+			// epilogue's indented line is a command, so nothing here names a
+			// path and the capture must refuse as unexaminable rather than
+			// report a divergence in a file called run.sh.
+			name: "the check reported nothing but its converge epilogue",
+			breakIt: func(t *testing.T, subject *fixture) {
+				subject.checkCode = 3
+				subject.checkStdout = divergedHeader + divergedEpilogue
 			},
 			wanted: "reported a divergence without naming a path",
 		},

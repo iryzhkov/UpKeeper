@@ -39,10 +39,15 @@ class FakeMachine:
         # which a release may be captured.
         self.check_code = 0
         self.check_stdout = ""
+        # What running the check raises instead of answering, for the failures
+        # that reach the caller as an exception rather than as an exit status.
+        self.check_raises: BaseException | None = None
 
     def __call__(self, argv, cwd, timeout):
         self.calls.append(argv)
         if any(part.endswith("agents-instructions-gen") for part in argv):
+            if self.check_raises is not None:
+                raise self.check_raises
             return subprocess.CompletedProcess(
                 [], self.check_code, stdout=self.check_stdout, stderr=""
             )
@@ -246,12 +251,34 @@ def test_manifest_rejects_values_that_could_reach_a_shell() -> None:
 # place that can notice to refusing, in the Python reference implementation as
 # well as in the Go one.
 
-DIVERGED_REPORT = (
+# What the generator prints around the block of diverged paths. The epilogue is
+# here because of what its third line looks like: it is indented by the same two
+# spaces as a path line and it is a command, not a path. A fixture that stops at
+# the path block never shows the filter the one line it has to exclude, which is
+# how the converge command came to be listed among the paths an override
+# promotes.
+DIVERGED_HEADER = (
     "agents-instructions-gen: checking this host against /home/igor/.local/share/omarchy-setup\n"
-    "  ~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from "
+)
+DIVERGED_EPILOGUE = (
+    "agents-instructions-gen: this host has diverged from "
+    "/home/igor/.local/share/omarchy-setup.\n"
+    "The repository is authoritative. Converge the host with\n"
+    "  /home/igor/.local/share/omarchy-setup/run.sh   "
+    "(or: agents-instructions-gen --root /home/igor/.local/share/omarchy-setup)\n"
+    "and never by editing an installed copy: the next convergence overwrites it, and an\n"
+    "UpKeeper capture taken from this host would publish it to the whole fleet.\n"
+)
+# That indented line. No refusal and no override account may present it as a
+# path this host promotes to the fleet.
+CONVERGE_COMMAND_LINE = "/home/igor/.local/share/omarchy-setup/run.sh   (or:"
+
+DIVERGED_REPORT = (
+    DIVERGED_HEADER
+    + "  ~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from "
     "config/claude/skills/t3-backlog/SKILL.md\n"
     "  ~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from config/claude/CLAUDE.md\n"
-    "agents-instructions-gen: this host has diverged.\n"
+    + DIVERGED_EPILOGUE
 )
 
 
@@ -285,6 +312,7 @@ def test_a_diverged_host_is_refused_by_name_and_direction(tmp_path: Path) -> Non
     assert "~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from" in message
     assert "photographs this host's home directory" in message
     assert "--publish-diverged-instructions" in message
+    assert CONVERGE_COMMAND_LINE not in message
     assert not (root / "desired").exists()
 
 
@@ -342,6 +370,12 @@ def test_the_named_override_publishes_and_accounts_for_every_path(tmp_path: Path
     assert "~/.claude/skills/t3-backlog/SKILL.md" in printed
     assert "~/.claude/omarchy-setup/CLAUDE.md" in printed
     assert "every host in the fleet" in printed
+    # The account is the whole point of the override: the operator reads it and
+    # decides whether to let those bytes reach every host. Anything in it that
+    # is not a promoted path makes it a worse record than none, and the
+    # generator's converge advice is indented exactly like a path.
+    assert CONVERGE_COMMAND_LINE not in printed
+    assert len([line for line in printed.splitlines() if line.startswith("  ")]) == 2
 
 
 def test_the_override_does_not_cover_a_check_that_could_not_run(tmp_path: Path) -> None:
@@ -380,3 +414,87 @@ def test_a_selection_that_publishes_no_instructions_is_not_gated(tmp_path: Path)
     )
 
     assert not [argv for argv in machine.calls if argv[-1] == "--check"]
+
+
+def test_a_report_of_nothing_but_the_converge_epilogue_names_no_path(tmp_path: Path) -> None:
+    """The shape a generator would produce if it lost its path block.
+
+    The header, then straight to the converge advice. The epilogue's indented
+    line is a command, so nothing here names a path and the capture refuses as
+    unexaminable rather than reporting a divergence in a file called run.sh.
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    machine.check_code = 3
+    machine.check_stdout = DIVERGED_HEADER + DIVERGED_EPILOGUE
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "reported a divergence without naming a path" in message
+    assert "have diverged from" not in message
+    assert not (root / "desired").exists()
+
+
+# The three ways the check can fail that arrive as an exception rather than as
+# an exit status. Each one used to leave dev-fleet push exiting 1 with a
+# traceback; each one is now the same CaptureError the Go implementation
+# refuses with, which the CLI reports as EXIT_PREFLIGHT.
+
+
+def test_a_check_that_times_out_refuses_rather_than_crashing(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    machine.check_raises = subprocess.TimeoutExpired(cmd="agents-instructions-gen", timeout=60)
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "cannot check whether this host's agent instructions match their source" in message
+    assert "could not be run: it did not finish within 60 seconds" in message
+    assert not (root / "desired").exists()
+
+
+def test_a_check_that_cannot_be_started_refuses_rather_than_crashing(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    # The Python mirror invokes the check through env(1), because its runner
+    # interface has no environment parameter. A host without env(1) is a host
+    # whose instructions cannot be checked, not a host that passed.
+    machine.check_raises = FileNotFoundError(2, "No such file or directory: 'env'")
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "cannot check whether this host's agent instructions match their source" in message
+    assert "could not be run" in message
+    assert not (root / "desired").exists()
+
+
+def test_a_release_naming_no_omarchy_setup_refuses_rather_than_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    manifest = json.loads(json.dumps(DEFAULT_MANIFEST))
+    manifest["components"].pop("omarchy-setup")
+    monkeypatch.setattr("dev_fleet.release.DEFAULT_MANIFEST", manifest)
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "the release names no omarchy-setup checkout" in message
+    assert not [argv for argv in machine.calls if argv[-1] == "--check"]
+    assert not (root / "desired").exists()

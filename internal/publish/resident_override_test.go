@@ -40,6 +40,23 @@ func TestTheOverridePublishesADivergedHostAndPrintsEveryPath(t *testing.T) {
 			t.Errorf("the override did not account for %q:\n%s", wanted, printed)
 		}
 	}
+	// The account is the whole point of the override: the operator reads it and
+	// decides whether to let those bytes reach every host. Anything in it that is
+	// not a promoted path makes it a worse record than none, and the generator's
+	// converge advice is indented exactly like a path.
+	if strings.Contains(printed, convergeCommandLine) {
+		t.Errorf("the override listed the converge command as a path it promotes:\n%s", printed)
+	}
+	accounted := 0
+	for _, line := range strings.Split(printed, "\n") {
+		if strings.HasPrefix(line, "  ") {
+			accounted++
+		}
+	}
+	if accounted != 2 {
+		t.Errorf("the override accounted for %d paths where the check named 2:\n%s",
+			accounted, printed)
+	}
 }
 
 // The override has to be asked for. A capture that does not name it refuses the

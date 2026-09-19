@@ -36,6 +36,11 @@ type fixture struct {
 	checkCode   int
 	checkStdout string
 	checkErr    error
+	// checkEnv is the environment the check was actually run with. The answer
+	// depends on it: a check run against the wrong home reports on the wrong
+	// host, and one that inherits OMARCHY_SETUP_ROOT reports against whatever
+	// tree the caller's shell happened to name.
+	checkEnv []string
 	// generatorInstalled is whether this host has the command that decides
 	// whether it is converged. A host without it cannot be checked at all.
 	generatorInstalled bool
@@ -135,6 +140,7 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	f.calls = append(f.calls, joined)
 	switch {
 	case strings.Contains(joined, "agents-instructions-gen"):
+		f.checkEnv = command.Env
 		if !f.generatorInstalled {
 			f.calls = append(f.calls, "UNEXPECTED "+joined)
 			return procx.Result{Code: 1, Stderr: "the gate ran a command that is not installed"}
