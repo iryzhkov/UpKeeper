@@ -2,6 +2,8 @@ package cli_test
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,19 +72,51 @@ func fleetConfigRoot(t *testing.T, authored bool) string {
 	return root
 }
 
-// snapshot records every file under a tree with its content, so that a command
-// documented as writing nothing can be held to it.
+// snapshot records every file in the worktree under a tree with its content, so
+// that a command documented as writing nothing can be held to it.
+//
+// Git's own bookkeeping under .git is deliberately not part of the snapshot,
+// because it is not part of that claim: the claim is that the release checkout
+// was left as it was found, and .git is where Git records its own housekeeping.
+// A read-only `git status` may refresh .git/index merely as a side effect of
+// being asked, and the `git maintenance run --auto --detach` that `git commit`
+// spawns keeps running after the commit returns, creating and removing files
+// such as .git/objects/maintenance.lock underneath a walk that is already in
+// progress.
 func snapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
+	if err := filepath.Walk(root, snapshotEntry(root, files)); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	return files
+}
+
+// snapshotEntry is the walk half of snapshot, named so that a test can hand it
+// the errors that a real walk only produces when it loses a race.
+//
+// A path that readdir reported and lstat can no longer find was never part of
+// the tree being described, so it is skipped rather than failing the walk.
+// Every other error still fails it, and so does a root that does not exist,
+// because an empty snapshot of a mistyped root would quietly assert nothing.
+func snapshotEntry(root string, files map[string]string) filepath.WalkFunc {
+	return func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if path == root || !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return nil
+		}
+		if info.IsDir() {
+			if path != root && info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		data, readErr := os.ReadFile(path)
-		if os.IsNotExist(readErr) {
-			// A lock file git removed between the walk and the read is not
-			// something the command under test wrote.
+		if errors.Is(readErr, fs.ErrNotExist) {
+			// A file that went away between the walk and the read is not
+			// something the command under test wrote either.
 			return nil
 		}
 		if readErr != nil {
@@ -90,11 +124,7 @@ func snapshot(t *testing.T, root string) map[string]string {
 		}
 		files[path] = string(data)
 		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk: %v", err)
 	}
-	return files
 }
 
 func TestFleetPlanReportsAndWritesNothing(t *testing.T) {
@@ -176,6 +206,7 @@ func fleetCheckout(t *testing.T, root string) {
 		{"init", "--quiet", "--initial-branch=main"},
 		{"add", "."},
 		{"-c", "user.name=test", "-c", "user.email=test@example.invalid",
+			"-c", "gc.auto=0", "-c", "maintenance.auto=false",
 			"commit", "--quiet", "--no-gpg-sign", "-m", "Publish a release"},
 	} {
 		command := exec.Command("git", append([]string{"-C", root}, argv...)...)

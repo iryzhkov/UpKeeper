@@ -22,6 +22,10 @@ func commitEverything(t *testing.T, root string) {
 		{"add", "-A"},
 		{
 			"-c", "user.email=test@example.invalid", "-c", "user.name=test",
+			// Background maintenance outlives the commit that spawns it and
+			// writes lock files under .git while the test walks the tree, so
+			// the fixture switches it off as well.
+			"-c", "gc.auto=0", "-c", "maintenance.auto=false",
 			"commit", "--quiet", "-m", "fixture",
 		},
 	} {
