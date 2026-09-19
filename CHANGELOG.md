@@ -8,6 +8,27 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- A full capture refuses a host whose resident agent instructions have drifted
+  from the omarchy-setup checkout that generates them. A capture photographs
+  the pushing host's home directory, and the shared `CLAUDE.md`, the files
+  under `~/.config/agents` and every skill under `~/.claude/skills` reach every
+  other host as a whole-file overwrite, so a hand edit here would become a
+  fleet fact that nothing downstream could notice. The capture now asks
+  `agents-instructions-gen --root <checkout> --check` before it observes
+  anything, and refuses at exit 30 with the diverged paths named. A check that
+  could not run at all -- no checkout, no installed generator, a generator that
+  predates `--check`, a run that failed or timed out, an unexpected exit status
+  -- refuses in the same place with its own message: "could not check" is not
+  "nothing to check". Nothing is captured, written, committed or pushed by
+  either refusal, and `--components` still publishes work that carries no
+  resident instructions (A-2).
+- `upkeeper push --publish-diverged-instructions` is the operator's explicit
+  permission to publish this host's resident instructions although they differ
+  from their source. It must be typed in full, it prints every path it promotes
+  to standard error before the capture proceeds, and it covers a detected
+  divergence only: a check that could not run is still refused, because an
+  override has to say what it is promoting and a check with no answer cannot
+  name it.
 - `upkeeper provider add INSTANCE --quota-pool POOL --hosts a,b [--models m1,m2]`
   and `upkeeper provider remove INSTANCE [--hosts a,b]` register or remove a
   provider instance in the `steward-fleet-configuration` component of
