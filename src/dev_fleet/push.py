@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from .release import (
     AGENT_CONFIG_DIR,
@@ -51,9 +51,22 @@ def push_release(
     home: Path | None = None,
     runner: Runner = default_runner,
     components: Sequence[str] | None = None,
+    publish_diverged_instructions: bool = False,
+    notice: TextIO | None = None,
 ) -> dict[str, Any]:
+    # The resident-instruction gate lives inside capture_release, so it runs
+    # before the candidate manifest is written and before any Git index is
+    # touched: a refusal leaves no partial manifest, no commit to amend and no
+    # branch behind. A manifest-only run is gated too, because writing the
+    # candidate manifest is already a write.
     release = capture_release(
-        root, controller=controller, home=home, runner=runner, only=components
+        root,
+        controller=controller,
+        home=home,
+        runner=runner,
+        only=components,
+        publish_diverged_instructions=publish_diverged_instructions,
+        notice=notice,
     )
     write_release(root, release)
     report: dict[str, Any] = {

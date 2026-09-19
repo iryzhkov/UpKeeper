@@ -83,6 +83,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     push.add_argument("--no-commit", action="store_true", help="write the manifest only")
     push.add_argument("--no-push", action="store_true", help="commit but do not push")
+    # The capture gate's override. It is its own flag rather than a mode of some
+    # general --force because the operator has to be able to say this one thing
+    # and only this one thing, and because a refusal names it by name.
+    push.add_argument(
+        "--publish-diverged-instructions",
+        action="store_true",
+        help="publish this host's agent instructions even though they differ from the "
+        "omarchy-setup checkout that generates them, printing every path it promotes",
+    )
     push.add_argument("--json", action="store_true", dest="as_json")
 
     for name in ("pull", "rollback"):
@@ -194,6 +203,10 @@ def _run_push(arguments: argparse.Namespace) -> int:
         commit=not arguments.no_commit,
         push=not (arguments.no_commit or arguments.no_push),
         components=arguments.components,
+        publish_diverged_instructions=arguments.publish_diverged_instructions,
+        # The override prints what it promotes on the error stream, so that a
+        # --json run still produces one parseable document on standard output.
+        notice=sys.stderr,
     )
     if arguments.as_json:
         _print_json(report)

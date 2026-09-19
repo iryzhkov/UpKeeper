@@ -39,6 +39,50 @@ and credential-bearing MCP registration fields. It never silently substitutes de
 for a damaged existing manifest. After capture, push commits only release paths and
 pushes to explicitly named remotes or all configured remotes.
 
+## The resident agent instructions are gated before anything is captured
+
+A capture photographs the pushing host's home directory. The shared `CLAUDE.md`, the
+files under `~/.config/agents` and every skill under `~/.claude/skills` are read from
+that home directory, stored as mode `file` assets, and written over the same paths on
+every other host at its next convergence. No repository installs those files onto a
+host, and `agent-environment` is applied after `omarchy-setup` in every convergence, so
+the captured bytes win over anything a setup module wrote earlier in the same run.
+
+That means a host that has drifted from the checkout its instructions are generated from
+would publish its drift to the whole fleet, and destroy every other host's copy while
+doing it. Nothing downstream can notice: the manifest is well formed, the assets
+validate, and the convergence succeeds. The pushing host is the only place the
+difference is still visible, so it is the only place it can be refused.
+
+Before a capture observes anything, it runs the omarchy-setup checkout's own
+`agents-instructions-gen --root <checkout> --check`, which writes nothing and answers 0
+for a converged host, 3 for a diverged one, and any other status for a check that could
+not run. The comparison is delegated rather than reimplemented so that "diverged" keeps
+one definition, in the repository that owns the files.
+
+- **Diverged.** The push refuses, lists each path with the direction of its difference,
+  explains the photograph, and names the command that converges the host. Nothing is
+  written, staged, committed or pushed.
+- **Could not run.** No checkout, no installed generator, or an unexpected exit status:
+  the push refuses just as firmly and names which of those it is. "I could not check" is
+  not "there is nothing to check".
+- Both refusals exit 30, the preflight-failure code: a check that had to pass before
+  anything was published did not pass.
+- A `--components` selection that does not name `agent-environment` is not gated, because
+  such a capture restores the resident assets the release already published and therefore
+  promotes nothing. That is also the way to publish an unrelated component from a host
+  whose check is broken.
+
+`--publish-diverged-instructions` is the only way through, and it covers the diverged
+case only. It has to be typed in full, no general `--force` reaches it, and it prints
+every path it is promoting, to standard error, before it promotes it. It deliberately
+does not cover a check that could not run: an override has to say what it is promoting,
+and an unanswered check cannot name it.
+
+The gate does not promise that the repository is right, only that the host matches it. A
+wrong instruction that has been committed and converged is a different problem, and it is
+solved by reviewing the omarchy-setup diff rather than by the capture.
+
 The release embeds frozen agent payloads, including home-owned skills and executable
 permissions. OS-supplied skill symlinks outside the home (such as /usr/share/omarchy)
 remain package-owned and are preserved; UpKeeper neither captures nor writes them. The Claude import block and owned settings keys, shared agent instructions,

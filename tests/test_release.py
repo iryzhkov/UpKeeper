@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 from pathlib import Path
@@ -26,9 +27,18 @@ class FakeMachine:
         self.steward = steward
         self.branches = branches or {"origin/main", "origin/feature/huyang"}
         self.calls: list[list[str]] = []
+        # What the installed agents-instructions-gen --check answers. The
+        # default is a converged host, because that is the only state from
+        # which a release may be captured.
+        self.check_code = 0
+        self.check_stdout = ""
 
     def __call__(self, argv, cwd, timeout):
         self.calls.append(argv)
+        if any(part.endswith("agents-instructions-gen") for part in argv):
+            return subprocess.CompletedProcess(
+                [], self.check_code, stdout=self.check_stdout, stderr=""
+            )
         if argv[0] == "git":
             checkout = argv[2]
             command = argv[3:]
@@ -80,6 +90,14 @@ def fake_home(tmp_path: Path) -> Path:
         target = home / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
+    # The command that decides whether this host still holds what its source
+    # generates. Its contents never matter here: every command is answered by
+    # FakeMachine, so nothing is executed. What matters is that the capture gate
+    # can see an installed, executable check.
+    generator = home / ".local/bin/agents-instructions-gen"
+    generator.parent.mkdir(parents=True, exist_ok=True)
+    generator.write_text("#!/bin/sh\nexit 0\n")
+    generator.chmod(0o755)
     (tmp_path / "repo/README.md").write_text("# dev-fleet\n")
     return home
 
@@ -209,3 +227,132 @@ def test_manifest_rejects_values_that_could_reach_a_shell() -> None:
     short_commit["components"]["huyang"]["commit"] = "abc123"
     with pytest.raises(ValidationError):
         validate_release(short_commit)
+
+
+# A capture photographs the pushing host's home directory, and the resident
+# agent instructions it finds there are published to the whole fleet as files
+# that overwrite every other host. No repository installs them, so nothing after
+# the capture can notice that this host had drifted. These tests hold the one
+# place that can notice to refusing, in the Python reference implementation as
+# well as in the Go one.
+
+DIVERGED_REPORT = (
+    "agents-instructions-gen: checking this host against /home/igor/.local/share/omarchy-setup\n"
+    "  ~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from "
+    "config/claude/skills/t3-backlog/SKILL.md\n"
+    "  ~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from config/claude/CLAUDE.md\n"
+    "agents-instructions-gen: this host has diverged.\n"
+)
+
+
+def test_a_converged_host_is_checked_before_it_is_captured(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+
+    capture_release(root, controller="normandy", home=home, runner=machine)
+
+    checks = [argv for argv in machine.calls if argv[-1] == "--check"]
+    assert checks, f"the capture never asked whether this host matches its source: {machine.calls}"
+    assert str(home / ".local/share/omarchy-setup") in checks[0]
+    assert f"HOME={home}" in checks[0]
+
+
+def test_a_diverged_host_is_refused_by_name_and_direction(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    machine.check_code = 3
+    machine.check_stdout = DIVERGED_REPORT
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from" in message
+    assert "~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from" in message
+    assert "photographs this host's home directory" in message
+    assert "--publish-diverged-instructions" in message
+    assert not (root / "desired").exists()
+
+
+def test_a_capture_that_cannot_be_checked_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    (home / ".local/bin/agents-instructions-gen").unlink()
+    machine = FakeMachine()
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    message = str(refusal.value)
+    assert "cannot check whether this host's agent instructions match their source" in message
+    assert "no executable" in message
+    assert "have diverged from" not in message
+    assert not (root / "desired").exists()
+
+
+def test_the_named_override_publishes_and_accounts_for_every_path(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    machine.check_code = 3
+    machine.check_stdout = DIVERGED_REPORT
+    notice = io.StringIO()
+
+    capture_release(
+        root,
+        controller="normandy",
+        home=home,
+        runner=machine,
+        publish_diverged_instructions=True,
+        notice=notice,
+    )
+
+    printed = notice.getvalue()
+    assert "--publish-diverged-instructions" in printed
+    assert "~/.claude/skills/t3-backlog/SKILL.md" in printed
+    assert "~/.claude/omarchy-setup/CLAUDE.md" in printed
+    assert "every host in the fleet" in printed
+
+
+def test_the_override_does_not_cover_a_check_that_could_not_run(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    (home / ".local/bin/agents-instructions-gen").unlink()
+    machine = FakeMachine()
+    notice = io.StringIO()
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(
+            root,
+            controller="normandy",
+            home=home,
+            runner=machine,
+            publish_diverged_instructions=True,
+            notice=notice,
+        )
+
+    assert "no override for this case" in str(refusal.value)
+    assert notice.getvalue() == ""
+
+
+def test_a_selection_that_publishes_no_instructions_is_not_gated(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    machine = FakeMachine()
+    write_release(root, capture_release(root, controller="normandy", home=home, runner=machine))
+
+    (home / ".local/bin/agents-instructions-gen").unlink()
+    machine = FakeMachine()
+    capture_release(
+        root, controller="normandy", home=home, runner=machine, only=["t3-steward"]
+    )
+
+    assert not [argv for argv in machine.calls if argv[-1] == "--check"]

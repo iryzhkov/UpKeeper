@@ -24,6 +24,10 @@ GitHub-gated release and converges through its own local timer. See
 `push` captures clean reachable checkout commits, the installed T3/steward pair and
 compatibility range, and the complete owned agent environment into `desired/release.json`.
 Worker bootstrap entries are host-scoped and carry only secret references.
+Because that environment is read from this machine's home directory and overwrites the
+same paths on every other host, `push` first proves that this host still holds what its
+omarchy-setup checkout generates, and refuses when it has drifted or when the check
+cannot be run at all.
 `pull` carries the validated payload over strict SSH, observes before changing,
 preserves unowned settings and compensates failed environment/Huyang/steward activation.
 See [the release guide](docs/upkeeper-push-pull.md) and
