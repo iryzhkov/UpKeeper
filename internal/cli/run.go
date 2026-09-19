@@ -41,6 +41,21 @@ type Streams struct {
 // Three outcomes are distinguished on purpose. A malformed command line exits
 // 2, an expected refusal exits 30 with a redacted message, and an unexpected
 // failure exits 1 so that it can never be mistaken for a clean refusal.
+// MainSpooled is Main with the invocation appended to the tool-feedback spool.
+// It is what the upkeeper binary calls and what a test of the spool calls;
+// every other caller of this package goes through Main and records nothing, so
+// this package's own test suite never appends to an operator's spool.
+//
+// The record is written between the command finishing and the caller learning
+// about it, and it cannot change either: spoolInvocation prints nothing and
+// returns nothing, and the exit code was decided before it ran. See spool.go.
+func MainSpooled(program string, argv []string, streams Streams) int {
+	started := time.Now()
+	code := Main(program, argv, streams)
+	spoolInvocation(argv, code, time.Since(started))
+	return code
+}
+
 func Main(program string, argv []string, streams Streams) int {
 	program = filepath.Base(program)
 	parsed, err := parse(argv, release.ComponentOrder)

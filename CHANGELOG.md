@@ -8,6 +8,22 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- Every invocation of `upkeeper` appends one record to the tool-feedback spool
+  the fleet's MCP servers already write, at
+  `~/.local/share/toolfeedback/upkeeper/<host>-<date>.jsonl`. The record holds
+  the verb path, the option names, an outcome class, the exit code and the
+  elapsed time, which is what turns a per-verb refusal rate into a measurement
+  rather than an impression. It carries no argument values: a word extends the
+  verb path only when it names a published command, an option is recorded only
+  when the parser declares it and otherwise as `?`, and an error is recorded as
+  the name of its exit code and never as its message, because these records are
+  shipped to another host. `outcome` maps the stable exit codes onto the five
+  classes an agent experiences: `ok` (0 and 10, because drift is a report's
+  finding and not a refusal), `usage` (2 and 30), `state` (20, 40 and 50),
+  `transport` (60) and `internal` (1). The spool is off unless the `enabled`
+  marker exists in the spool directory or `UPKEEPER_FRICTION=1` or
+  `TOOLFEEDBACK=1` is set, and a spool that cannot be written is skipped in
+  silence: it never changes the exit code, standard output or standard error.
 - A full capture refuses a host whose resident agent instructions have drifted
   from the omarchy-setup checkout that generates them. A capture photographs
   the pushing host's home directory, and the shared `CLAUDE.md`, the files

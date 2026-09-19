@@ -19,7 +19,7 @@ func main() {
 	if len(os.Args) > 0 {
 		program = os.Args[0]
 	}
-	os.Exit(cli.Main(program, os.Args[1:], cli.Streams{
+	os.Exit(cli.MainSpooled(program, os.Args[1:], cli.Streams{
 		In: os.Stdin, Out: os.Stdout, Err: os.Stderr,
 	}))
 }
