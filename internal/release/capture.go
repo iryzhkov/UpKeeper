@@ -45,8 +45,14 @@ var stewardRangePattern = regexp.MustCompile(
 // Without that, a controller whose local checkout of some unrelated component
 // is ahead of the release proposes that newer commit on every capture, and the
 // operator has to notice and revert it by hand each time.
+//
+// Before anything is observed, a capture that would publish the resident agent
+// instructions proves that this host still holds what their source generates.
+// See resident.go for why that refusal is the single enforcement point in the
+// arrangement rather than one check among several.
 func Capture(
 	root, controller, home string, runner procx.Runner, now time.Time, only []string,
+	resident ResidentPolicy,
 ) (Release, error) {
 	if runner == nil {
 		runner = procx.Run
@@ -115,6 +121,22 @@ func Capture(
 		return Release{}, err
 	}
 	components, _ := manifest["components"].(map[string]any)
+	// The resident agent instructions are gated here, inside Capture, rather
+	// than in the one command that happens to call it today. Every future
+	// caller of Capture publishes the same photograph of the same home
+	// directory, so the refusal belongs where the photograph is taken.
+	//
+	// A selection that does not name agent-environment is not gated, because
+	// the environment it captures below is discarded again at the end and the
+	// release keeps what it already published. Gating it would refuse captures
+	// that promote nothing, which on a fleet where every host is diverged today
+	// would leave no way to publish anything at all.
+	if selected == nil || selected["agent-environment"] {
+		setup, _ := components["omarchy-setup"].(map[string]any)
+		if err := guardResidentInstructions(runner, home, setup, resident); err != nil {
+			return Release{}, err
+		}
+	}
 	// Authored fleet intent is taken aside before anything is observed, and
 	// put back untouched at the end. Capture may record observations in the
 	// document's separate observed field; it may never infer authorization

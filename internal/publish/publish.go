@@ -9,6 +9,7 @@
 package publish
 
 import (
+	"io"
 	"strings"
 	"time"
 
@@ -35,6 +36,12 @@ type Options struct {
 	Components []string
 	Runner     procx.Runner
 	Now        time.Time
+	// PublishDivergedInstructions is the operator's explicit permission to
+	// publish resident agent instructions that disagree with their source. It
+	// is asked for by name; no general --force reaches it.
+	PublishDivergedInstructions bool
+	// Notice is where an override prints the paths it is promoting.
+	Notice io.Writer
 }
 
 // ConfiguredRemotes lists the Git remotes of a checkout.
@@ -71,8 +78,17 @@ func Release(root string, options Options) (map[string]any, error) {
 		return nil, failure.Push("unknown git remote(s): %s", strings.Join(unknown, ", "))
 	}
 
+	// The resident-instruction gate lives inside Capture, so it runs before the
+	// candidate manifest is written and before any Git index is touched: a
+	// refusal leaves no partial manifest, no commit to amend and no branch
+	// behind. --no-commit is gated too, because writing the candidate manifest
+	// is already a write.
 	captured, err := release.Capture(
-		root, options.Controller, options.Home, runner, options.Now, options.Components)
+		root, options.Controller, options.Home, runner, options.Now, options.Components,
+		release.ResidentPolicy{
+			PublishDiverged: options.PublishDivergedInstructions,
+			Notice:          options.Notice,
+		})
 	if err != nil {
 		return nil, err
 	}

@@ -127,13 +127,17 @@ func probeHelp(program, command string) string {
 
 func pushHelp(program string) string {
 	return "usage: " + program + " push [-h] [--components COMPONENT [COMPONENT ...]]" +
-		" [--no-commit] [--no-push] [--json] [REMOTE ...]\n\npositional arguments:\n" +
+		" [--no-commit] [--no-push] [--publish-diverged-instructions]" +
+		" [--json] [REMOTE ...]\n\npositional arguments:\n" +
 		describe("  REMOTE", "git remotes to push to (default: all)") +
 		"\noptions:\n" + helpOption + "\n" +
 		describe("  --components COMPONENT [COMPONENT ...]",
 			"capture only these; every other component keeps what the release already published") +
 		describe("  --no-commit", "write the manifest only") +
 		describe("  --no-push", "commit but do not push") +
+		describe("  --publish-diverged-instructions",
+			"publish this host's agent instructions even though they differ from the "+
+				"omarchy-setup checkout that generates them, printing every path it promotes") +
 		describe("  --json", "") +
 		componentChoices()
 }

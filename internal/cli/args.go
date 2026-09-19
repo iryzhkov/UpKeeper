@@ -35,6 +35,10 @@ type arguments struct {
 	remotes  []string
 	noCommit bool
 	noPush   bool
+	// publishDivergedInstructions is the capture gate's override. It is a
+	// separate flag rather than a mode of some general --force because the
+	// operator has to be able to say this one thing and only this one thing.
+	publishDivergedInstructions bool
 
 	// pull and rollback
 	hosts           []string
@@ -186,6 +190,8 @@ func parsePush(parsed *arguments, argv []string, choices []string) error {
 			parsed.noCommit = true
 		case token == "--no-push":
 			parsed.noPush = true
+		case token == "--publish-diverged-instructions":
+			parsed.publishDivergedInstructions = true
 		case token == "--components":
 			values, next, err := takeValues(argv, index, "--components")
 			if err != nil {

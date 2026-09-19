@@ -30,15 +30,26 @@ type fixture struct {
 	huyangHead string
 	calls      []string
 	envErr     error
+	// checkCode, checkStdout and checkErr are what the installed
+	// agents-instructions-gen --check answers. The default is a converged host,
+	// because that is the only state from which a release may be captured.
+	checkCode   int
+	checkStdout string
+	checkErr    error
+	// generatorInstalled is whether this host has the command that decides
+	// whether it is converged. A host without it cannot be checked at all.
+	generatorInstalled bool
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	base := t.TempDir()
 	subject := &fixture{
-		root:       filepath.Join(base, "checkout"),
-		home:       filepath.Join(base, "home"),
-		huyangHead: huyangCommit,
+		root:               filepath.Join(base, "checkout"),
+		home:               filepath.Join(base, "home"),
+		huyangHead:         huyangCommit,
+		checkStdout:        convergedCheckOutput,
+		generatorInstalled: true,
 	}
 	for _, directory := range []string{
 		filepath.Join(subject.home, ".local/share/omarchy-setup/.git"),
@@ -54,6 +65,7 @@ func newFixture(t *testing.T) *fixture {
 		filepath.Join(subject.root, "README.md"), []byte("UpKeeper\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	subject.installGenerator(t)
 
 	previousValidator := release.EnvironmentValidator
 	previousCapturer := release.EnvironmentCapturer
@@ -76,11 +88,46 @@ func newFixture(t *testing.T) *fixture {
 	return subject
 }
 
+// convergedCheckOutput is what agents-instructions-gen --check prints on a host
+// that still holds what its omarchy-setup checkout generates.
+const convergedCheckOutput = "agents-instructions-gen: the installed agent " +
+	"instructions match /home/igor/.local/share/omarchy-setup\n"
+
+// installGenerator puts an executable agents-instructions-gen on the fixture
+// host. Its contents never matter: every command in these tests is answered
+// from the table in run, so nothing is ever executed. What matters is that the
+// gate can see an installed, executable command, because a host without one is
+// a host whose instructions cannot be checked.
+func (f *fixture) installGenerator(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(f.home, ".local/bin/agents-instructions-gen")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	f.generatorInstalled = true
+}
+
+// removeGenerator takes the check away, which is the degraded case: the capture
+// cannot find out whether this host agrees with its source.
+func (f *fixture) removeGenerator(t *testing.T) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(f.home, ".local/bin/agents-instructions-gen")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	f.generatorInstalled = false
+}
+
 // run answers every command a capture and a publication issue.
 func (f *fixture) run(command procx.Command) procx.Result {
 	joined := strings.Join(command.Argv, " ")
 	f.calls = append(f.calls, joined)
 	switch {
+	case strings.Contains(joined, "agents-instructions-gen"):
+		if !f.generatorInstalled {
+			f.calls = append(f.calls, "UNEXPECTED "+joined)
+			return procx.Result{Code: 1, Stderr: "the gate ran a command that is not installed"}
+		}
+		return procx.Result{Code: f.checkCode, Stdout: f.checkStdout, Err: f.checkErr}
 	case strings.HasSuffix(joined, "status --porcelain"):
 		return procx.Result{}
 	case strings.Contains(joined, "omarchy-setup rev-parse HEAD"):

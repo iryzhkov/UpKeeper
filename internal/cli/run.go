@@ -194,6 +194,11 @@ func runPush(parsed *arguments, streams Streams) (int, error) {
 		Push:       !parsed.noCommit && !parsed.noPush,
 		Components: parsed.components,
 		Runner:     procx.Run,
+		// The override prints what it promotes on the error stream, so that a
+		// --json run still produces one parseable document on standard output
+		// and the account of the promotion is never swallowed by a pipe.
+		PublishDivergedInstructions: parsed.publishDivergedInstructions,
+		Notice:                      streams.Err,
 	})
 	if err != nil {
 		return exitcode.Preflight, err
