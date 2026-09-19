@@ -150,6 +150,17 @@ func TestACaptureThatCannotBeCheckedIsRefused(t *testing.T) {
 			wanted: "no omarchy-setup checkout at",
 		},
 		{
+			// The generator that predates the check ignores every argument
+			// and rewrites ~/.config/agents and ~/.codex/AGENTS.md, then
+			// exits 0. Running it as a check would modify the host it was
+			// supposed to report on and call that success.
+			name: "the installed generator predates the check",
+			breakIt: func(t *testing.T, subject *fixture) {
+				subject.installGenerator(t, legacyGenerator)
+			},
+			wanted: "does not understand --check",
+		},
+		{
 			name: "the check itself failed",
 			breakIt: func(t *testing.T, subject *fixture) {
 				subject.checkCode = 1
@@ -197,6 +208,25 @@ func TestACaptureThatCannotBeCheckedIsRefused(t *testing.T) {
 			capturedNothing(t, subject)
 		})
 	}
+}
+
+// The gate must not be the thing that modifies the host. The generator that
+// predates the check ignores its arguments and rewrites ~/.config/agents and
+// ~/.codex/AGENTS.md, so asking that copy for a report would silently install
+// over the files it was asked about and then exit 0. It is recognised and
+// refused without being executed at all.
+func TestAGeneratorThatPredatesTheCheckIsNeverRun(t *testing.T) {
+	subject := newFixture(t)
+	subject.installGenerator(t, legacyGenerator)
+
+	_, err := publish.Release(subject.root, subject.options())
+	if err == nil {
+		t.Fatal("a host whose generator cannot be asked a question was captured")
+	}
+	if subject.did("agents-instructions-gen") {
+		t.Errorf("the gate ran the copy that would have rewritten the host: %v", subject.calls)
+	}
+	capturedNothing(t, subject)
 }
 
 // A selection that does not name agent-environment publishes none of the

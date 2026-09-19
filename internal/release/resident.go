@@ -42,6 +42,24 @@ const ResidentGenerator = ".local/bin/agents-instructions-gen"
 // check itself could not run, which is refused rather than believed.
 const residentDivergedExit = 3
 
+// residentCapabilityMarkers are the two options the check is spelled with.
+//
+// They are looked for in the installed generator before it is run, and their
+// absence is the degraded case rather than a reason to try anyway. This is not
+// defensive pedantry: the generator that predates the check ignores every
+// argument it is given and rewrites ~/.config/agents and ~/.codex/AGENTS.md
+// unconditionally, then exits 0. Running that copy as a check would modify the
+// host it was supposed to be reporting on and report success while doing it,
+// which is the exact failure this gate exists to prevent, performed by the gate
+// itself. A host whose generator is that old has not converged omarchy-setup,
+// which is the thing the check would have told it.
+var residentCapabilityMarkers = []string{"--check", "--root"}
+
+// residentGeneratorSizeLimit bounds how much of an installed command is read
+// while looking for those markers. The generator is a script of a few tens of
+// kilobytes; anything far larger is not the command this expects.
+const residentGeneratorSizeLimit = 1 << 20
+
 // residentCheckTimeout bounds the check. It reads a few dozen small files and
 // compares them, so a minute is generous; a check that hangs is a check that
 // could not run.
@@ -104,6 +122,9 @@ func guardResidentInstructions(
 				"matches %s; the omarchy-setup 28-scripts module installs it",
 			generator, checkout))
 	}
+	if err := residentGeneratorAnswersChecks(generator, info.Size()); err != nil {
+		return err
+	}
 	result := runner(procx.Command{
 		Argv:    []string{generator, "--root", checkout, "--check"},
 		Env:     residentEnvironment(home),
@@ -153,6 +174,32 @@ func guardResidentInstructions(
 			"Nothing has been captured, written, committed or pushed.",
 		checkout, strings.Join(diverged, "\n"), residentWhy,
 		checkout, generator, checkout, ResidentOverrideFlag)
+}
+
+// residentGeneratorAnswersChecks refuses to run an installed generator that
+// cannot be asked a question, because the copy that cannot be asked answers by
+// rewriting the files instead.
+func residentGeneratorAnswersChecks(generator string, size int64) error {
+	if size > residentGeneratorSizeLimit {
+		return residentUncheckable(fmt.Sprintf(
+			"%s is %d bytes, which is not the generator script this expects", generator, size))
+	}
+	payload, err := os.ReadFile(generator)
+	if err != nil {
+		return residentUncheckable(fmt.Sprintf("%s cannot be read: %v", generator, err))
+	}
+	for _, marker := range residentCapabilityMarkers {
+		if strings.Contains(string(payload), marker) {
+			continue
+		}
+		return residentUncheckable(fmt.Sprintf(
+			"the generator installed at %s does not understand %s, so it predates the "+
+				"check; that copy ignores its arguments and rewrites this host's "+
+				"instruction files instead of reporting on them, so it is not run. "+
+				"Converge omarchy-setup to install the copy that can answer",
+			generator, marker))
+	}
+	return nil
 }
 
 // residentUncheckable refuses a capture whose resident instructions could not

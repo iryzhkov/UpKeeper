@@ -63,9 +63,14 @@ one definition, in the repository that owns the files.
 - **Diverged.** The push refuses, lists each path with the direction of its difference,
   explains the photograph, and names the command that converges the host. Nothing is
   written, staged, committed or pushed.
-- **Could not run.** No checkout, no installed generator, or an unexpected exit status:
-  the push refuses just as firmly and names which of those it is. "I could not check" is
-  not "there is nothing to check".
+- **Could not run.** No checkout, no installed generator, an installed generator that
+  predates `--check`, or an unexpected exit status: the push refuses just as firmly and
+  names which of those it is. "I could not check" is not "there is nothing to check".
+- **The old generator is recognised and never executed.** The copy that predates the
+  check ignores every argument it is given, rewrites `~/.config/agents` and
+  `~/.codex/AGENTS.md`, and exits 0. Running it as a check would modify the host it was
+  meant to report on and call that success, so the installed command is inspected for
+  `--root` and `--check` before it is run at all.
 - Both refusals exit 30, the preflight-failure code: a check that had to pass before
   anything was published did not pass.
 - A `--components` selection that does not name `agent-environment` is not gated, because

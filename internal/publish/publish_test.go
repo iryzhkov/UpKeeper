@@ -65,7 +65,7 @@ func newFixture(t *testing.T) *fixture {
 		filepath.Join(subject.root, "README.md"), []byte("UpKeeper\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	subject.installGenerator(t)
+	subject.installGenerator(t, currentGenerator)
 
 	previousValidator := release.EnvironmentValidator
 	previousCapturer := release.EnvironmentCapturer
@@ -93,15 +93,27 @@ func newFixture(t *testing.T) *fixture {
 const convergedCheckOutput = "agents-instructions-gen: the installed agent " +
 	"instructions match /home/igor/.local/share/omarchy-setup\n"
 
+// currentGenerator stands in for an installed agents-instructions-gen that
+// understands being asked a question. It is never executed: every command in
+// these tests is answered from the table in run. What it has to carry is the
+// evidence the gate looks for before it runs anything, because the copy that
+// predates the check ignores its arguments and rewrites the host's instruction
+// files instead of reporting on them.
+const currentGenerator = "#!/usr/bin/env bash\n" +
+	"# Usage: agents-instructions-gen [--root DIR] [--check]\n" +
+	"exit 0\n"
+
+// legacyGenerator is the copy that predates the check: it takes no options and
+// writes ~/.config/agents unconditionally.
+const legacyGenerator = "#!/usr/bin/env bash\n" +
+	"out=\"$HOME/.config/agents\"\nmkdir -p \"$out\"\n"
+
 // installGenerator puts an executable agents-instructions-gen on the fixture
-// host. Its contents never matter: every command in these tests is answered
-// from the table in run, so nothing is ever executed. What matters is that the
-// gate can see an installed, executable command, because a host without one is
-// a host whose instructions cannot be checked.
-func (f *fixture) installGenerator(t *testing.T) {
+// host. A host without one is a host whose instructions cannot be checked.
+func (f *fixture) installGenerator(t *testing.T, content string) {
 	t.Helper()
 	path := filepath.Join(f.home, ".local/bin/agents-instructions-gen")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f.generatorInstalled = true

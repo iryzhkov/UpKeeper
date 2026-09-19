@@ -18,6 +18,13 @@ from dev_fleet.validation import ValidationError
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
 
+# An installed agents-instructions-gen that understands being asked a question,
+# and the copy that predates the check and writes instead of reporting.
+CURRENT_GENERATOR = (
+    "#!/usr/bin/env bash\n# Usage: agents-instructions-gen [--root DIR] [--check]\nexit 0\n"
+)
+LEGACY_GENERATOR = '#!/usr/bin/env bash\nout="$HOME/.config/agents"\nmkdir -p "$out"\n'
+
 
 class FakeMachine:
     """Answers the git and version questions capture asks, without a real machine."""
@@ -94,9 +101,12 @@ def fake_home(tmp_path: Path) -> Path:
     # generates. Its contents never matter here: every command is answered by
     # FakeMachine, so nothing is executed. What matters is that the capture gate
     # can see an installed, executable check.
+    # It also has to carry the evidence the gate looks for before it runs
+    # anything: the copy that predates the check ignores its arguments and
+    # rewrites the host's instruction files instead of reporting on them.
     generator = home / ".local/bin/agents-instructions-gen"
     generator.parent.mkdir(parents=True, exist_ok=True)
-    generator.write_text("#!/bin/sh\nexit 0\n")
+    generator.write_text(CURRENT_GENERATOR)
     generator.chmod(0o755)
     (tmp_path / "repo/README.md").write_text("# dev-fleet\n")
     return home
@@ -293,6 +303,20 @@ def test_a_capture_that_cannot_be_checked_is_refused(tmp_path: Path) -> None:
     assert "no executable" in message
     assert "have diverged from" not in message
     assert not (root / "desired").exists()
+
+
+def test_a_generator_that_predates_the_check_is_never_run(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    home = fake_home(tmp_path)
+    (home / ".local/bin/agents-instructions-gen").write_text(LEGACY_GENERATOR)
+    machine = FakeMachine()
+
+    with pytest.raises(CaptureError) as refusal:
+        capture_release(root, controller="normandy", home=home, runner=machine)
+
+    assert "does not understand --check" in str(refusal.value)
+    assert not [argv for argv in machine.calls if argv[-1] == "--check"]
 
 
 def test_the_named_override_publishes_and_accounts_for_every_path(tmp_path: Path) -> None:

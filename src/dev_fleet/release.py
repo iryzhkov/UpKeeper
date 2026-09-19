@@ -401,6 +401,15 @@ def _capture_t3(runner: Runner, home: Path, steward: dict[str, Any]) -> dict[str
 # what a host is allowed to publish.
 RESIDENT_GENERATOR = ".local/bin/agents-instructions-gen"
 RESIDENT_DIVERGED_EXIT = 3
+# The two options the check is spelled with. They are looked for in the
+# installed generator before it is run, and their absence is the degraded case
+# rather than a reason to try anyway: the generator that predates the check
+# ignores every argument it is given, rewrites ~/.config/agents and
+# ~/.codex/AGENTS.md unconditionally, and exits 0. Running that copy as a check
+# would modify the host it was supposed to report on and report success while
+# doing it.
+RESIDENT_CAPABILITY_MARKERS = ("--check", "--root")
+RESIDENT_GENERATOR_SIZE_LIMIT = 1 << 20
 RESIDENT_OVERRIDE_FLAG = "--publish-diverged-instructions"
 RESIDENT_WHY = (
     "A release capture photographs this host's home directory. The shared CLAUDE.md, "
@@ -447,6 +456,31 @@ def _resident_reported_paths(stdout: str) -> list[str]:
     ]
 
 
+def _resident_generator_answers_checks(generator: Path) -> None:
+    """Refuse to run an installed generator that cannot be asked a question.
+
+    The copy that cannot be asked answers by rewriting the files.
+    """
+    size = generator.stat().st_size
+    if size > RESIDENT_GENERATOR_SIZE_LIMIT:
+        raise _resident_uncheckable(
+            f"{generator} is {size} bytes, which is not the generator script this expects"
+        )
+    try:
+        payload = generator.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise _resident_uncheckable(f"{generator} cannot be read: {exc}") from exc
+    for marker in RESIDENT_CAPABILITY_MARKERS:
+        if marker in payload:
+            continue
+        raise _resident_uncheckable(
+            f"the generator installed at {generator} does not understand {marker}, so it "
+            "predates the check; that copy ignores its arguments and rewrites this host's "
+            "instruction files instead of reporting on them, so it is not run. Converge "
+            "omarchy-setup to install the copy that can answer"
+        )
+
+
 def _guard_resident_instructions(
     runner: Runner,
     home: Path,
@@ -479,6 +513,7 @@ def _guard_resident_instructions(
             f"no executable {generator}, which is the command that decides whether this "
             f"host matches {checkout}; the omarchy-setup 28-scripts module installs it"
         )
+    _resident_generator_answers_checks(generator)
     # HOME is set for the check rather than inherited, because the capture may be
     # reading a home directory that is not this process's own. OMARCHY_SETUP_ROOT
     # is dropped because the checkout is passed explicitly and an inherited value
