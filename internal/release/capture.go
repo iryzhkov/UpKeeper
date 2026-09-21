@@ -196,6 +196,13 @@ func Capture(
 		}
 		components[JocastaComponent] = jocasta
 	}
+	if components[ControlledCodexComponent] != nil && (selected == nil || selected[ControlledCodexComponent]) {
+		controlled, err := CaptureControlledCodex(home, runner, components[ControlledCodexComponent].(map[string]any))
+		if err != nil {
+			return Release{}, failure.Capture("codex-controlled-runtime: %s", err)
+		}
+		components[ControlledCodexComponent] = controlled
+	}
 	// Tooling is opt-in for historical releases; selecting it bootstraps its
 	// first reviewed capture. Once published it remains part of full captures.
 	if components[ToolingComponent] != nil || selected[ToolingComponent] {
