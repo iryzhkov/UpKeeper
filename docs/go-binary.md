@@ -38,10 +38,11 @@ Packages follow durable responsibilities rather than the Python file layout.
 | `internal/converge` | convergence order, locking, run records and exit aggregation |
 | `internal/selfconv`, `internal/units` | the scheduled entry points and their systemd units |
 
-The module has no third-party dependencies. The one place that would normally
-reach for one, TOML editing for `.codex/config.toml`, is handled by a
-span-preserving editor in `internal/agentenv/toml.go` that refuses anything it
-cannot reproduce exactly rather than rewriting a file from a partial model.
+The binary uses `github.com/klauspost/compress/zstd` to verify and extract
+controlled runtime bundles without requiring a system zstd executable. TOML
+editing for `.codex/config.toml` uses the span-preserving editor in
+`internal/agentenv/toml.go`, which refuses anything it cannot reproduce exactly
+rather than rewriting a file from a partial model.
 
 ## How a target is reached
 
