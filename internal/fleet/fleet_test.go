@@ -139,10 +139,11 @@ func TestRenderingIsDeterministicAndMatchesTheSharedFixtures(t *testing.T) {
 	}
 }
 
-// This is the migration safety property: for a host whose intent has not
-// changed, the worker projection is byte-identical to the document
-// worker-configuration v1 publishes today. If this test fails, adding the new
-// component would rewrite a live host's bootstrap.
+// Every legacy worker entry still co-published in the release must match fleet
+// intent. Fleet-only hosts have already retired the legacy component.
+// Compare the release's current fleet intent, rather than the frozen migration
+// fixture: providers may be added after migration, while the shared fixtures
+// above continue to qualify the original wire representation.
 func TestTheWorkerProjectionIsByteIdenticalToWorkerConfigurationV1(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "desired", "release.json"))
 	if err != nil {
@@ -158,7 +159,14 @@ func TestTheWorkerProjectionIsByteIdenticalToWorkerConfigurationV1(t *testing.T)
 	if len(hosts) == 0 {
 		t.Skip("the published release configures no workers")
 	}
-	document := parsed(t)
+	intent, ok := components["steward-fleet-configuration"].(map[string]any)
+	if !ok {
+		t.Fatal("the published release configures workers without fleet intent")
+	}
+	document, err := fleet.Parse(intent)
+	if err != nil {
+		t.Fatalf("parse the published fleet intent: %v", err)
+	}
 	for name, entry := range hosts {
 		published, err := canonjson.MarshalFile(entry)
 		if err != nil {
