@@ -183,6 +183,46 @@ func t3Idle(observed map[string]any) bool {
 	return counted && running == 0
 }
 
+func t3SelectedPrograms(c *Context) (string, string) {
+	resolve := func(name string) string {
+		selected := adapterLookPath(c, name)
+		if selected == "" {
+			return ""
+		}
+		resolved, err := filepath.EvalSymlinks(selected)
+		if err != nil || filepath.Base(resolved) != "mise" {
+			return selected
+		}
+		result := c.Run([]string{resolved, "which", name}, 15*time.Second, "")
+		actual := firstLine(result.Output)
+		if !result.OK || !filepath.IsAbs(actual) {
+			return ""
+		}
+		return actual
+	}
+	return resolve("node"), resolve("t3")
+}
+
+func t3VerifyInstalledCLI(c *Context, version string) error {
+	node, t3 := t3SelectedPrograms(c)
+	if node == "" || t3 == "" {
+		return Failf("installed T3 CLI failed its native startup check; preserving the running service")
+	}
+	// --version does not instantiate T3's PTY layer. Resolve node-pty relative
+	// to the installed CLI entrypoint and load it under the exact Node selected
+	// by the agent PATH, so an ABI/build failure is found before service restart.
+	const loadNative = "const fs=require('node:fs'),m=require('node:module');" +
+		"m.createRequire(fs.realpathSync(process.argv[1]))('node-pty')"
+	native := c.Run([]string{node, "-e", loadNative, t3}, 30*time.Second, "")
+	probe := c.Run([]string{t3, "--version"}, 30*time.Second, "")
+	gotVersion := strings.TrimSpace(probe.Output)
+	if !native.OK || !probe.OK ||
+		(gotVersion != "t3 v"+version && gotVersion != "t3 "+version) {
+		return Failf("installed T3 CLI failed its native startup check; preserving the running service")
+	}
+	return nil
+}
+
 func t3Apply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
@@ -197,6 +237,9 @@ func t3Apply(
 	if installed == version && !active {
 		if !c.DryRun {
 			if _, _, err := stewardVerifyPairBinary(c, t3StewardBinary(c)); err != nil {
+				return "", err
+			}
+			if err := t3VerifyInstalledCLI(c, version); err != nil {
 				return "", err
 			}
 		}
@@ -254,6 +297,9 @@ func t3Apply(
 				return "", err
 			}
 		}
+	}
+	if err = t3VerifyInstalledCLI(c, version); err != nil {
+		return "", err
 	}
 	if fresh, err = t3Observe(c, spec); err != nil {
 		return "", err
