@@ -223,44 +223,45 @@ func TestARealRunWritesAStartAndAFinishRecordAndReleasesItsLock(t *testing.T) {
 	}
 }
 
-func TestAHostAlreadyLockedReportsContentionWithoutDispatching(t *testing.T) {
+func TestAConcurrentConvergenceReportsContentionWithoutDispatching(t *testing.T) {
 	value := fleetRelease(t)
 	config := fleetConfig(t)
-	choices := options(t, []string{"normandy"})
+	first := options(t, []string{"normandy"})
+	started := make(chan struct{})
+	releaseRunner := make(chan struct{})
+	first.Runner = func(inventory.HostSpec, agent.Payload, time.Duration, bool) map[string]any {
+		close(started)
+		<-releaseRunner
+		return map[string]any{"host": "normandy", "reachable": true, "result": "converged"}
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, _, err := converge.Fleet(config, value, first)
+		firstDone <- err
+	}()
+	<-started
+
+	second := options(t, []string{"normandy"})
+	second.LockStore = first.LockStore
+	second.RunID = "20260914T080100Z-11112222"
 	dispatched := false
-	choices.Runner = func(
-		inventory.HostSpec, agent.Payload, time.Duration, bool,
-	) map[string]any {
+	second.Runner = func(inventory.HostSpec, agent.Payload, time.Duration, bool) map[string]any {
 		dispatched = true
 		return nil
 	}
-	other, err := locks.NewMetadata(
-		"20260914T080000Z-ffffffff", "homelab", 99,
-		"commit", []string{"huyang"}, time.Now())
+	_, code, err := converge.Fleet(config, value, second)
 	if err != nil {
-		t.Fatalf("NewMetadata: %v", err)
-	}
-	if _, err := choices.LockStore.Acquire("normandy", other); err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	_, code, err := converge.Fleet(config, value, choices)
-	if err != nil {
-		t.Fatalf("Fleet: %v", err)
+		t.Fatalf("second Fleet: %v", err)
 	}
 	if dispatched {
-		t.Fatal("dispatched to a host another run holds")
+		t.Fatal("second convergence dispatched while the first held the host lock")
 	}
 	if code != exitcode.LockContention {
 		t.Errorf("exit code is %d, expected lock contention", code)
 	}
-	// The other run's lock must survive: breaking it is how two controllers
-	// end up converging one host at once.
-	inspection, err := choices.LockStore.Inspect("normandy")
-	if err != nil {
-		t.Fatalf("Inspect: %v", err)
-	}
-	if inspection.State != "held" || inspection.Metadata.RunID != other.RunID {
-		t.Errorf("the other run's lock was disturbed: %#v", inspection)
+	close(releaseRunner)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Fleet: %v", err)
 	}
 }
 

@@ -97,6 +97,9 @@ func validateComponent(name string, component, components map[string]any) error 
 	case JocastaComponent:
 		_, err := DecodeJocasta(component)
 		return err
+	case ControlledCodexComponent:
+		_, err := DecodeControlledCodex(component)
+		return err
 	case ToolingComponent:
 		_, err := DecodeTooling(component)
 		return err
