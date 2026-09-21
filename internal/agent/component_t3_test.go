@@ -24,7 +24,8 @@ type t3TestHost struct {
 	active    bool
 	// runningAfterInstall is how many threads the steward reports once the
 	// package has been replaced, which is a second, independent observation.
-	runningAfterInstall int
+	runningAfterInstall  int
+	nativeStartupFailure bool
 }
 
 func t3TestSpec() map[string]any {
@@ -42,6 +43,15 @@ func t3TestPrepare(t *testing.T, host t3TestHost) (*Context, *adapterTestRunner)
 	context := adapterTestContext(t, runner)
 	context.Components["t3-steward"] = stewardTestSpec(false)
 	context.Components["t3"] = t3TestSpec()
+	context.Env = []string{"PATH=" + context.Path(".local/bin")}
+	adapterTestWrite(t, context.Path(".local/bin/node"), "#!/bin/sh\n")
+	adapterTestWrite(t, context.Path(".local/bin/t3"), "#!/usr/bin/env node\n")
+	if err := os.Chmod(context.Path(".local/bin/node"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(context.Path(".local/bin/t3"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	installed := host.installed
 	served := host.served
 	running := host.running
@@ -50,6 +60,13 @@ func t3TestPrepare(t *testing.T, host t3TestHost) (*Context, *adapterTestRunner)
 		switch {
 		case last == "version":
 			return procx.Result{Stdout: stewardTestReport}
+		case adapterTestMatches(command.Argv, "node", "-e"):
+			if host.nativeStartupFailure {
+				return procx.Result{Code: 1, Stderr: "Cannot find module node-pty"}
+			}
+			return procx.Result{}
+		case last == "--version":
+			return procx.Result{Stdout: "t3 v" + installed}
 		case last == "check":
 			if !host.checkOK {
 				return procx.Result{Code: 1, Stderr: "steward is not answering"}
@@ -82,6 +99,129 @@ func t3TestPrepare(t *testing.T, host t3TestHost) (*Context, *adapterTestRunner)
 	return context, runner
 }
 
+func TestT3SelectedProgramsResolveMiseShims(t *testing.T) {
+	runner := &adapterTestRunner{}
+	c := adapterTestContext(t, runner)
+	bin := c.Path("bin")
+	c.Env = []string{"PATH=" + bin}
+	mise := c.Path("mise")
+	adapterTestWrite(t, mise, "#!/bin/sh\n")
+	if err := os.Chmod(mise, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"node", "t3"} {
+		if err := os.Symlink(mise, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selectedNode := c.Path("node-prefix/bin/node")
+	selectedT3 := c.Path("node-prefix/bin/t3")
+	runner.handle = func(command procx.Command) procx.Result {
+		switch {
+		case adapterTestMatches(command.Argv, "mise", "which", "node"):
+			return procx.Result{Stdout: selectedNode + "\n"}
+		case adapterTestMatches(command.Argv, "mise", "which", "t3"):
+			return procx.Result{Stdout: selectedT3 + "\n"}
+		default:
+			return procx.Result{}
+		}
+	}
+	node, t3 := t3SelectedPrograms(c)
+	if node != selectedNode || t3 != selectedT3 {
+		t.Fatalf("selected %q %q", node, t3)
+	}
+}
+
+func TestT3SelectedProgramsRefuseBrokenMiseResolution(t *testing.T) {
+	runner := &adapterTestRunner{}
+	c := adapterTestContext(t, runner)
+	bin := c.Path("bin")
+	c.Env = []string{"PATH=" + bin}
+	mise := c.Path("mise")
+	adapterTestWrite(t, mise, "#!/bin/sh\n")
+	if err := os.Chmod(mise, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"node", "t3"} {
+		if err := os.Symlink(mise, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "which", "node") {
+			return procx.Result{Stdout: c.Path("node") + "\n"}
+		}
+		return procx.Result{Code: 1, Stderr: "not installed"}
+	}
+	node, t3 := t3SelectedPrograms(c)
+	if node != c.Path("node") || t3 != "" {
+		t.Fatalf("mise resolution did not preserve the successful selection: %q %q", node, t3)
+	}
+}
+
+func TestT3SelectedProgramsPreserveMixedPathSelection(t *testing.T) {
+	runner := &adapterTestRunner{}
+	c := adapterTestContext(t, runner)
+	bin := c.Path("bin")
+	c.Env = []string{"PATH=" + bin}
+	mise := c.Path("mise")
+	nodePath := filepath.Join(bin, "node")
+	adapterTestWrite(t, mise, "#!/bin/sh\n")
+	adapterTestWrite(t, nodePath, "#!/bin/sh\n")
+	if err := os.Chmod(mise, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(nodePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mise, filepath.Join(bin, "t3")); err != nil {
+		t.Fatal(err)
+	}
+	selectedT3 := c.Path("node-prefix/bin/t3")
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "mise", "which", "t3") {
+			return procx.Result{Stdout: selectedT3 + "\n"}
+		}
+		return procx.Result{Code: 1}
+	}
+	node, t3 := t3SelectedPrograms(c)
+	if node != nodePath || t3 != selectedT3 {
+		t.Fatalf("mixed selection changed: %q %q", node, t3)
+	}
+	if runner.ran("which", "node") {
+		t.Fatalf("direct node selection was overridden: %v", runner.calls)
+	}
+}
+
+func TestT3SelectedProgramsPreserveDirectPathSelection(t *testing.T) {
+	runner := &adapterTestRunner{}
+	c := adapterTestContext(t, runner)
+	bin := c.Path("bin")
+	c.Env = []string{"PATH=" + bin}
+	nodePath, t3Path := filepath.Join(bin, "node"), filepath.Join(bin, "t3")
+	adapterTestWrite(t, nodePath, "#!/bin/sh\n")
+	adapterTestWrite(t, t3Path, "#!/bin/sh\n")
+	if err := os.Chmod(nodePath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(t3Path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	node, t3 := t3SelectedPrograms(c)
+	if node != nodePath || t3 != t3Path || len(runner.calls) != 0 {
+		t.Fatalf("direct selection changed or invoked mise: %q %q %v", node, t3, runner.calls)
+	}
+}
+
 func TestT3Apply(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -91,6 +231,8 @@ func TestT3Apply(t *testing.T) {
 		errorText   string
 		wantInstall bool
 		wantRestart bool
+		wantProbe   bool
+		wantNoStart bool
 		action      string
 	}{
 		{
@@ -128,7 +270,28 @@ func TestT3Apply(t *testing.T) {
 			state:       "updated",
 			wantInstall: true,
 			wantRestart: true,
+			wantProbe:   true,
 			action:      "installed and serving t3@" + t3TestPinned,
+		},
+		{
+			name: "a native startup failure refuses restart and preserves the running service",
+			host: t3TestHost{
+				installed: t3TestPrevious, served: t3TestPrevious,
+				checkOK: true, active: true, nativeStartupFailure: true,
+			},
+			errorText:   "native startup check; preserving the running service",
+			wantInstall: true,
+			wantProbe:   true,
+		},
+		{
+			name: "a native startup failure refuses the first service start",
+			host: t3TestHost{
+				installed: t3TestPinned,
+				checkOK:   true, active: false, nativeStartupFailure: true,
+			},
+			errorText:   "native startup check; preserving the running service",
+			wantProbe:   true,
+			wantNoStart: true,
 		},
 		{
 			name: "idle evidence that changes during the install defers the restart",
@@ -138,6 +301,7 @@ func TestT3Apply(t *testing.T) {
 			},
 			state:       "deferred",
 			wantInstall: true,
+			wantProbe:   true,
 			action:      "T3 installed; restart deferred because idle evidence changed",
 		},
 		{
@@ -176,9 +340,38 @@ func TestT3Apply(t *testing.T) {
 				t.Fatalf("install performed = %v, want %v",
 					!test.wantInstall, test.wantInstall)
 			}
+			if runner.ran("node", "-e") != test.wantProbe {
+				t.Fatalf("native startup probe performed = %v, want %v", runner.ran("node", "-e"), test.wantProbe)
+			}
+			if test.wantProbe {
+				installIndex, probeIndex, restartIndex := -1, -1, -1
+				for i, call := range runner.calls {
+					switch {
+					case adapterTestMatches(call, "npm", "install"):
+						installIndex = i
+					case adapterTestMatches(call, "node", "-e"):
+						probeIndex = i
+					case adapterTestMatches(call, "restart", "t3code.service"):
+						restartIndex = i
+					}
+				}
+				if probeIndex < 0 ||
+					(test.wantInstall && (installIndex < 0 || probeIndex <= installIndex)) ||
+					(test.wantRestart && restartIndex <= probeIndex) {
+					t.Fatalf("unsafe install/probe/restart order: %v", runner.calls)
+				}
+			}
 			if runner.ran("restart", "t3code.service") != test.wantRestart {
 				t.Fatalf("restart performed = %v, want %v",
 					!test.wantRestart, test.wantRestart)
+			}
+			if test.wantNoStart {
+				if runner.ran("enable", "--now", "t3code.service") {
+					t.Fatalf("service was started after failed probe: %v", runner.calls)
+				}
+				if _, err := os.Stat(context.Path(".config/systemd/user/t3code.service")); !os.IsNotExist(err) {
+					t.Fatalf("service unit was seeded after failed probe: %v", err)
+				}
 			}
 			if test.action != "" && !adapterTestMatches(actions, test.action) {
 				t.Fatalf("actions %v do not report %q", actions, test.action)
