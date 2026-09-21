@@ -1845,7 +1845,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.79"
+        "steward_version": "0.11.0-rc.80"
       },
       "kind": "npm-package",
       "package": "t3",
