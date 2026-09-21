@@ -64,7 +64,8 @@ contract). Every worker whose catalog entry changed is told to re-enroll in the 
 
 The `steward-fleet-configuration` component holds the authored, non-secret intent for the
 whole Steward fleet: the coordinator and its client endpoint, reusable host profiles, one
-entry per worker host with its explicit exceptions, and the projects a worker may be offered.
+entry per worker host with its explicit exceptions, optional client-only hosts, and the projects
+a worker may be offered.
 Three projections are rendered from that one source: the worker bootstrap
 (`~/.config/t3-steward/worker-bootstrap.json`), the coordinator client
 (`~/.config/t3-steward/coordinator-client.json`, which an explicit

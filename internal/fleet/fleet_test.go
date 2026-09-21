@@ -183,6 +183,76 @@ func TestTheWorkerProjectionIsByteIdenticalToWorkerConfigurationV1(t *testing.T)
 	}
 }
 
+func TestClientOnlyHostRendersNoWorkerAndIsNotCataloged(t *testing.T) {
+	component := intent(t)
+	component["clients"] = map[string]any{
+		"laptop": map[string]any{"admin_credential_ref": "secretref:f03-admin/laptop"},
+	}
+	document, err := fleet.Parse(component)
+	if err != nil {
+		t.Fatalf("parse client-only host: %v", err)
+	}
+	client, err := document.ClientProjection("laptop")
+	if err != nil {
+		t.Fatalf("render client: %v", err)
+	}
+	if client["credential_ref"] != "secretref:f03-admin/laptop" {
+		t.Fatalf("client credential = %v", client["credential_ref"])
+	}
+	if _, err := document.WorkerProjection("laptop"); err == nil {
+		t.Fatal("a client-only host rendered a worker projection")
+	}
+	catalog, err := document.CoordinatorProjection()
+	if err != nil {
+		t.Fatalf("render catalog: %v", err)
+	}
+	workers := catalog["workers"].(map[string]any)
+	if _, present := workers["laptop"]; present {
+		t.Fatal("a client-only host entered the worker catalog")
+	}
+	if err := document.CheckInventory(map[string]bool{
+		"homelab": true, "omarchy-pc": true, "normandy": true, "laptop": true,
+	}); err != nil {
+		t.Fatalf("inventory: %v", err)
+	}
+}
+
+func TestClientOnlyIntentRefusals(t *testing.T) {
+	cases := []struct {
+		name, errorText string
+		client          any
+	}{
+		{"unknown field", "unknown field", map[string]any{
+			"admin_credential_ref": "secretref:f03-admin/laptop", "profile": "standard",
+		}},
+		{"wrong credential namespace", "f03-admin secret reference", map[string]any{
+			"admin_credential_ref": "secretref:f02-protocol/laptop",
+		}},
+		{"worker overlap", "already declared as a worker", map[string]any{
+			"admin_credential_ref": "secretref:f03-admin/homelab",
+		}},
+		{"coordinator overlap", "coordinator host may not", map[string]any{
+			"admin_credential_ref": "secretref:f03-admin/normandy",
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			component := intent(t)
+			name := "laptop"
+			if test.name == "worker overlap" {
+				name = "homelab"
+			} else if test.name == "coordinator overlap" {
+				name = "normandy"
+			}
+			component["clients"] = map[string]any{name: test.client}
+			_, err := fleet.Parse(component)
+			if err == nil || !strings.Contains(err.Error(), test.errorText) {
+				t.Fatalf("want %q, got %v", test.errorText, err)
+			}
+		})
+	}
+}
+
 func TestExceptionsOverrideTheProfileAndNothingElse(t *testing.T) {
 	document := parsed(t)
 	build := document.Profiles["build"]
@@ -750,6 +820,49 @@ func TestAnEnrollmentPlanProposesAndNeverApplies(t *testing.T) {
 		!strings.Contains(changes[1].(string), "t3-steward worker enroll homelab --current-catalog") ||
 		changes[2] != fleet.ReloadRefusalAdvice {
 		t.Errorf("authorization changes are %v", changes)
+	}
+}
+
+func TestEnrollmentPlanReportsClientOnlyAuthorization(t *testing.T) {
+	previous := parsed(t)
+	proposed, err := fleet.Parse(edit(t, func(document map[string]any) {
+		document["clients"] = map[string]any{
+			"laptop": map[string]any{
+				"admin_credential_ref": "secretref:f03-admin/laptop",
+			},
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := proposed.EnrollmentPlan(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addedChanges := added["authorization_changes"].([]any)
+	addedLines := make([]string, len(addedChanges))
+	for i, line := range addedChanges {
+		addedLines[i], _ = line.(string)
+	}
+	addedText := strings.Join(addedLines, "\n")
+	if !strings.Contains(addedText, "coordinator client laptop is added") {
+		t.Fatalf("client grant is absent from plan:\n%s", addedText)
+	}
+	if strings.Contains(addedText, "re-enrollment") || strings.Contains(addedText, fleet.ReloadRefusalAdvice) {
+		t.Fatalf("client-only grant produced worker advice:\n%s", addedText)
+	}
+	removed, err := previous.EnrollmentPlan(proposed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedChanges := removed["authorization_changes"].([]any)
+	removedLines := make([]string, len(removedChanges))
+	for i, line := range removedChanges {
+		removedLines[i], _ = line.(string)
+	}
+	removedText := strings.Join(removedLines, "\n")
+	if !strings.Contains(removedText, "coordinator client laptop is removed") {
+		t.Fatalf("client revocation is absent from plan:\n%s", removedText)
 	}
 }
 

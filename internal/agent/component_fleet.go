@@ -40,11 +40,9 @@ type fleetDocument struct {
 	changed     bool
 }
 
-// fleetProjection decides what this host's fleet intent means for it, and
-// writes the documents that differ from what is there.
-//
-// Worker and client projections are scoped to worker hosts. The coordinator
-// receives the authored catalog input even when it is not itself a worker.
+// fleetProjection decides what this host's fleet intent means for it, and writes
+// the owned documents that differ from what is there. Workers, client-only hosts,
+// and the coordinator each receive only their declared projection.
 func fleetProjection(
 	c *Context, component map[string]any, host, runID string, dryRun bool,
 ) (map[string]any, error) {
@@ -55,13 +53,14 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
-	_, declared := document.Hosts[host]
+	_, workerDeclared := document.Hosts[host]
+	clientDeclared := document.NeedsClientProjection(host)
 	coordinator := host == document.Coordinator.Host
-	if !declared && !coordinator {
+	if !workerDeclared && !clientDeclared && !coordinator {
 		return fleetRetireOwnedProjections(c, runID, dryRun)
 	}
 	var worker, catalog []byte
-	if declared {
+	if workerDeclared {
 		worker, err = document.WorkerBytes(host)
 		if err != nil {
 			return nil, err
@@ -81,15 +80,18 @@ func fleetProjection(
 	// It gets its worker bootstrap like any other host and no client document,
 	// and one left over from when it was only a worker is removed.
 	var client []byte
-	if declared && document.NeedsClientProjection(host) {
-		rendered, err := document.ClientBytes(host)
+	if clientDeclared {
+		client, err = document.ClientBytes(host)
 		if err != nil {
 			return nil, err
 		}
-		client = rendered
 	}
-	if declared {
+	if workerDeclared {
 		if err := fleetResolveCredentials(c, document.Hosts[host], client != nil); err != nil {
+			return nil, err
+		}
+	} else if clientDeclared {
+		if err := fleetResolveClientCredential(c, document.Clients[host].AdminCredentialRef); err != nil {
 			return nil, err
 		}
 	}
@@ -127,7 +129,10 @@ func fleetProjection(
 			}
 		}
 	}
-	if !declared {
+	if clientDeclared && !workerDeclared {
+		return fleetClientResult(document.Clients[host], client, changed), nil
+	}
+	if !workerDeclared {
 		state := "converged"
 		if changed {
 			state = "updated"
@@ -480,6 +485,20 @@ func fleetResult(
 	return result, nil
 }
 
+func fleetClientResult(client fleet.Client, projection []byte, changed bool) map[string]any {
+	state := "converged"
+	if changed {
+		state = "updated"
+	}
+	return map[string]any{
+		"state":                state,
+		"configured":           true,
+		"enrolled":             false,
+		"client_sha256":        agentenv.Digest(projection),
+		"admin_credential_ref": client.AdminCredentialRef,
+	}
+}
+
 func fleetModelMap(values map[string][]string) map[string]any {
 	converted := map[string]any{}
 	for instance, allowed := range values {
@@ -548,6 +567,11 @@ func fleetResolveCredentials(c *Context, host fleet.Host, client bool) error {
 // then fail at first use, which is the worst place to find out. The file is
 // opened to prove the path that was checked is the path that would be used,
 // and its content is never read.
+func fleetResolveClientCredential(c *Context, reference string) error {
+	_, err := fleetResolveSecretReference(c.Home, reference, fleetAdminReferencePattern)
+	return err
+}
+
 func fleetResolveSecretReference(
 	home, reference string, pattern *regexp.Regexp,
 ) (string, error) {

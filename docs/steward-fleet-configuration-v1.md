@@ -6,7 +6,7 @@ and its tests must match.
 
 The component lives at `desired/release.json.components.steward-fleet-configuration`, is appended
 to `ComponentOrder` after `worker-configuration`, and carries exactly these keys: `kind`,
-`schema_version`, `coordinator`, `profiles`, `hosts`, `projects`, and optionally `observed`.
+`schema_version`, `coordinator`, `profiles`, `hosts`, `projects`, and optionally `clients` and `observed`.
 
 ## Authored fields
 
@@ -95,6 +95,19 @@ it. Forward compatibility is `schema_version`'s job: a controller that needs a n
 a new version, and an older binary refuses that version outright rather than carrying fields it
 cannot check. Refusals name the offending key and say that this component carries references
 only.
+
+### Client-only hosts
+
+Optional `clients` maps an inventory host name to the closed entry
+`{"admin_credential_ref":"secretref:f03-admin/<host>"}`. A client name must be in inventory,
+must not also appear in `hosts`, and must not name the coordinator host. The reference is
+host-bound and carries no credential value.
+
+A client-only host receives only `coordinator-client.json`: it receives no worker bootstrap,
+does not enter the coordinator worker catalog or enrolled-worker count, and convergence never
+enrolls it. Adding or removing one is listed in the authorization plan without worker
+re-enrollment or coordinator-reload advice. Removing the entry retires UpKeeper's owned client
+projection under the same receipt and rollback rules as an existing worker client's projection.
 
 ## Projections
 

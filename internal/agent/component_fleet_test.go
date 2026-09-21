@@ -80,6 +80,113 @@ func TestFleetProjectionWithoutAnEntryForThisHost(t *testing.T) {
 	}
 }
 
+func TestClientOnlyFleetConvergenceWritesNoWorkerAndNeverEnrolls(t *testing.T) {
+	context := adapterTestContext(t, &adapterTestRunner{})
+	context.Host.Name = "laptop"
+	path := context.Path(workerSecretRoot, "f03-admin/laptop")
+	adapterTestWrite(t, path, "credential-not-for-records")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	component := fleetTestComponent(t)
+	component["clients"] = map[string]any{
+		"laptop": map[string]any{"admin_credential_ref": "secretref:f03-admin/laptop"},
+	}
+	result, err := fleetProjection(context, component, "laptop", context.RunID, false)
+	if err != nil {
+		t.Fatalf("client-only projection: %v", err)
+	}
+	if result["enrolled"] != false || result["admin_credential_ref"] != "secretref:f03-admin/laptop" {
+		t.Fatalf("result = %v", result)
+	}
+	if _, err := os.Stat(context.Path(fleet.WorkerDestination)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("client-only host has a worker projection: %v", err)
+	}
+	if _, err := os.Stat(context.Path(fleet.CoordinatorDestination)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("client-only host has a coordinator projection: %v", err)
+	}
+	written, err := os.ReadFile(context.Path(fleet.ClientDestination))
+	if err != nil {
+		t.Fatalf("read client projection: %v", err)
+	}
+	document, _ := fleet.Parse(component)
+	want, _ := document.ClientBytes("laptop")
+	if string(written) != string(want) {
+		t.Fatalf("client projection differs:\n%s", written)
+	}
+	if _, err := os.Stat(context.Path(workerSecretRoot, "f02-protocol/laptop")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("test unexpectedly provisioned a worker credential: %v", err)
+	}
+}
+
+func TestRetiringClientOnlyHostRemovesOnlyOwnedProjection(t *testing.T) {
+	context := adapterTestContext(t, &adapterTestRunner{})
+	context.Host.Name = "laptop"
+	secret := context.Path(workerSecretRoot, "f03-admin/laptop")
+	adapterTestWrite(t, secret, "credential-not-for-records")
+	if err := os.Chmod(secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	component := fleetTestComponent(t)
+	component["clients"] = map[string]any{
+		"laptop": map[string]any{"admin_credential_ref": "secretref:f03-admin/laptop"},
+	}
+	if _, err := fleetProjection(context, component, "laptop", context.RunID, false); err != nil {
+		t.Fatalf("configure client: %v", err)
+	}
+	unrelated := context.Path(".config/t3-steward/unrelated.json")
+	adapterTestWrite(t, unrelated, "keep")
+	delete(component, "clients")
+	context.RunID = "20260914T000002Z-retire-client"
+	result, err := fleetProjection(context, component, "laptop", context.RunID, false)
+	if err != nil {
+		t.Fatalf("retire client: %v", err)
+	}
+	if result["configured"] != false || result["enrolled"] != false {
+		t.Fatalf("retirement result = %v", result)
+	}
+	if _, err := os.Stat(context.Path(fleet.ClientDestination)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("client projection survived retirement: %v", err)
+	}
+	if body, err := os.ReadFile(unrelated); err != nil || string(body) != "keep" {
+		t.Fatalf("retirement changed unrelated evidence: %q (%v)", body, err)
+	}
+}
+
+func TestClientOnlyRollbackRestoresExactPriorProjection(t *testing.T) {
+	context := adapterTestContext(t, &adapterTestRunner{})
+	context.Host.Name = "laptop"
+	secret := context.Path(workerSecretRoot, "f03-admin/laptop")
+	adapterTestWrite(t, secret, "credential-not-for-records")
+	if err := os.Chmod(secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	component := fleetTestComponent(t)
+	component["clients"] = map[string]any{
+		"laptop": map[string]any{"admin_credential_ref": "secretref:f03-admin/laptop"},
+	}
+	if _, err := fleetProjection(context, component, "laptop", context.RunID, false); err != nil {
+		t.Fatalf("configure client: %v", err)
+	}
+	prior, err := os.ReadFile(context.Path(fleet.ClientDestination))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := component["coordinator"].(map[string]any)["client_endpoint"].(map[string]any)
+	endpoint["address"] = "changed-coordinator"
+	context.RunID = "20260914T000001Z-change-client"
+	if _, err := fleetProjection(context, component, "laptop", context.RunID, false); err != nil {
+		t.Fatalf("change client: %v", err)
+	}
+	if err := FleetRestorePrior(context.Home, context.RunID); err != nil {
+		t.Fatalf("restore changed client: %v", err)
+	}
+	if restored, err := os.ReadFile(context.Path(fleet.ClientDestination)); err != nil ||
+		string(restored) != string(prior) {
+		t.Fatalf("restored client = %q (%v), want exact prior %q", restored, err, prior)
+	}
+}
+
 func TestFleetProjectionStagesActivatesAndRetainsThePrevious(t *testing.T) {
 	context := fleetTestPrepare(t)
 	spec := fleetTestComponent(t)

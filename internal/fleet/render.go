@@ -84,9 +84,13 @@ func (d *Document) WorkerBytes(name string) ([]byte, error) {
 // value lives in the host's own 0600 secret store and is never read, copied or
 // carried here.
 func (d *Document) ClientProjection(name string) (map[string]any, error) {
-	host, present := d.Hosts[name]
-	if !present {
-		return nil, failure.Value("fleet host %s is not declared", name)
+	credentialRef := ""
+	if host, present := d.Hosts[name]; present {
+		credentialRef = host.AdminCredentialRef
+	} else if client, present := d.Clients[name]; present {
+		credentialRef = client.AdminCredentialRef
+	} else {
+		return nil, failure.Value("fleet client %s is not declared", name)
 	}
 	if !d.NeedsClientProjection(name) {
 		return nil, failure.Value(
@@ -99,7 +103,7 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 		"address":         endpoint.Address,
 		"connection":      endpoint.Connection,
 		"remote_command":  endpoint.RemoteCommand,
-		"credential_ref":  host.AdminCredentialRef,
+		"credential_ref":  credentialRef,
 		"request_timeout": endpoint.RequestTimeout.String(),
 		"message_limits": map[string]any{
 			"max_bytes":          endpoint.MessageLimits.MaxBytes,
@@ -118,7 +122,14 @@ func (d *Document) ClientProjection(name string) (map[string]any, error) {
 // first place. A coordinator that is also a worker still gets its worker
 // bootstrap; only the client document is withheld.
 func (d *Document) NeedsClientProjection(name string) bool {
-	return name != d.Coordinator.Host
+	if name == d.Coordinator.Host {
+		return false
+	}
+	if _, worker := d.Hosts[name]; worker {
+		return true
+	}
+	_, client := d.Clients[name]
+	return client
 }
 
 // ClientBytes are the exact bytes of the client projection on disk: the same

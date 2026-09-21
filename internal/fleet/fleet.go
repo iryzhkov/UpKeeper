@@ -55,8 +55,8 @@ const (
 	StateDirectory = ".local/state/dev-fleet/fleet-config"
 )
 
-// ComponentFields is the closed top-level field set. observed is the only
-// optional key, and it is written by capture rather than authored.
+// ComponentFields is the closed required top-level field set. observed and
+// clients are optional; observed is written by capture and clients is authored.
 var ComponentFields = []string{
 	"kind", "schema_version", "coordinator", "profiles", "hosts", "projects",
 }
@@ -128,7 +128,8 @@ var (
 	HostFields            = []string{
 		"profile", "worker_id", "transport", "credential_ref", "admin_credential_ref",
 	}
-	ProjectFields = []string{
+	ClientIntentFields = []string{"admin_credential_ref"}
+	ProjectFields      = []string{
 		"repository", "default_ref", "setup_profile", "eligible_workers",
 	}
 )
@@ -232,6 +233,12 @@ type Host struct {
 	Exceptions map[string]any
 }
 
+// Client is a host authorized to use the coordinator without becoming a worker.
+type Client struct {
+	Name               string
+	AdminCredentialRef string
+}
+
 // Project is one Steward project.
 type Project struct {
 	Name            string
@@ -248,13 +255,15 @@ type Document struct {
 	Coordinator Coordinator
 	Profiles    map[string]Profile
 	Hosts       map[string]Host
+	Clients     map[string]Client
 	Projects    map[string]Project
 	observed    map[string]any
 }
 
-// HostNames, ProfileNames and ProjectNames are sorted, so that every report and
-// every projection this package renders is in one deterministic order.
+// HostNames, ClientNames, ProfileNames and ProjectNames are sorted, so that
+// every report and projection this package renders is deterministic.
 func (d *Document) HostNames() []string    { return sortedKeys(d.Hosts) }
+func (d *Document) ClientNames() []string  { return sortedKeys(d.Clients) }
 func (d *Document) ProfileNames() []string { return sortedKeys(d.Profiles) }
 func (d *Document) ProjectNames() []string { return sortedKeys(d.Projects) }
 
@@ -285,7 +294,7 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, failure.Value(
 			"unsupported steward-fleet-configuration schema_version")
 	}
-	if missing, unknown := checkKeys(component, ComponentFields, []string{"observed"}); unknown != "" {
+	if missing, unknown := checkKeys(component, ComponentFields, []string{"observed", "clients"}); unknown != "" {
 		return nil, failure.Value(
 			"steward fleet configuration carries an unknown top-level field %s; %s",
 			strconv.Quote(unknown), referencesOnly)
@@ -301,6 +310,9 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, err
 	}
 	if err := document.parseHosts(component["hosts"]); err != nil {
+		return nil, err
+	}
+	if err := document.parseClients(component["clients"]); err != nil {
 		return nil, err
 	}
 	if err := document.parseProjects(component["projects"]); err != nil {
@@ -323,6 +335,11 @@ func (d *Document) CheckInventory(known map[string]bool) error {
 	for _, name := range d.HostNames() {
 		if !known[name] {
 			return failure.Value("fleet host %s is not in the inventory", name)
+		}
+	}
+	for _, name := range d.ClientNames() {
+		if !known[name] {
+			return failure.Value("fleet client %s is not in the inventory", name)
 		}
 	}
 	if !known[d.Coordinator.Host] {
@@ -626,6 +643,41 @@ func (d *Document) parseHosts(value any) error {
 			return err
 		}
 		d.Hosts[name] = host
+	}
+	return nil
+}
+
+func (d *Document) parseClients(value any) error {
+	d.Clients = map[string]Client{}
+	if value == nil {
+		return nil
+	}
+	clients, ok := value.(map[string]any)
+	if !ok {
+		return failure.Value("fleet clients must be an object")
+	}
+	for _, name := range sortedKeys(clients) {
+		entry, isObject := clients[name].(map[string]any)
+		if !namePattern.MatchString(name) || !isObject {
+			return failure.Value("invalid fleet client")
+		}
+		if _, worker := d.Hosts[name]; worker {
+			return failure.Value("fleet client %s is already declared as a worker", name)
+		}
+		if name == d.Coordinator.Host {
+			return failure.Value("fleet coordinator host may not be declared as a remote client")
+		}
+		missing, unknown := checkKeys(entry, ClientIntentFields, nil)
+		if missing != "" || unknown != "" {
+			return fieldError("fleet client "+name, missing, unknown)
+		}
+		if entry["admin_credential_ref"] != AdminSecretPrefix+name {
+			return failure.Value(
+				"fleet client needs its own opaque f03-admin secret reference")
+		}
+		d.Clients[name] = Client{
+			Name: name, AdminCredentialRef: AdminSecretPrefix + name,
+		}
 	}
 	return nil
 }

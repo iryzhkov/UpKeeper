@@ -268,6 +268,22 @@ func (d *Document) authorizationDiff(previous *Document) ([]string, error) {
 			}
 		}
 	}
+	for _, name := range d.ClientNames() {
+		if previous == nil {
+			changes = append(changes, "coordinator client "+name+" is added")
+			continue
+		}
+		if _, known := previous.Clients[name]; !known {
+			changes = append(changes, "coordinator client "+name+" is added")
+		}
+	}
+	if previous != nil {
+		for _, name := range previous.ClientNames() {
+			if _, kept := d.Clients[name]; !kept {
+				changes = append(changes, "coordinator client "+name+" is removed")
+			}
+		}
+	}
 	projectLines, touched := projectChanges(d, previous, reenroll)
 	changes = append(changes, projectLines...)
 	for _, worker := range sortedKeys(reenroll) {
