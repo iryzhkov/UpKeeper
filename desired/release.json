@@ -1617,6 +1617,11 @@
       "source": "https://github.com/iryzhkov/omarchy-setup.git"
     },
     "steward-fleet-configuration": {
+      "clients": {
+        "laptop": {
+          "admin_credential_ref": "secretref:f03-admin/laptop"
+        }
+      },
       "coordinator": {
         "client_endpoint": {
           "address": "normandy-steward-admin",
