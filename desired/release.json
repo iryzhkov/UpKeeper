@@ -1686,6 +1686,9 @@
             "codex": [
               "*"
             ],
+            "codex-controlled": [
+              "gpt-5.6-sol"
+            ],
             "opencode": [
               "*"
             ]
@@ -1693,8 +1696,12 @@
           "provider_instances": [
             "claudeAgent",
             "codex",
+            "codex-controlled",
             "opencode"
           ],
+          "quota_bindings": {
+            "codex-controlled": "codex-main"
+          },
           "quota_pools": [
             "claude-main",
             "codex-main",
