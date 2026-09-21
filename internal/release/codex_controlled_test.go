@@ -114,8 +114,8 @@ func TestControlledCaptureArchiveModesRejectsUnsafeNames(t *testing.T) {
 				t.Fatal(e)
 			}
 			zw.Close()
-			if e := controlledCaptureArchiveModes(t.TempDir(), compressed.Bytes(), &ControlledCodexReceipt{FilesSHA256: map[string]string{}}); e == nil {
-				t.Fatalf("accepted unsafe archive member %q", tc.member)
+			if e := controlledCaptureArchiveModes(t.TempDir(), compressed.Bytes(), &ControlledCodexReceipt{FilesSHA256: map[string]string{}}); e == nil || (!strings.Contains(e.Error(), "unsafe controlled Codex archive path") && !strings.Contains(e.Error(), "controlled Codex archive escaped installed root")) {
+				t.Fatalf("expected canonical-path refusal for %q, got %v", tc.member, e)
 			}
 		})
 	}
