@@ -1925,6 +1925,7 @@
           "provider_routes": [
             "claudeAgent",
             "codex",
+            "codex-controlled",
             "opencode"
           ],
           "schema_version": 1,
