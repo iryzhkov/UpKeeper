@@ -9,7 +9,10 @@
 package publish
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -170,31 +173,36 @@ func Release(root string, options Options) (map[string]any, error) {
 	if options.Authored {
 		paths = authoredReleasePaths(captured, previous)
 	}
-	if _, err := git(runner, root, 60*time.Second, append([]string{"add"}, paths...)...); err != nil {
-		return nil, err
-	}
-	staged, err := git(runner, root, 60*time.Second,
-		append([]string{"diff", "--cached", "--name-only"}, paths...)...)
-	if err != nil {
-		return nil, err
-	}
-	if staged != "" {
-		message := "Capture the fleet release from " + options.Controller + "\n\n"
-		for _, line := range summary {
-			message += "- " + line + "\n"
-		}
-		arguments := append(
-			[]string{"commit", "--quiet", "--only", "-m", message}, paths...)
-		if _, err := git(runner, root, 60*time.Second, arguments...); err != nil {
-			return nil, err
-		}
-		head, err := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
+	var head string
+	if options.Authored {
+		head, err = commitAuthored(root, options, runner, captured, paths, summary)
 		if err != nil {
 			return nil, err
 		}
-		report["committed"] = head
+		if head != options.ExpectedHead {
+			report["committed"] = head
+		}
+	} else {
+		if _, err = git(runner, root, 60*time.Second, append([]string{"add"}, paths...)...); err != nil {
+			return nil, err
+		}
+		staged, stageErr := git(runner, root, 60*time.Second,
+			append([]string{"diff", "--cached", "--name-only"}, paths...)...)
+		if stageErr != nil {
+			return nil, stageErr
+		}
+		if staged != "" {
+			message := releaseCommitMessage(options.Controller, summary)
+			arguments := append([]string{"commit", "--quiet", "--only", "-m", message}, paths...)
+			if _, err = git(runner, root, 60*time.Second, arguments...); err != nil {
+				return nil, err
+			}
+		}
+		head, err = git(runner, root, 60*time.Second, "rev-parse", "HEAD")
+		if staged != "" {
+			report["committed"] = head
+		}
 	}
-	head, err := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
 	}
@@ -209,11 +217,15 @@ func Release(root string, options Options) (map[string]any, error) {
 	if branch == "HEAD" {
 		return nil, failure.Push("cannot push a detached HEAD; check out a branch first")
 	}
+	pushSource := "HEAD"
+	if options.Authored {
+		pushSource = head
+	}
 	pushed := []string{}
 	receipts := make([]map[string]any, 0, len(options.Remotes))
 	for index, remote := range options.Remotes {
 		if _, err := git(runner, root, 120*time.Second,
-			"push", "--quiet", remote, "HEAD:refs/heads/"+branch); err != nil {
+			"push", "--quiet", remote, pushSource+":refs/heads/"+branch); err != nil {
 			receipts = append(receipts, map[string]any{"remote": remote, "branch": branch, "status": "failed", "error": err.Error()})
 			for _, pending := range options.Remotes[index+1:] {
 				receipts = append(receipts, map[string]any{"remote": pending, "branch": branch, "status": "not-attempted"})
@@ -231,6 +243,109 @@ func Release(root string, options Options) (map[string]any, error) {
 	return report, nil
 }
 
+func releaseCommitMessage(controller string, summary []string) string {
+	message := "Capture the fleet release from " + controller + "\n\n"
+	for _, line := range summary {
+		message += "- " + line + "\n"
+	}
+	return message
+}
+
+// commitAuthored builds and validates the exact commit in a private index, then
+// advances the checked-out branch only if its parent is still the reviewed HEAD.
+// The caller's index is never read or changed.
+func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, paths, summary []string) (string, error) {
+	index, err := os.CreateTemp("", "upkeeper-authored-index-*")
+	if err != nil {
+		return "", err
+	}
+	indexPath := index.Name()
+	if err = index.Close(); err != nil {
+		return "", err
+	}
+	if err = os.Remove(indexPath); err != nil {
+		return "", err
+	}
+	defer os.Remove(indexPath)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	run := func(input string, arguments ...string) (string, error) {
+		result := runner(procx.Command{
+			Argv: append([]string{"git", "-C", root}, arguments...),
+			Env:  env, Input: input, Timeout: 60 * time.Second,
+		})
+		if result.Err != nil {
+			return "", result.Err
+		}
+		if result.Code != 0 {
+			return "", failure.Push("git %s failed: %s", strings.Join(arguments, " "), result.Output())
+		}
+		return result.Stdout, nil
+	}
+	if _, err = run("", "read-tree", options.ExpectedHead); err != nil {
+		return "", err
+	}
+	if _, err = run("", append([]string{"add"}, paths...)...); err != nil {
+		return "", err
+	}
+	staged, err := run("", append([]string{"diff", "--cached", "--name-only", options.ExpectedHead}, paths...)...)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(staged) == "" {
+		return options.ExpectedHead, nil
+	}
+	expectedManifest, err := captured.CanonicalBytes()
+	if err != nil {
+		return "", err
+	}
+	indexManifest, err := run("", "show", ":"+release.File)
+	if err != nil {
+		return "", err
+	}
+	if indexManifest != string(expectedManifest) {
+		return "", failure.Push("authored release changed while staging")
+	}
+	for _, entry := range captured.Files() {
+		store, _ := entry["store"].(string)
+		expected, _ := entry["sha256"].(string)
+		payload, showErr := run("", "show", ":"+filepath.ToSlash(filepath.Join(release.AgentConfigDir, store)))
+		if showErr != nil {
+			return "", showErr
+		}
+		sum := sha256.Sum256([]byte(payload))
+		if hex.EncodeToString(sum[:]) != expected {
+			return "", failure.Push("authored companion file changed while staging: %s", store)
+		}
+	}
+	current, err := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if current != options.ExpectedHead {
+		return "", failure.Push("authored publication HEAD changed: got %s, want %s", current, options.ExpectedHead)
+	}
+	branch, err := git(runner, root, 60*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if branch == "HEAD" {
+		return "", failure.Push("cannot publish authored release from a detached HEAD")
+	}
+	tree, err := run("", "write-tree")
+	tree = strings.TrimSpace(tree)
+	if err != nil {
+		return "", err
+	}
+	commit, err := run(releaseCommitMessage(options.Controller, summary), "commit-tree", tree, "-p", options.ExpectedHead)
+	commit = strings.TrimSpace(commit)
+	if err != nil {
+		return "", err
+	}
+	if _, err = run("", "update-ref", "refs/heads/"+branch, commit, options.ExpectedHead); err != nil {
+		return "", failure.Push("authored branch changed before commit: %v", err)
+	}
+	return commit, nil
+}
 func authoredReleasePaths(values ...release.Release) []string {
 	paths := []string{"--", release.File}
 	seen := map[string]bool{}

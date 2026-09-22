@@ -46,6 +46,8 @@ type fixture struct {
 	generatorInstalled bool
 	failRemote         string
 	historicalManifest string
+	onAdd              func()
+	headChanged        bool
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -159,6 +161,14 @@ func (f *fixture) run(command procx.Command) procx.Result {
 		return procx.Result{}
 	case strings.Contains(joined, "rev-parse --verify --end-of-options"):
 		return procx.Result{Stdout: rootCommit + "\n"}
+	case strings.Contains(joined, " read-tree "), strings.Contains(joined, " update-ref "):
+		return procx.Result{}
+	case strings.Contains(joined, " write-tree"):
+		return procx.Result{Stdout: strings.Repeat("5", 40) + "\n"}
+	case strings.Contains(joined, " commit-tree "):
+		return procx.Result{Stdout: newCommit + "\n"}
+	case strings.Contains(joined, " show :") && strings.HasSuffix(joined, release.File):
+		return procx.Result{Stdout: f.historicalManifest}
 	case strings.Contains(joined, " show ") && strings.HasSuffix(joined, ":"+release.File):
 		return procx.Result{Stdout: f.historicalManifest}
 	case strings.HasSuffix(joined, "t3-steward version"):
@@ -172,7 +182,7 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	case strings.HasSuffix(joined, "rev-parse --abbrev-ref HEAD"):
 		return procx.Result{Stdout: "main\n"}
 	case strings.HasSuffix(joined, "rev-parse HEAD"):
-		if f.committed() {
+		if f.headChanged || f.committed() {
 			return procx.Result{Stdout: newCommit + "\n"}
 		}
 		return procx.Result{Stdout: rootCommit + "\n"}
@@ -181,7 +191,13 @@ func (f *fixture) run(command procx.Command) procx.Result {
 			return procx.Result{Code: 1, Stderr: "remote refused"}
 		}
 		return procx.Result{}
-	case strings.Contains(joined, " add "), strings.Contains(joined, " commit "):
+	case strings.Contains(joined, " add "):
+		if f.onAdd != nil {
+			f.onAdd()
+			f.onAdd = nil
+		}
+		return procx.Result{}
+	case strings.Contains(joined, " commit "):
 		return procx.Result{}
 	default:
 		f.calls = append(f.calls, "UNEXPECTED "+joined)
@@ -462,6 +478,49 @@ func TestAuthoredPublicationRefusesChangedReviewedReleaseBeforeGitMutation(t *te
 	}
 	if f.did(" add ") || f.did(" commit ") || f.did(" push ") {
 		t.Fatalf("digest refusal mutated Git: %v", f.calls)
+	}
+}
+
+func TestAuthoredPublicationRefusesBytesChangedAtStagingBoundary(t *testing.T) {
+	f, digest, _ := prepareAuthoredFixture(t)
+	options := f.options()
+	options.Authored = true
+	options.ExpectedHead = rootCommit
+	options.ExpectedReleaseSHA256 = digest
+	f.onAdd = func() {
+		value, err := release.Load(f.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value.Manifest["captured_from"] = "changed-during-add"
+		raw, err := value.CanonicalBytes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.historicalManifest = string(raw)
+	}
+	if _, err := publish.Release(f.root, options); err == nil ||
+		!strings.Contains(err.Error(), "changed while staging") {
+		t.Fatalf("staging race produced %v", err)
+	}
+	if f.did(" update-ref ") || f.did(" push ") {
+		t.Fatalf("staging race advanced or pushed a ref: %v", f.calls)
+	}
+}
+
+func TestAuthoredPublicationRefusesHeadChangedBeforeCAS(t *testing.T) {
+	f, digest, _ := prepareAuthoredFixture(t)
+	options := f.options()
+	options.Authored = true
+	options.ExpectedHead = rootCommit
+	options.ExpectedReleaseSHA256 = digest
+	f.onAdd = func() { f.headChanged = true }
+	if _, err := publish.Release(f.root, options); err == nil ||
+		!strings.Contains(err.Error(), "HEAD changed") {
+		t.Fatalf("HEAD race produced %v", err)
+	}
+	if f.did(" update-ref ") || f.did(" push ") {
+		t.Fatalf("HEAD race advanced or pushed a ref: %v", f.calls)
 	}
 }
 
