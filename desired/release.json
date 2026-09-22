@@ -1766,7 +1766,7 @@
             "normandy",
             "omarchy-pc"
           ],
-          "repository": "ssh://igor@normandy/home/igor/Work/home-assistant-config.git",
+          "repository": "ssh://git@git.ryzhkov.dev/igor/home-assistant-config.git",
           "setup_profile": "git-status"
         },
         "huyang": {
