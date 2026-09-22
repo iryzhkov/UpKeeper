@@ -1573,6 +1573,30 @@
         "uvicorn==0.52.4"
       ]
     },
+    "codex-controlled-runtime": {
+      "assets": {
+        "aarch64-unknown-linux-musl": {
+          "asset": "codex-controlled-0.155.1-rc.6-aarch64-unknown-linux-musl.tar.zst",
+          "receipt_asset": "codex-controlled-0.155.1-rc.6-aarch64-unknown-linux-musl.receipt.json",
+          "receipt_sha256": "3ddcde0db5ae57ed0d72a3c0a3ab9ecdac227854ed6efc6d693197c88a7ab5a5",
+          "sha256": "dfbc604b16b299ddb12c2f7114f568e22df0bb2a4e549d321ff034f4c7128193"
+        },
+        "x86_64-unknown-linux-musl": {
+          "asset": "codex-controlled-0.155.1-rc.6-x86_64-unknown-linux-musl.tar.zst",
+          "receipt_asset": "codex-controlled-0.155.1-rc.6-x86_64-unknown-linux-musl.receipt.json",
+          "receipt_sha256": "9a618294d47447ba8e41cf4bfc7e00b0de1d17957a62bc8601c4059d36363cfc",
+          "sha256": "e044d896f5d9fc5d281776e20f4939f6dd0ef848112223f10415b359d6402338"
+        }
+      },
+      "hosts": [
+        "omarchy-pc"
+      ],
+      "kind": "github-release",
+      "repository": "iryzhkov/codex",
+      "source_commit": "a2f884572a870467931192d6bcb9dc09a299b9be",
+      "source_tree": "163ff5c98a49b9041725cb1ba3a0d1e684eee67c",
+      "tag": "controlled-v0.155.1-rc.6"
+    },
     "huyang": {
       "build": [
         "make",
@@ -1691,6 +1715,9 @@
             "codex": [
               "*"
             ],
+            "codex-controlled": [
+              "gpt-5.6-sol"
+            ],
             "opencode": [
               "*"
             ]
@@ -1698,8 +1725,12 @@
           "provider_instances": [
             "claudeAgent",
             "codex",
+            "codex-controlled",
             "opencode"
           ],
+          "quota_bindings": {
+            "codex-controlled": "codex-main"
+          },
           "quota_pools": [
             "claude-main",
             "codex-main",
