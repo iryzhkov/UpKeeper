@@ -66,6 +66,63 @@ func capture(t *testing.T, home string) map[string]any {
 	return component
 }
 
+func TestCaptureProjectsRepositorySkillsForEveryHarness(t *testing.T) {
+	home := fakeHome(t)
+	writeHomeFile(t, home, ".agents/skills/sample/SKILL.md", "stale agents copy\n", 0o644)
+	writeHomeFile(t, home, ".codex/skills/sample/SKILL.md", "stale codex copy\n", 0o644)
+	writeHomeFile(t, home, ".agents/skills/personal/SKILL.md", "# Personal\n", 0o644)
+
+	skills := filepath.Join(t.TempDir(), "skills")
+	writeHomeFile(t, skills, "sample/SKILL.md", "# Reviewed sample\n", 0o644)
+	writeHomeFile(t, skills, "sample/references/guide.md", "# Guide\n", 0o644)
+
+	component, err := CaptureEnvironmentWithSkills(home, skills, testProvenance)
+	if err != nil {
+		t.Fatalf("capture with repository skills failed: %v", err)
+	}
+	decoded, err := DecodeComponent(component)
+	if err != nil {
+		t.Fatalf("the capture does not validate: %v", err)
+	}
+	found := map[string]File{}
+	for _, file := range decoded.Files {
+		found[file.Path] = file
+	}
+	for _, root := range []string{".claude/skills", ".agents/skills"} {
+		for relative, wanted := range map[string]string{
+			"sample/SKILL.md":            "# Reviewed sample\n",
+			"sample/references/guide.md": "# Guide\n",
+		} {
+			path := filepath.Join(root, relative)
+			file, ok := found[path]
+			if !ok {
+				t.Errorf("source-projected skill file %s is absent", path)
+				continue
+			}
+			if string(file.Content) != wanted {
+				t.Errorf("%s = %q, want %q", path, file.Content, wanted)
+			}
+		}
+	}
+	if _, ok := found[".agents/skills/personal/SKILL.md"]; !ok {
+		t.Error("a personal skill with another name was removed")
+	}
+	if _, ok := found[".codex/skills/sample/SKILL.md"]; ok {
+		t.Error("a stale installed repository skill survived in the legacy Codex root")
+	}
+}
+
+func TestCaptureRejectsRepositorySkillWithoutEntrypoint(t *testing.T) {
+	home := fakeHome(t)
+	skills := filepath.Join(t.TempDir(), "skills")
+	writeHomeFile(t, skills, "broken/references/guide.md", "# Guide\n", 0o644)
+
+	_, err := CaptureEnvironmentWithSkills(home, skills, testProvenance)
+	if err == nil || !strings.Contains(err.Error(), "has no regular SKILL.md") {
+		t.Fatalf("missing entrypoint error = %v", err)
+	}
+}
+
 func readHomeFile(t *testing.T, home, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, path))

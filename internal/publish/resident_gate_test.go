@@ -11,11 +11,11 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
-// A capture photographs the pushing host's home directory, and the resident
-// agent instructions it finds there are published to the whole fleet as mode
-// "file" assets that overwrite every other host. No repository installs them,
-// so nothing after the capture can notice that this host had drifted. These
-// tests hold the one place that can notice to refusing.
+// A capture projects repository-owned skills from the pinned source checkout
+// and photographs the remaining resident agent environment. The resident gate
+// must ignore only source-projected skill outputs: every other generated
+// instruction divergence still refuses publication. These tests hold that
+// ownership boundary.
 
 // divergedHeader and divergedEpilogue are what the generator prints around the
 // block of diverged paths. The epilogue is here because of what its third line
@@ -50,6 +50,12 @@ const divergedSkillReport = divergedHeader +
 const divergedClaudeReport = divergedHeader +
 	"  ~/.claude/omarchy-setup/CLAUDE.md: the host copy differs from " +
 	"config/claude/CLAUDE.md\n" +
+	"  ~/.config/agents/AGENTS.md: the host copy differs from what this checkout generates\n" +
+	divergedEpilogue
+
+const divergedSkillAndInstructionReport = divergedHeader +
+	"  ~/.claude/skills/t3-backlog/SKILL.md: the host copy differs from " +
+	"config/claude/skills/t3-backlog/SKILL.md\n" +
 	"  ~/.config/agents/AGENTS.md: the host copy differs from what this checkout generates\n" +
 	divergedEpilogue
 
@@ -89,6 +95,12 @@ func TestAConvergedHostIsCheckedAndThenCaptured(t *testing.T) {
 		t.Fatalf("the capture never asked whether this host matches its source; it ran %v",
 			subject.calls)
 	}
+	wantSkills := filepath.Join(subject.home,
+		".local/share/omarchy-setup/config/claude/skills")
+	if subject.capturedRepositorySkills != wantSkills {
+		t.Fatalf("the capture projected skills from %q rather than pinned source %q",
+			subject.capturedRepositorySkills, wantSkills)
+	}
 	if report["committed"] == nil {
 		t.Errorf("a converged host did not publish: %v", report)
 	}
@@ -127,39 +139,45 @@ func TestTheCheckIsAskedAboutTheCapturedHomeAndNothingElse(t *testing.T) {
 	}
 }
 
-// A skill edited in place on this host is the case the gate exists for: nothing
-// installs a repository's skills onto a host, so this is the only moment at
-// which such an edit is still distinguishable from an authored one.
-func TestAHandEditedSkillRefusesTheCapture(t *testing.T) {
+// Installed repository-skill copies are outputs, not publication inputs. An
+// older generator may still report one, but UpKeeper replaces that name from
+// the pinned source checkout and must not require a manual host overlay.
+func TestAHandEditedSkillDoesNotBlockSourceProjection(t *testing.T) {
 	subject := newFixture(t)
 	subject.checkCode = 3
 	subject.checkStdout = divergedSkillReport
 
-	_, err := publish.Release(subject.root, subject.options())
-	if err == nil {
-		t.Fatal("a host with a hand-edited skill was captured")
+	report, err := publish.Release(subject.root, subject.options())
+	if err != nil {
+		t.Fatalf("a source-projected skill was treated as a capture input: %v", err)
 	}
-	message := err.Error()
-	for _, wanted := range []string{
-		"~/.claude/skills/t3-backlog/SKILL.md",
-		"the host copy differs from config/claude/skills/t3-backlog/SKILL.md",
-		"photographs this host's home directory",
-		"--publish-diverged-instructions",
-		"Nothing has been captured, written, committed or pushed.",
-	} {
-		if !strings.Contains(message, wanted) {
-			t.Errorf("the refusal does not say %q:\n%s", wanted, message)
-		}
+	if report["committed"] == nil {
+		t.Errorf("the release was not published: %v", report)
 	}
-	if strings.Contains(message, convergeCommandLine) {
-		t.Errorf("the refusal lists the generator's converge command as a diverged path:\n%s",
-			message)
-	}
-	capturedNothing(t, subject)
 }
 
 // The shared instruction file has the same shape of failure and a different
 // owner: a stale copy here is published over every other host's copy.
+func TestSkillFilteringDoesNotHideInstructionDrift(t *testing.T) {
+	subject := newFixture(t)
+	subject.checkCode = 3
+	subject.checkStdout = divergedSkillAndInstructionReport
+
+	_, err := publish.Release(subject.root, subject.options())
+	if err == nil {
+		t.Fatal("a real instruction divergence was hidden beside a source-projected skill")
+	}
+	message := err.Error()
+	if !strings.Contains(message,
+		"~/.config/agents/AGENTS.md: the host copy differs from what this checkout generates") {
+		t.Errorf("the refusal does not retain the real instruction divergence:\n%s", message)
+	}
+	if strings.Contains(message, "~/.claude/skills/t3-backlog/SKILL.md") {
+		t.Errorf("the refusal still treats a source-projected skill as resident input:\n%s", message)
+	}
+	capturedNothing(t, subject)
+}
+
 func TestAStaleSharedInstructionFileRefusesTheCapture(t *testing.T) {
 	subject := newFixture(t)
 	subject.checkCode = 3

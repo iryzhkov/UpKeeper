@@ -12,13 +12,10 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
-// The resident agent instructions are the shared CLAUDE.md, the AGENTS.md
-// family under ~/.config/agents and the skills under ~/.claude/skills. Every
-// agent session on every host loads them, and they are the one part of a
-// release with no repository behind it at capture time: the environment
-// capturer reads them out of the pushing host's home directory, stores them as
-// mode "file" assets, and convergence writes those exact bytes over the same
-// paths on every other host.
+// The resident agent instructions are the shared CLAUDE.md and the AGENTS.md
+// family under ~/.config/agents. The environment capturer reads those generated
+// files out of the publishing host. Repository-owned skills have a pinned source
+// tree and are projected separately; installed skill copies are not inputs here.
 //
 // Nothing downstream can notice a mistake here. A manifest captured from a host
 // whose copies have drifted is well formed, its assets validate, and every
@@ -74,14 +71,12 @@ const ResidentOverrideFlag = "--publish-diverged-instructions"
 // residentWhy explains the mechanism to somebody who has never seen this code.
 // It is repeated in both refusals because either one may be the first thing a
 // new operator ever reads about how the resident instruction layer travels.
-const residentWhy = "A release capture photographs this host's home directory. " +
-	"The shared CLAUDE.md, the files under ~/.config/agents and every skill under " +
-	"~/.claude/skills are copied into the manifest exactly as this machine holds " +
-	"them, and the next convergence writes those bytes over the same paths on every " +
-	"other host. No repository installs a skill onto a host, so a file edited in " +
-	"place here becomes the fleet's instruction to every agent on every machine, and " +
-	"an edit made anywhere else is destroyed without a word. A host that has drifted " +
-	"from its source would publish its drift."
+const residentWhy = "A release capture photographs this host's generated resident " +
+	"instructions. The shared CLAUDE.md and files under ~/.config/agents are copied " +
+	"into the manifest exactly as this machine holds them, and convergence writes " +
+	"those bytes to every other host. Repository-owned skills are different: UpKeeper " +
+	"reads them from the pinned source checkout and ignores installed copies. A host " +
+	"whose generated resident instructions drifted would still publish that drift."
 
 // ResidentPolicy is how a capture treats resident instructions that do not
 // match their source.
@@ -142,11 +137,17 @@ func guardResidentInstructions(
 			generator, checkout, result.Code, residentDivergedExit,
 			residentDetail(result)))
 	}
-	diverged := residentReportedPaths(result.Stdout)
-	if len(diverged) == 0 {
+	reported := residentReportedPaths(result.Stdout)
+	if len(reported) == 0 {
 		return residentUncheckable(fmt.Sprintf(
 			"%s --root %s --check reported a divergence without naming a path: %s",
 			generator, checkout, residentDetail(result)))
+	}
+	diverged := residentPublishedPaths(reported)
+	if len(diverged) == 0 {
+		// Older generators also compared installed skills. Those paths are no
+		// longer capture inputs, so an installed skill difference is irrelevant.
+		return nil
 	}
 	if policy.PublishDiverged {
 		if policy.Notice == nil {
@@ -268,6 +269,20 @@ func residentUncheckable(reason string) error {
 // "run.sh   (or: …" is not. A line in a shape neither condition recognises is
 // dropped rather than reported, which can only turn a divergence into the
 // refusal that says no path was named; it can never turn one into a capture.
+func residentPublishedPaths(reported []string) []string {
+	published := make([]string, 0, len(reported))
+	for _, entry := range reported {
+		trimmed := strings.TrimSpace(entry)
+		if strings.HasPrefix(trimmed, "~/.claude/skills/") ||
+			strings.HasPrefix(trimmed, "~/.agents/skills/") ||
+			strings.HasPrefix(trimmed, "~/.codex/skills/") {
+			continue
+		}
+		published = append(published, entry)
+	}
+	return published
+}
+
 func residentReportedPaths(stdout string) []string {
 	paths := []string{}
 	block := false

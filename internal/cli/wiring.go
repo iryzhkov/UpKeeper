@@ -13,9 +13,9 @@ func init() {
 	release.EnvironmentValidator = agentenv.ValidateEnvironment
 	release.EnvironmentToolingNormalizer = agentenv.WithTooling
 	release.EnvironmentCapturer = func(
-		home string, provenance release.InstructionRef,
+		home, repositorySkills string, provenance release.InstructionRef,
 	) (map[string]any, error) {
-		return agentenv.CaptureEnvironment(home, agentenv.ProjectInstructionRef{
+		return agentenv.CaptureEnvironmentWithSkills(home, repositorySkills, agentenv.ProjectInstructionRef{
 			Repository:         provenance.Repository,
 			RepositoryRevision: provenance.Commit,
 			Path:               provenance.Path,

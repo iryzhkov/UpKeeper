@@ -132,7 +132,7 @@ func TestTheOverrideDoesNotCoverACheckThatCouldNotRun(t *testing.T) {
 func TestAnOverrideWithNowhereToReportIsRefused(t *testing.T) {
 	subject := newFixture(t)
 	subject.checkCode = 3
-	subject.checkStdout = divergedSkillReport
+	subject.checkStdout = divergedClaudeReport
 	options := subject.options()
 	options.PublishDivergedInstructions = true
 	options.Notice = nil
