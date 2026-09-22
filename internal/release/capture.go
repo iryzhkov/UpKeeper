@@ -29,7 +29,7 @@ type InstructionRef struct {
 // injected for the same reason the validator is: the manifest model does not
 // depend on the projection that applies it.
 var EnvironmentCapturer func(
-	home, repositorySkills string, provenance InstructionRef,
+	home, repositorySkills string, provenance InstructionRef, previous map[string]any,
 ) (map[string]any, error)
 var EnvironmentToolingNormalizer func(map[string]any) (map[string]any, error)
 
@@ -184,12 +184,13 @@ func Capture(
 	repositorySkills := filepath.Join(
 		home, text(setup["path"]), "config/claude/skills",
 	)
+	previousEnvironment, _ := components["agent-environment"].(map[string]any)
 	environment, err := EnvironmentCapturer(home, repositorySkills, InstructionRef{
 		Repository: "github.com/iryzhkov/UpKeeper",
 		Commit:     headCommit,
 		Path:       "README.md",
 		SHA256:     digestOf(readme),
-	})
+	}, previousEnvironment)
 	if err != nil {
 		return Release{}, failure.Capture("agent-environment: %s", err.Error())
 	}

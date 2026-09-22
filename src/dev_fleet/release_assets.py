@@ -88,10 +88,15 @@ def canonical(value) -> bytes:
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
-def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
+def capture_environment(
+    home: Path,
+    provenance: ProjectInstructionRef,
+    previous: dict | None = None,
+    skills_root: Path | None = None,
+) -> dict:
     files = []
 
-    def add(path, mode="file", value=None, kind="global-instruction"):
+    def add(path, mode="file", value=None, kind="global-instruction", permissions=None):
         path = safe_path(path)
         source = home / path
         data = source.read_bytes() if value is None else value
@@ -103,7 +108,13 @@ def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
                 "content": base64.b64encode(data).decode(),
                 "sha256": digest(data),
                 "size_bytes": len(data),
-                "permissions": stat.S_IMODE(source.stat().st_mode) if mode == "file" else 0o600,
+                "permissions": (
+                    permissions
+                    if permissions is not None
+                    else stat.S_IMODE(source.stat().st_mode)
+                    if mode == "file"
+                    else 0o600
+                ),
             }
         )
 
@@ -118,14 +129,65 @@ def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
     for p in sorted((home / ".config/agents").glob("*.md")):
         add(str(p.relative_to(home)))
     # Resolve published skill directory symlinks, but freeze bytes, never links.
-    for directory in sorted((home / ".claude/skills").iterdir()):
-        if not directory.is_dir() or not directory.resolve().is_relative_to(home.resolve()):
-            # OS-supplied skill links (for example /usr/share/omarchy) remain
-            # package-owned. Never turn their installed bytes into a writable target.
+    for relative_root in (".claude/skills", ".codex/skills", ".agents/skills"):
+        root = home / relative_root
+        if not root.exists():
             continue
-        for p in sorted(directory.rglob("*")):
-            if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts:
-                add(str(p.relative_to(home)), kind="skill")
+        for directory in sorted(root.iterdir()):
+            if (
+                directory.name == ".system"
+                or not directory.is_dir()
+                or not directory.resolve().is_relative_to(home.resolve())
+            ):
+                # OS-supplied skill links remain package-owned. Never turn
+                # their installed bytes into a writable target.
+                continue
+            for p in sorted(directory.rglob("*")):
+                if p.is_file() and ".git" not in p.parts and "__pycache__" not in p.parts:
+                    add(str(p.relative_to(home)), kind="skill")
+
+    if previous is not None:
+        validate_environment(previous)
+    source_names = set()
+    if skills_root is not None:
+        for directory in sorted(skills_root.iterdir()):
+            if directory.is_symlink() or not directory.is_dir() or directory.name == ".system":
+                continue
+            entrypoint = directory / "SKILL.md"
+            if not entrypoint.is_file() or entrypoint.is_symlink():
+                raise ValueError(f"repository skill {directory.name} has no regular SKILL.md")
+            source_names.add(directory.name)
+
+    def replaced_source_skill(f):
+        parts = Path(f["path"]).parts
+        return (
+            len(parts) >= 3
+            and parts[0] in {".claude", ".agents", ".codex"}
+            and parts[1] == "skills"
+            and parts[2] in source_names
+        )
+
+    files[:] = [f for f in files if not replaced_source_skill(f)]
+    if skills_root is not None:
+        for name in sorted(source_names):
+            directory = skills_root / name
+            for p in sorted(directory.rglob("*")):
+                if p.is_symlink():
+                    raise ValueError(f"repository skill {name} contains a symlink")
+                if not p.is_file():
+                    continue
+                relative = p.relative_to(directory)
+                data = p.read_bytes()
+                permissions = stat.S_IMODE(p.stat().st_mode)
+                if permissions not in {0o600, 0o644, 0o700, 0o755}:
+                    raise ValueError(f"repository skill {name} contains an unsupported file")
+                for root in (".claude/skills", ".agents/skills"):
+                    add(
+                        str(Path(root) / name / relative),
+                        value=data,
+                        kind="skill",
+                        permissions=permissions,
+                    )
     settings = json.loads((home / ".claude/settings.json").read_text())
     owned = {k: settings[k] for k in SETTINGS_KEYS if k in settings and k != "permissions"}
     owned["permissions"] = {"allow": settings.get("permissions", {}).get("allow", [])}
@@ -146,11 +208,23 @@ def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
         check_public(data)
         add(path, mode, canonical(data), "mcp-client")
     files.sort(key=lambda f: f["path"])
+    active_paths = {f["path"] for f in files}
+    retired_by_path = {}
+    if previous is not None:
+        for f in previous.get("retired_files", []):
+            retired_by_path[f["path"]] = dict(f)
+        for f in previous["files"]:
+            if f["mode"] == "file" and f["path"] not in active_paths:
+                retired_by_path[f["path"]] = dict(f)
+    for path in active_paths:
+        retired_by_path.pop(path, None)
+    retired_files = [retired_by_path[path] for path in sorted(retired_by_path)]
     desired = {f["path"]: base64.b64decode(f["content"]) for f in files}
     spec = make_spec(home, desired, desired, files, provenance, "capture")
     result = {
         "kind": "agent-environment",
         "files": files,
+        "retired_files": retired_files,
         "spec": environment_to_dict(spec),
         "source_home": str(home),
     }
@@ -159,7 +233,11 @@ def capture_environment(home: Path, provenance: ProjectInstructionRef) -> dict:
 
 
 def validate_environment(component):
-    if set(component) != {"kind", "files", "spec", "source_home"}:
+    fields = set(component)
+    if fields not in (
+        {"kind", "files", "spec", "source_home"},
+        {"kind", "files", "retired_files", "spec", "source_home"},
+    ):
         raise ValueError("unknown agent-environment fields")
     spec = environment_from_dict(component["spec"])
     if component["kind"] != "agent-environment" or not Path(component["source_home"]).is_absolute():
@@ -197,6 +275,20 @@ def validate_environment(component):
         }
         if f["mode"] != expected.get(f["path"], "file"):
             raise ValueError("owned projection does not match its allowed destination")
+    retired = component.get("retired_files", [])
+    retired_paths = [safe_path(f["path"]) for f in retired]
+    if retired_paths != sorted(set(retired_paths)) or set(paths) & set(retired_paths):
+        raise ValueError("retired environment files must be unique, sorted and inactive")
+    for f in retired:
+        if (
+            set(f) != {"path", "mode", "kind", "content", "sha256", "size_bytes", "permissions"}
+            or f["mode"] != "file"
+            or f["permissions"] not in {0o600, 0o644, 0o700, 0o755}
+        ):
+            raise ValueError("invalid retired file descriptor")
+        data = base64.b64decode(f["content"], validate=True)
+        if digest(data) != f["sha256"] or len(data) != f["size_bytes"]:
+            raise ValueError("retired environment payload digest mismatch")
 
 
 def make_spec(home, desired, prior, files, provenance, identity):
@@ -384,6 +476,18 @@ def target_path(home: Path, relative: str) -> Path:
     return resolved
 
 
+def retirement_path(home: Path, relative: str) -> Path:
+    target = home / safe_path(relative)
+    current = home
+    for part in Path(relative).parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError("retired managed path traverses a symlink")
+        if not current.exists():
+            break
+    return target
+
+
 def observe_environment(component, home, identity="pending"):
     validate_environment(component)
     desired, prior = {}, {}
@@ -391,6 +495,17 @@ def observe_environment(component, home, identity="pending"):
         path = target_path(home, f["path"])
         prior[f["path"]] = path.read_bytes() if path.exists() else None
         desired[f["path"]] = render(f, prior[f["path"]], component["source_home"], home)
+    for f in component.get("retired_files", []):
+        path = retirement_path(home, f["path"])
+        old = None
+        if path.exists():
+            if not path.is_file() or stat.S_IMODE(path.stat().st_mode) != f["permissions"]:
+                raise ValueError("retired managed file has unexplained changes: " + f["path"])
+            old = path.read_bytes()
+            if digest(old) != f["sha256"]:
+                raise ValueError("retired managed file has unexplained changes: " + f["path"])
+        prior[f["path"]] = old
+        desired[f["path"]] = None
     provenance = environment_from_dict(component["spec"]).project_instructions[0]
     spec = make_spec(home, desired, prior, component["files"], provenance, identity)
     observed = {
@@ -400,7 +515,20 @@ def observe_environment(component, home, identity="pending"):
         )
         for a, f in zip(spec.assets, component["files"], strict=True)
     }
-    return spec, desired, prior, [asdict(x) for x in classify_asset_drift(spec, observed)]
+    drift = [asdict(x) for x in classify_asset_drift(spec, observed)]
+    for f in component.get("retired_files", []):
+        if prior[f["path"]] is None:
+            continue
+        drift.append(
+            {
+                "subject": "retired:" + f["path"],
+                "state": "MISMATCH",
+                "expected_sha256": None,
+                "observed_sha256": digest(prior[f["path"]]),
+                "evidence": "retired owned projection",
+            }
+        )
+    return spec, desired, prior, drift
 
 
 def atomic_write(path, data, mode):
@@ -428,11 +556,34 @@ def apply_environment(component, home, run_id, dry_run=False, fault=None):
         if desired[f["path"]] != prior[f["path"]]
         or stat.S_IMODE(target_path(home, f["path"]).stat().st_mode) != f["permissions"]
     ]
-    if not changed or dry_run:
-        return {"state": "updated" if changed else "converged", "changed": changed, "drift": drift}
+    removed = [
+        f["path"]
+        for f in component.get("retired_files", [])
+        if prior[f["path"]] is not None
+    ]
+    mutations = changed + removed
+    if not mutations or dry_run:
+        return {
+            "state": "updated" if mutations else "converged",
+            "changed": changed,
+            "removed": removed,
+            "drift": drift,
+        }
     root = home / ".local/state/dev-fleet/environments" / run_id
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
-    paths = {f["path"]: target_path(home, f["path"]) for f in component["files"]}
+    descriptors = component["files"] + component.get("retired_files", [])
+    retired_modes = {
+        f["path"]: f["permissions"] for f in component.get("retired_files", [])
+    }
+    retired_paths = set(retired_modes)
+    paths = {
+        f["path"]: (
+            retirement_path(home, f["path"])
+            if f["path"] in retired_paths
+            else target_path(home, f["path"])
+        )
+        for f in descriptors
+    }
     if len(set(paths.values())) != len(paths):
         raise ValueError("managed paths alias one another")
     modes = {
@@ -458,12 +609,25 @@ def apply_environment(component, home, run_id, dry_run=False, fault=None):
         atomic_write(root / f"asset-{i:06d}", desired[f["path"]], 0o600)
     activated = []
     try:
-        for p in changed:
+        for p in mutations:
             path = paths[p]
-            actual = path.read_bytes() if path.exists() else None
-            if actual != prior[p]:
-                raise ValueError("managed file changed since observation")
-            atomic_write(path, desired[p], desired_modes[p])
+            if desired[p] is None:
+                fresh = retirement_path(home, p)
+                if fresh != path:
+                    raise ValueError("retired managed path changed since observation")
+                if (
+                    not fresh.exists()
+                    or not fresh.is_file()
+                    or stat.S_IMODE(fresh.stat().st_mode) != retired_modes[p]
+                    or fresh.read_bytes() != prior[p]
+                ):
+                    raise ValueError("retired managed file changed since observation")
+                fresh.unlink()
+            else:
+                actual = path.read_bytes() if path.exists() else None
+                if actual != prior[p]:
+                    raise ValueError("managed file changed since observation")
+                atomic_write(path, desired[p], desired_modes[p])
             activated.append(p)
             if fault:
                 fault(p)
@@ -473,18 +637,26 @@ def apply_environment(component, home, run_id, dry_run=False, fault=None):
                 or stat.S_IMODE(paths[f["path"]].stat().st_mode) != desired_modes[f["path"]]
             ):
                 raise ValueError("F05 active asset failed verification")
+        if any(paths[p].exists() for p in removed):
+            raise ValueError("retired managed file still exists")
     except Exception:
         for p in reversed(activated):
             # Preserve concurrent/unexplained changes; do not claim a clean rollback.
-            if paths[p].read_bytes() != desired[p]:
+            current = paths[p].read_bytes() if paths[p].exists() else None
+            if current != desired[p]:
                 raise RuntimeError("rollback failed: unexplained managed-path change") from None
             if prior[p] is None:
-                paths[p].unlink()
+                paths[p].unlink(missing_ok=True)
             else:
                 atomic_write(paths[p], prior[p], modes[p])
         for p in paths:
             restored = paths[p].read_bytes() if paths[p].exists() else None
             if restored != prior[p]:
                 raise RuntimeError("rollback failed: prior environment did not verify") from None
-        return {"state": "rolled-back", "changed": changed, "drift": drift}
-    return {"state": "updated", "changed": changed, "drift": drift}
+        return {
+            "state": "rolled-back",
+            "changed": changed,
+            "removed": removed,
+            "drift": drift,
+        }
+    return {"state": "updated", "changed": changed, "removed": removed, "drift": drift}

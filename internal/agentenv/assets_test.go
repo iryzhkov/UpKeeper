@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -615,6 +616,103 @@ func TestCaptureFollowsSkillLinksThatStayInsideHome(t *testing.T) {
 	}
 	if !equalStrings(skills, wanted) {
 		t.Errorf("captured skills = %v, want %v", skills, wanted)
+	}
+}
+
+func TestRetiredOwnedFileIsRemovedTransactionallyAndTombstonePersists(t *testing.T) {
+	home := fakeHome(t)
+	retiredPath := ".claude/skills/sample/SKILL.md"
+	previous := capture(t, home)
+	if err := os.Remove(filepath.Join(home, retiredPath)); err != nil {
+		t.Fatalf("cannot remove the source-owned skill: %v", err)
+	}
+	component, err := CaptureEnvironmentWithSkillsAndPrevious(
+		home, "", testProvenance, previous,
+	)
+	if err != nil {
+		t.Fatalf("capture with retirement failed: %v", err)
+	}
+	decoded, err := DecodeComponent(component)
+	if err != nil {
+		t.Fatalf("retirement capture does not validate: %v", err)
+	}
+	if len(decoded.RetiredFiles) != 1 || decoded.RetiredFiles[0].Path != retiredPath {
+		t.Fatalf("retired files = %#v, want %s", decoded.RetiredFiles, retiredPath)
+	}
+	later, err := CaptureEnvironmentWithSkillsAndPrevious(home, "", testProvenance, component)
+	if err != nil {
+		t.Fatalf("later capture failed: %v", err)
+	}
+	laterDecoded, err := DecodeComponent(later)
+	if err != nil || len(laterDecoded.RetiredFiles) != 1 {
+		t.Fatalf("retirement tombstone did not persist: %#v, %v", laterDecoded, err)
+	}
+
+	writeHomeFile(t, home, retiredPath, "# Sample\n", 0o644)
+	dry := apply(t, component, home, "retire-dry", true, nil)
+	if len(dry.Drift) == 0 || dry.Drift[len(dry.Drift)-1].Subject != "retired:"+retiredPath {
+		t.Fatalf("retirement drift is absent: %#v", dry.Drift)
+	}
+	if len(dry.Removed) != 1 || dry.Removed[0] != retiredPath {
+		t.Fatalf("dry-run removals = %v, want %s", dry.Removed, retiredPath)
+	}
+	if _, err := os.Stat(filepath.Join(home, retiredPath)); err != nil {
+		t.Fatalf("dry run removed the file: %v", err)
+	}
+
+	rolledBack := apply(t, component, home, "retire-rollback", false, func(path string) error {
+		if path == retiredPath {
+			return errors.New("injected retirement failure")
+		}
+		return nil
+	})
+	if rolledBack.State != "rolled-back" || readHomeFile(t, home, retiredPath) != "# Sample\n" {
+		t.Fatalf("retirement rollback = %#v", rolledBack)
+	}
+	applied := apply(t, component, home, "retire-success", false, nil)
+	if len(applied.Removed) != 1 {
+		t.Fatalf("applied removals = %v", applied.Removed)
+	}
+	if _, err := os.Stat(filepath.Join(home, retiredPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired file still exists: %v", err)
+	}
+
+	personal := ".config/personal-retirement-target"
+	writeHomeFile(t, home, personal, "# Sample\n", 0o644)
+	if err := os.Symlink(filepath.Join(home, personal), filepath.Join(home, retiredPath)); err != nil {
+		t.Fatalf("cannot create retirement symlink: %v", err)
+	}
+	if _, err := ApplyEnvironment(component, home, "retire-symlink", false, nil); err == nil ||
+		!strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("retirement symlink was not refused: %v", err)
+	}
+	if readHomeFile(t, home, personal) != "# Sample\n" {
+		t.Fatal("retirement followed the symlink and changed the personal target")
+	}
+	if err := os.Remove(filepath.Join(home, retiredPath)); err != nil {
+		t.Fatalf("cannot remove retirement symlink: %v", err)
+	}
+
+	if err := syscall.Mkfifo(filepath.Join(home, retiredPath), 0o644); err != nil {
+		t.Fatalf("cannot create retirement FIFO: %v", err)
+	}
+	if _, err := ApplyEnvironment(component, home, "retire-fifo", false, nil); err == nil ||
+		!strings.Contains(err.Error(), "unexplained changes") {
+		t.Fatalf("retirement FIFO was not refused before reading: %v", err)
+	}
+	if err := os.Remove(filepath.Join(home, retiredPath)); err != nil {
+		t.Fatalf("cannot remove retirement FIFO: %v", err)
+	}
+
+	writeHomeFile(t, home, retiredPath, "# Sample\n", 0o600)
+	if _, err := ApplyEnvironment(component, home, "retire-mode", false, nil); err == nil ||
+		!strings.Contains(err.Error(), "unexplained changes") {
+		t.Fatalf("mode-modified retired file was not refused: %v", err)
+	}
+	writeHomeFile(t, home, retiredPath, "locally modified\n", 0o644)
+	if _, err := ApplyEnvironment(component, home, "retire-refuse", false, nil); err == nil ||
+		!strings.Contains(err.Error(), "unexplained changes") {
+		t.Fatalf("locally modified retired file was not refused: %v", err)
 	}
 }
 

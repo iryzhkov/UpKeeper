@@ -83,8 +83,10 @@ var modeByPath = map[string]string{
 // allowedPermissions are the only file modes a managed projection may carry.
 var allowedPermissions = map[int64]bool{0o600: true, 0o644: true, 0o700: true, 0o755: true}
 
-// componentFields is the exact field set of an agent-environment component.
-var componentFields = []string{"kind", "files", "spec", "source_home"}
+// componentFields is the exact field set of a current agent-environment component.
+// legacyComponentFields keeps already-published releases readable.
+var componentFields = []string{"kind", "files", "retired_files", "spec", "source_home"}
+var legacyComponentFields = []string{"kind", "files", "spec", "source_home"}
 
 // fileFields is the exact field set of one owned file descriptor.
 var fileFields = []string{
@@ -176,6 +178,32 @@ func TargetPath(home, relative string) (string, error) {
 	return resolved, nil
 }
 
+// RetirementPath returns the lexical managed path only when no existing path
+// component is a symlink. Retirement must unlink the owned file itself, never a
+// same-byte target reached through a link.
+func RetirementPath(home, relative string) (string, error) {
+	safe, err := SafePath(relative)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(home, safe)
+	current := home
+	for _, part := range pathParts(safe) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, fs.ErrNotExist) {
+			return target, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("retired managed path traverses a symlink")
+		}
+	}
+	return target, nil
+}
+
 // CheckPublic refuses a credential-bearing registration field instead of
 // redacting it.
 //
@@ -262,9 +290,10 @@ func (f File) ToMap() map[string]any {
 
 // Component is a validated agent-environment component.
 type Component struct {
-	Files      []File
-	Spec       *Spec
-	SourceHome string
+	Files        []File
+	RetiredFiles []File
+	Spec         *Spec
+	SourceHome   string
 }
 
 // ToMap renders the component as the generic document a release carries.
@@ -277,11 +306,16 @@ func (c *Component) ToMap() (map[string]any, error) {
 	for _, file := range c.Files {
 		files = append(files, file.ToMap())
 	}
+	retired := make([]any, 0, len(c.RetiredFiles))
+	for _, file := range c.RetiredFiles {
+		retired = append(retired, file.ToMap())
+	}
 	return map[string]any{
-		"kind":        "agent-environment",
-		"files":       files,
-		"spec":        spec,
-		"source_home": c.SourceHome,
+		"kind":          "agent-environment",
+		"files":         files,
+		"retired_files": retired,
+		"spec":          spec,
+		"source_home":   c.SourceHome,
 	}, nil
 }
 
@@ -297,7 +331,7 @@ func ValidateEnvironment(component map[string]any) error {
 // Every payload is checked against its own digest and against the frozen spec,
 // so a component that decodes here cannot misdescribe what it will write.
 func DecodeComponent(component map[string]any) (*Component, error) {
-	if !sameKeys(component, componentFields) {
+	if !sameKeys(component, componentFields) && !sameKeys(component, legacyComponentFields) {
 		return nil, errors.New("unknown agent-environment fields")
 	}
 	rawSpec, ok := component["spec"].(map[string]any)
@@ -348,7 +382,45 @@ func DecodeComponent(component map[string]any) (*Component, error) {
 		}
 		files = append(files, file)
 	}
-	return &Component{Files: files, Spec: spec, SourceHome: sourceHome}, nil
+	retired := []File{}
+	retiredPaths := []string{}
+	if rawRetired, present := component["retired_files"]; present {
+		items, err := anyList(rawRetired)
+		if err != nil {
+			return nil, errors.New("invalid retired file descriptor")
+		}
+		for _, raw := range items {
+			object, ok := raw.(map[string]any)
+			if !ok {
+				return nil, errors.New("invalid retired file descriptor")
+			}
+			file, err := fileFromMap(object)
+			if err != nil || file.Mode != "file" {
+				return nil, errors.New("invalid retired file descriptor")
+			}
+			safe, err := SafePath(file.Path)
+			if err != nil {
+				return nil, err
+			}
+			retiredPaths = append(retiredPaths, safe)
+			retired = append(retired, file)
+		}
+	}
+	if !isSortedUnique(retiredPaths) {
+		return nil, errors.New("retired environment files must be unique, sorted and inactive")
+	}
+	active := map[string]bool{}
+	for _, path := range paths {
+		active[path] = true
+	}
+	for _, path := range retiredPaths {
+		if active[path] {
+			return nil, errors.New("retired environment files must be unique, sorted and inactive")
+		}
+	}
+	return &Component{
+		Files: files, RetiredFiles: retired, Spec: spec, SourceHome: sourceHome,
+	}, nil
 }
 
 func fileFromMap(raw map[string]any) (File, error) {
@@ -443,22 +515,65 @@ func CaptureEnvironment(home string, provenance ProjectInstructionRef) (map[stri
 func CaptureEnvironmentWithSkills(
 	home, skillsRoot string, provenance ProjectInstructionRef,
 ) (map[string]any, error) {
+	return CaptureEnvironmentWithSkillsAndPrevious(home, skillsRoot, provenance, nil)
+}
+
+// CaptureEnvironmentWithSkillsAndPrevious carries exact-byte retirement
+// tombstones forward so a host that skips one release still removes files the
+// reviewed source stopped publishing.
+func CaptureEnvironmentWithSkillsAndPrevious(
+	home, skillsRoot string, provenance ProjectInstructionRef, previous map[string]any,
+) (map[string]any, error) {
 	files, err := captureFiles(home, skillsRoot)
 	if err != nil {
 		return nil, err
+	}
+	var decodedPrevious *Component
+	if previous != nil {
+		decodedPrevious, err = DecodeComponent(previous)
+		if err != nil {
+			return nil, err
+		}
 	}
 	sort.SliceStable(files, func(left, right int) bool {
 		return files[left].Path < files[right].Path
 	})
 	desired := map[string][]byte{}
+	active := map[string]bool{}
 	for _, file := range files {
 		desired[file.Path] = file.Content
+		active[file.Path] = true
+	}
+	retiredByPath := map[string]File{}
+	if decodedPrevious != nil {
+		for _, file := range decodedPrevious.RetiredFiles {
+			retiredByPath[file.Path] = file
+		}
+		for _, file := range decodedPrevious.Files {
+			if file.Mode == "file" && !active[file.Path] {
+				retiredByPath[file.Path] = file
+			}
+		}
+	}
+	for path := range active {
+		delete(retiredByPath, path)
+	}
+	retiredPaths := make([]string, 0, len(retiredByPath))
+	for path := range retiredByPath {
+		retiredPaths = append(retiredPaths, path)
+	}
+	sort.Strings(retiredPaths)
+	retired := make([]File, 0, len(retiredPaths))
+	for _, path := range retiredPaths {
+		retired = append(retired, retiredByPath[path])
 	}
 	spec, err := makeSpec(home, desired, desired, files, provenance, "capture")
 	if err != nil {
 		return nil, err
 	}
-	component := &Component{Files: files, Spec: spec, SourceHome: home}
+	component := &Component{
+		Files: files, RetiredFiles: retired, Spec: spec, SourceHome: home,
+	}
 	rendered, err := component.ToMap()
 	if err != nil {
 		return nil, err
@@ -740,10 +855,6 @@ func projectSourceSkills(files []File, skillsRoot string) ([]File, error) {
 			return nil, err
 		}
 	}
-	if len(owned) == 0 {
-		return nil, errors.New("repository skill source contains no skills")
-	}
-
 	projected := make([]File, 0, len(files)+2*len(sourceFiles))
 	for _, file := range files {
 		parts := pathParts(file.Path)
@@ -1003,6 +1114,32 @@ func ObserveEnvironment(component map[string]any, home, identity string) (*Obser
 		}
 		desired[file.Path] = rendered
 	}
+	for _, file := range decoded.RetiredFiles {
+		path, err := RetirementPath(home, file.Path)
+		if err != nil {
+			return nil, err
+		}
+		var data []byte
+		info, statErr := os.Lstat(path)
+		if statErr == nil {
+			if !info.Mode().IsRegular() || int64(info.Mode().Perm()) != file.Permissions {
+				return nil, fmt.Errorf(
+					"retired managed file has unexplained changes: %s", file.Path)
+			}
+			data, err = os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			if Digest(data) != file.SHA256 {
+				return nil, fmt.Errorf(
+					"retired managed file has unexplained changes: %s", file.Path)
+			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return nil, statErr
+		}
+		prior[file.Path] = data
+		desired[file.Path] = nil
+	}
 	spec, err := makeSpec(
 		home, desired, prior, decoded.Files, decoded.Spec.ProjectInstructions[0], identity)
 	if err != nil {
@@ -1018,9 +1155,19 @@ func ObserveEnvironment(component map[string]any, home, identity string) (*Obser
 		}
 		observed[asset.AssetID] = item
 	}
+	drift := ClassifyAssetDrift(spec, observed, nil)
+	for _, file := range decoded.RetiredFiles {
+		if prior[file.Path] == nil {
+			continue
+		}
+		observedDigest := Digest(prior[file.Path])
+		drift = append(drift, DriftObservation{
+			Subject: "retired:" + file.Path, State: DriftMismatch,
+			ObservedSHA256: &observedDigest, Evidence: "retired owned projection",
+		})
+	}
 	return &Observation{
-		Component: decoded, Spec: spec, Desired: desired, Prior: prior,
-		Drift: ClassifyAssetDrift(spec, observed, nil),
+		Component: decoded, Spec: spec, Desired: desired, Prior: prior, Drift: drift,
 	}, nil
 }
 
@@ -1028,6 +1175,7 @@ func ObserveEnvironment(component map[string]any, home, identity string) (*Obser
 type ApplyResult struct {
 	State   string
 	Changed []string
+	Removed []string
 	Drift   []DriftObservation
 }
 
@@ -1048,29 +1196,48 @@ func ApplyEnvironment(
 	if err != nil {
 		return nil, err
 	}
-	if len(changed) == 0 || dryRun {
+	removed := []string{}
+	for _, file := range observation.Component.RetiredFiles {
+		if observation.Prior[file.Path] != nil {
+			removed = append(removed, file.Path)
+		}
+	}
+	mutations := append(append([]string{}, changed...), removed...)
+	if len(mutations) == 0 || dryRun {
 		state := "converged"
-		if len(changed) > 0 {
+		if len(mutations) > 0 {
 			state = "updated"
 		}
-		return &ApplyResult{State: state, Changed: changed, Drift: observation.Drift}, nil
+		return &ApplyResult{
+			State: state, Changed: changed, Removed: removed, Drift: observation.Drift,
+		}, nil
 	}
-	paths, modes, err := resolveTargets(home, files)
+	allFiles := append(append([]File{}, files...), observation.Component.RetiredFiles...)
+	paths, modes, err := resolveTargets(home, allFiles)
 	if err != nil {
 		return nil, err
+	}
+	for _, file := range observation.Component.RetiredFiles {
+		paths[file.Path], err = RetirementPath(home, file.Path)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := journal(home, runID, observation, files, modes); err != nil {
 		return nil, err
 	}
-	activated, activateErr := activate(observation, files, paths, changed, fault)
+	activated, activateErr := activate(observation, files, home, paths, mutations, fault)
 	if activateErr != nil {
 		if err := restore(observation, paths, modes, activated); err != nil {
 			return nil, err
 		}
 		return &ApplyResult{
-			State: "rolled-back", Changed: changed, Drift: observation.Drift}, nil
+			State: "rolled-back", Changed: changed, Removed: removed, Drift: observation.Drift,
+		}, nil
 	}
-	return &ApplyResult{State: "updated", Changed: changed, Drift: observation.Drift}, nil
+	return &ApplyResult{
+		State: "updated", Changed: changed, Removed: removed, Drift: observation.Drift,
+	}, nil
 }
 
 // changedPaths lists the managed paths whose content or mode differs from what
@@ -1180,27 +1347,54 @@ func journal(
 // A target that moved between the observation and the write is refused rather
 // than overwritten: the concurrent change is somebody's work.
 func activate(
-	observation *Observation, files []File, paths map[string]string,
+	observation *Observation, files []File, home string, paths map[string]string,
 	changed []string, fault func(string) error,
 ) ([]string, error) {
 	activated := []string{}
 	for _, path := range changed {
 		target := paths[path]
-		actual, err := readIfPresent(target)
-		if err != nil {
-			return activated, err
-		}
-		if !sameContent(actual, observation.Prior[path]) {
-			return activated, errors.New("managed file changed since observation")
-		}
 		mode := os.FileMode(0o600)
 		for _, file := range files {
 			if file.Path == path {
 				mode = os.FileMode(file.Permissions)
 			}
 		}
-		if err := AtomicWrite(target, observation.Desired[path], mode); err != nil {
-			return activated, err
+		if observation.Desired[path] == nil {
+			fresh, err := RetirementPath(home, path)
+			if err != nil || fresh != target {
+				if err != nil {
+					return activated, err
+				}
+				return activated, errors.New("retired managed path changed since observation")
+			}
+			var expectedMode int64
+			for _, file := range observation.Component.RetiredFiles {
+				if file.Path == path {
+					expectedMode = file.Permissions
+				}
+			}
+			info, err := os.Lstat(fresh)
+			if err != nil || !info.Mode().IsRegular() || int64(info.Mode().Perm()) != expectedMode {
+				return activated, errors.New("retired managed file changed since observation")
+			}
+			actual, err := os.ReadFile(fresh)
+			if err != nil || !sameContent(actual, observation.Prior[path]) {
+				return activated, errors.New("retired managed file changed since observation")
+			}
+			if err := os.Remove(fresh); err != nil {
+				return activated, err
+			}
+		} else {
+			actual, err := readIfPresent(target)
+			if err != nil {
+				return activated, err
+			}
+			if !sameContent(actual, observation.Prior[path]) {
+				return activated, errors.New("managed file changed since observation")
+			}
+			if err := AtomicWrite(target, observation.Desired[path], mode); err != nil {
+				return activated, err
+			}
 		}
 		activated = append(activated, path)
 		if fault != nil {
@@ -1224,6 +1418,14 @@ func activate(
 			return activated, errors.New("F05 active asset failed verification")
 		}
 	}
+	for _, file := range observation.Component.RetiredFiles {
+		if _, err := os.Stat(paths[file.Path]); !errors.Is(err, fs.ErrNotExist) {
+			if err == nil {
+				return activated, errors.New("retired managed file still exists")
+			}
+			return activated, err
+		}
+	}
 	return activated, nil
 }
 
@@ -1235,7 +1437,7 @@ func restore(
 ) error {
 	for index := len(activated) - 1; index >= 0; index-- {
 		path := activated[index]
-		current, err := os.ReadFile(paths[path])
+		current, err := readIfPresent(paths[path])
 		if err != nil {
 			return err
 		}
@@ -1246,7 +1448,7 @@ func restore(
 			return errors.New("rollback failed: unexplained managed-path change")
 		}
 		if observation.Prior[path] == nil {
-			if err := os.Remove(paths[path]); err != nil {
+			if err := os.Remove(paths[path]); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 			continue

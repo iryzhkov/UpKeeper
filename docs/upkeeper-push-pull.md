@@ -47,6 +47,9 @@ their complete trees from the exact pinned omarchy-setup checkout, replaces same
 captured copies, and emits each one under `~/.claude/skills` for Claude/OpenCode and
 `~/.agents/skills` for Codex. The agent-environment component is the only publisher and
 converger of those skill bytes; omarchy-setup supplies reviewed source and bootstrap only.
+When a source-owned regular file disappears, capture carries its reviewed bytes forward as a
+retirement tombstone. Pull removes it only while the target still matches those bytes, retains the
+tombstone across later releases for intermittently connected hosts, and refuses unexplained edits.
 
 That means a host that has drifted from the checkout its instructions are generated from
 would publish its drift to the whole fleet, and destroy every other host's copy while

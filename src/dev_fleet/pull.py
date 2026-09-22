@@ -509,6 +509,7 @@ def observe_release_environment(spec):
 def apply_release_environment(spec, before, actions):
     result = apply_environment(spec, HOME, RUN_ID, DRY_RUN)
     actions.extend(("would project " if DRY_RUN else "projected ") + p for p in result["changed"])
+    actions.extend(("would remove " if DRY_RUN else "removed ") + p for p in result["removed"])
     if result["state"] == "rolled-back":
         actions.append("restored and verified the complete previous environment")
     return result["state"]
