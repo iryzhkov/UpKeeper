@@ -744,7 +744,12 @@ def capture_release(
         hashlib.sha256((root / "README.md").read_bytes()).hexdigest(),
     )
     try:
-        components["agent-environment"] = capture_environment(home, provenance)
+        components["agent-environment"] = capture_environment(
+            home,
+            provenance,
+            previous=components.get("agent-environment"),
+            skills_root=home / components["omarchy-setup"]["path"] / "config/claude/skills",
+        )
     except (ValueError, OSError) as exc:
         raise CaptureError("agent-environment: " + str(exc)) from exc
     components["agent-config"]["files"] = []

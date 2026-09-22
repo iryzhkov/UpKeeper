@@ -42,6 +42,7 @@ func environmentApply(
 		return "", environmentFailure(err)
 	}
 	*actions = append(*actions, environmentProjectionActions(result.Changed, c.DryRun)...)
+	*actions = append(*actions, environmentRetirementActions(result.Removed, c.DryRun)...)
 	if result.State == "rolled-back" {
 		*actions = append(*actions, "restored and verified the complete previous environment")
 	}
@@ -61,6 +62,18 @@ func environmentProjectionActions(changed []string, dryRun bool) []string {
 	}
 	actions := make([]string, 0, len(changed))
 	for _, path := range changed {
+		actions = append(actions, prefix+path)
+	}
+	return actions
+}
+
+func environmentRetirementActions(removed []string, dryRun bool) []string {
+	prefix := "removed "
+	if dryRun {
+		prefix = "would remove "
+	}
+	actions := make([]string, 0, len(removed))
+	for _, path := range removed {
 		actions = append(actions, prefix+path)
 	}
 	return actions

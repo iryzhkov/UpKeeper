@@ -182,6 +182,78 @@ def test_capture_preserves_os_owned_skill_symlinks(tmp_path):
     assert (system_skill / "SKILL.md").read_text() == "# OS-owned skill"
 
 
+
+
+def test_capture_skips_symlinked_repository_skill_directories(tmp_path):
+    home, _ = environment(tmp_path)
+    source = tmp_path / "source-skills"
+    source.mkdir()
+    external = tmp_path / "external-skill"
+    external.mkdir()
+    (external / "SKILL.md").write_text("# External skill\n")
+    (source / "linked").symlink_to(external, target_is_directory=True)
+
+    component = capture_environment(home, PROVENANCE, skills_root=source)
+    assert not any("/linked/" in f["path"] for f in component["files"])
+
+
+def test_retired_owned_file_is_removed_transactionally_and_tombstone_persists(tmp_path):
+    home, _ = environment(tmp_path)
+    skill = home / ".claude/skills/retired/SKILL.md"
+    skill.parent.mkdir()
+    skill.write_text("# Retired skill\n")
+    previous = capture_environment(home, PROVENANCE)
+    skill.unlink()
+    skill.parent.rmdir()
+
+    component = capture_environment(home, PROVENANCE, previous=previous)
+    assert [f["path"] for f in component["retired_files"]] == [
+        ".claude/skills/retired/SKILL.md"
+    ]
+    later = capture_environment(home, PROVENANCE, previous=component)
+    assert later["retired_files"] == component["retired_files"]
+
+    skill.parent.mkdir()
+    skill.write_text("# Retired skill\n")
+    dry = apply_environment(component, home, "retire-dry", dry_run=True)
+    assert dry["drift"][-1]["subject"] == "retired:.claude/skills/retired/SKILL.md"
+    assert dry["removed"] == [".claude/skills/retired/SKILL.md"]
+    assert skill.exists()
+
+    def fail_after_removal(path):
+        if path == ".claude/skills/retired/SKILL.md":
+            raise OSError("injected retirement failure")
+
+    rolled_back = apply_environment(component, home, "retire-rollback", fault=fail_after_removal)
+    assert rolled_back["state"] == "rolled-back"
+    assert skill.read_text() == "# Retired skill\n"
+    applied = apply_environment(component, home, "retire-success")
+    assert applied["removed"] == [".claude/skills/retired/SKILL.md"]
+    assert not skill.exists()
+
+    personal = home / ".config/personal-retirement-target"
+    personal.write_text("# Retired skill\n")
+    skill.symlink_to(personal)
+    with pytest.raises(ValueError, match="symlink"):
+        apply_environment(component, home, "retire-symlink")
+    assert personal.read_text() == "# Retired skill\n"
+    skill.unlink()
+
+    os.mkfifo(skill, 0o644)
+    with pytest.raises(ValueError, match="unexplained changes"):
+        apply_environment(component, home, "retire-fifo")
+    skill.unlink()
+
+    skill.write_text("# Retired skill\n")
+    skill.chmod(0o600)
+    with pytest.raises(ValueError, match="unexplained changes"):
+        apply_environment(component, home, "retire-mode")
+    skill.write_text("locally modified\n")
+    skill.chmod(0o644)
+    with pytest.raises(ValueError, match="unexplained changes"):
+        apply_environment(component, home, "retire-refuse")
+
+
 def test_capture_rejects_credentials_in_owned_registrations(tmp_path):
     home, _ = environment(tmp_path)
     (home / ".claude.json").write_text(

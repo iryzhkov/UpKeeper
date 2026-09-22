@@ -85,7 +85,7 @@ func newFixture(t *testing.T) *fixture {
 	previousCapturer := release.EnvironmentCapturer
 	release.EnvironmentValidator = func(map[string]any) error { return nil }
 	release.EnvironmentCapturer = func(
-		home, repositorySkills string, provenance release.InstructionRef,
+		home, repositorySkills string, provenance release.InstructionRef, previous map[string]any,
 	) (map[string]any, error) {
 		if subject.envErr != nil {
 			return nil, subject.envErr

@@ -97,6 +97,7 @@ def fake_home(tmp_path: Path) -> Path:
         ),
         ".config/agents/huyang.md": "# Huyang\n",
         ".claude/skills/sample/SKILL.md": "# Sample\n",
+        ".local/share/omarchy-setup/config/claude/skills/sample/SKILL.md": "# Sample\n",
     }
     for path, text in files.items():
         target = home / path
