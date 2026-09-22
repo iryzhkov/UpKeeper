@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -168,6 +169,54 @@ func TestRemoveProjectRemovesItAndRefusesAnUnknownOne(t *testing.T) {
 	}
 	if !bytes.Equal(before, manifestBytes(t, root)) {
 		t.Fatal("a refused remove changed the manifest")
+	}
+}
+
+func TestUpdateProjectIsDigestFencedFieldPreservingAndIdempotent(t *testing.T) {
+	root := projectRoot(t)
+	before, err := release.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFleet := before.Component(fleet.Component)
+	ref := "reviewed-commit"
+	updated, err := release.UpdateProject(root, "upkeeper", before.Digest(), release.ProjectUpdate{DefaultRef: &ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFleet := updated.Component(fleet.Component)
+	beforeProjects := beforeFleet["projects"].(map[string]any)
+	afterProjects := afterFleet["projects"].(map[string]any)
+	beforeProject := beforeProjects["upkeeper"].(map[string]any)
+	afterProject := afterProjects["upkeeper"].(map[string]any)
+	if afterProject["default_ref"] != ref {
+		t.Fatalf("default_ref = %#v", afterProject["default_ref"])
+	}
+	for _, key := range []string{"repository", "setup_profile", "eligible_workers"} {
+		if !reflect.DeepEqual(afterProject[key], beforeProject[key]) {
+			t.Fatalf("update changed unspecified %s", key)
+		}
+	}
+	bytesAfter := manifestBytes(t, root)
+	replay, err := release.UpdateProject(root, "upkeeper", updated.Digest(), release.ProjectUpdate{DefaultRef: &ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay.Digest() != updated.Digest() || !bytes.Equal(bytesAfter, manifestBytes(t, root)) {
+		t.Fatal("identical update rewrote the release")
+	}
+	if _, err = release.UpdateProject(root, "upkeeper", before.Digest(), release.ProjectUpdate{DefaultRef: &ref}); err == nil {
+		t.Fatal("stale release digest was accepted")
+	}
+	if _, err = release.UpdateProject(root, "missing", updated.Digest(), release.ProjectUpdate{DefaultRef: &ref}); err == nil {
+		t.Fatal("unknown project was silently added")
+	}
+	empty := ""
+	if _, err = release.UpdateProject(root, "upkeeper", updated.Digest(), release.ProjectUpdate{SetupProfile: &empty}); err == nil {
+		t.Fatal("explicit empty setup profile was treated as an absent no-op")
+	}
+	if !bytes.Equal(bytesAfter, manifestBytes(t, root)) {
+		t.Fatal("refused explicit empty update changed the release")
 	}
 }
 

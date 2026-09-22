@@ -44,6 +44,8 @@ type fixture struct {
 	// generatorInstalled is whether this host has the command that decides
 	// whether it is converged. A host without it cannot be checked at all.
 	generatorInstalled bool
+	failRemote         string
+	historicalManifest string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -155,12 +157,16 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	case strings.HasSuffix(joined, "fetch --quiet origin main"),
 		strings.Contains(joined, "merge-base --is-ancestor"):
 		return procx.Result{}
+	case strings.Contains(joined, "rev-parse --verify --end-of-options"):
+		return procx.Result{Stdout: rootCommit + "\n"}
+	case strings.Contains(joined, " show ") && strings.HasSuffix(joined, ":"+release.File):
+		return procx.Result{Stdout: f.historicalManifest}
 	case strings.HasSuffix(joined, "t3-steward version"):
 		return procx.Result{Stdout: "t3-steward v0.10.1\ntested with T3 1.2.0..1.4.0\n"}
 	case strings.HasPrefix(joined, "npm ls"):
 		return procx.Result{Stdout: `{"dependencies":{"t3":{"version":"1.3.0"}}}`}
 	case strings.HasSuffix(joined, "remote"):
-		return procx.Result{Stdout: "origin\nforgejo\n"}
+		return procx.Result{Stdout: "origin\nforgejo\nbackup\n"}
 	case strings.Contains(joined, "diff --cached"):
 		return procx.Result{Stdout: release.File + "\n"}
 	case strings.HasSuffix(joined, "rev-parse --abbrev-ref HEAD"):
@@ -170,9 +176,12 @@ func (f *fixture) run(command procx.Command) procx.Result {
 			return procx.Result{Stdout: newCommit + "\n"}
 		}
 		return procx.Result{Stdout: rootCommit + "\n"}
-	case strings.Contains(joined, " add "),
-		strings.Contains(joined, " commit "),
-		strings.Contains(joined, " push "):
+	case strings.Contains(joined, " push "):
+		if f.failRemote != "" && strings.Contains(joined, " "+f.failRemote+" ") {
+			return procx.Result{Code: 1, Stderr: "remote refused"}
+		}
+		return procx.Result{}
+	case strings.Contains(joined, " add "), strings.Contains(joined, " commit "):
 		return procx.Result{}
 	default:
 		f.calls = append(f.calls, "UNEXPECTED "+joined)
@@ -341,6 +350,137 @@ func TestADirtyReleaseRepositoryIsRefused(t *testing.T) {
 	_, err := publish.Release(subject.root, options)
 	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
 		t.Fatalf("produced %v", err)
+	}
+}
+
+func prepareAuthoredFixture(t *testing.T) (*fixture, string, []byte) {
+	t.Helper()
+	f := newFixture(t)
+	for _, path := range []string{"inventory/hosts.yml", "desired/components.yml"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(f.root, path)
+		if err = os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(target, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options := f.options()
+	options.Commit = false
+	options.Push = false
+	if _, err := publish.Release(f.root, options); err != nil {
+		t.Fatal(err)
+	}
+	value, err := release.Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.root, release.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.historicalManifest = string(raw)
+	f.calls = nil
+	return f, value.Digest(), raw
+}
+
+func TestAuthoredPublicationKeepsReviewedBytesAndRequiresBothFences(t *testing.T) {
+	f, digest, before := prepareAuthoredFixture(t)
+	extra := filepath.Join(f.root, release.AgentConfigDir, "unreferenced.txt")
+	if err := os.MkdirAll(filepath.Dir(extra), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(extra, []byte("unrelated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := f.options()
+	options.Authored = true
+	options.ExpectedHead = rootCommit
+	options.ExpectedReleaseSHA256 = digest
+	report, err := publish.Release(f.root, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(f.root, release.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("authored publication rewrote reviewed release bytes or captured_at")
+	}
+	if report["release_sha256"] != digest {
+		t.Fatalf("release digest = %#v", report["release_sha256"])
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call, "agents-instructions-gen") || strings.Contains(call, "omarchy-setup rev-parse") {
+			t.Fatalf("authored publication recaptured host state: %s", call)
+		}
+		if strings.Contains(call, " add ") && (strings.Contains(call, "unreferenced.txt") || strings.HasSuffix(call, " "+release.AgentConfigDir)) {
+			t.Fatalf("authored publication swept an unreferenced asset: %s", call)
+		}
+	}
+	for _, mutate := range []publish.Options{
+		func() publish.Options { bad := options; bad.ExpectedHead = newCommit; return bad }(),
+		func() publish.Options {
+			bad := options
+			bad.ExpectedReleaseSHA256 = strings.Repeat("0", 64)
+			return bad
+		}(),
+		func() publish.Options { bad := options; bad.Components = []string{"t3-steward"}; return bad }(),
+	} {
+		f.calls = nil
+		if _, err = publish.Release(f.root, mutate); err == nil {
+			t.Fatal("invalid authored fence was accepted")
+		}
+		if f.did(" add ") || f.did(" commit ") || f.did(" push ") {
+			t.Fatalf("refused authored publication mutated Git: %v", f.calls)
+		}
+	}
+}
+
+func TestAuthoredPublicationRefusesChangedReviewedReleaseBeforeGitMutation(t *testing.T) {
+	f, digest, _ := prepareAuthoredFixture(t)
+	value, err := release.Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Manifest["captured_from"] = "changed-after-review"
+	if _, err = release.Write(f.root, value); err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	options := f.options()
+	options.Authored = true
+	options.ExpectedHead = rootCommit
+	options.ExpectedReleaseSHA256 = digest
+	if _, err = publish.Release(f.root, options); err == nil {
+		t.Fatal("changed reviewed release was accepted")
+	}
+	if f.did(" add ") || f.did(" commit ") || f.did(" push ") {
+		t.Fatalf("digest refusal mutated Git: %v", f.calls)
+	}
+}
+
+func TestPartialPushFailureReturnsReceipts(t *testing.T) {
+	f := newFixture(t)
+	options := f.options()
+	options.Remotes = []string{"origin", "forgejo", "backup"}
+	f.failRemote = "forgejo"
+	report, err := publish.Release(f.root, options)
+	if err == nil || report == nil {
+		t.Fatal("partial failure discarded its receipt")
+	}
+	pushed := report["pushed"].([]string)
+	if len(pushed) != 1 || pushed[0] != "origin main" {
+		t.Fatalf("successful pushes = %#v", pushed)
+	}
+	receipts := report["push_receipts"].([]map[string]any)
+	if len(receipts) != 3 || receipts[0]["status"] != "pushed" || receipts[1]["status"] != "failed" || receipts[2]["status"] != "not-attempted" {
+		t.Fatalf("receipts = %#v", receipts)
 	}
 }
 

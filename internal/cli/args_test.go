@@ -2,6 +2,7 @@ package cli
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -35,6 +36,36 @@ func TestPushTakesItsRemotesPositionally(t *testing.T) {
 	}
 	if !parsed.noPush || !parsed.asJSON {
 		t.Errorf("flags were lost: %#v", parsed)
+	}
+}
+
+func TestAuthoredPushRequiresBothFencesAndRejectsComponents(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	digest := strings.Repeat("b", 64)
+	parsed := parseOrFail(t, "push", "--authored", "--expect-head", head, "--expect-release-sha256", digest)
+	if !parsed.authored || parsed.expectHead != head || parsed.expectReleaseSHA256 != digest {
+		t.Fatalf("authored flags = %#v", parsed)
+	}
+	for _, argv := range [][]string{
+		{"push", "--authored", "--expect-head", head},
+		{"push", "--expect-head", head, "--expect-release-sha256", digest},
+		{"push", "--authored", "--expect-head", head, "--expect-release-sha256", digest, "--components", "t3"},
+	} {
+		if _, err := parse(argv, release.ComponentOrder); err == nil {
+			t.Fatalf("accepted invalid authored invocation %v", argv)
+		}
+	}
+}
+
+func TestProjectUpdateTracksPresenceSeparatelyFromEmpty(t *testing.T) {
+	digest := strings.Repeat("c", 64)
+	parsed := parseOrFail(t, "project", "update", "upkeeper",
+		"--expect-release-sha256", digest, "--setup-profile", "")
+	if !parsed.projectSetupProfileSet || parsed.projectSetupProfile != "" {
+		t.Fatalf("explicit empty field was lost: %#v", parsed)
+	}
+	if _, err := parse([]string{"project", "update", "upkeeper", "--expect-release-sha256", digest}, release.ComponentOrder); err == nil {
+		t.Fatal("fieldless project update accepted")
 	}
 }
 

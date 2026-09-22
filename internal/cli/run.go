@@ -214,8 +214,23 @@ func runPush(parsed *arguments, streams Streams) (int, error) {
 		// and the account of the promotion is never swallowed by a pipe.
 		PublishDivergedInstructions: parsed.publishDivergedInstructions,
 		Notice:                      streams.Err,
+		Authored:                    parsed.authored,
+		ExpectedHead:                parsed.expectHead,
+		ExpectedReleaseSHA256:       parsed.expectReleaseSHA256,
 	})
 	if err != nil {
+		if document != nil {
+			document["error"] = redact.Text(err.Error())
+			if parsed.asJSON {
+				if printErr := printJSON(streams.Out, document); printErr != nil {
+					return 1, printErr
+				}
+			} else {
+				printPush(streams.Out, document)
+				fmt.Fprintf(streams.Err, "upkeeper: %s\n", redact.Text(err.Error()))
+			}
+			return exitcode.Preflight, nil
+		}
 		return exitcode.Preflight, err
 	}
 	if parsed.asJSON {

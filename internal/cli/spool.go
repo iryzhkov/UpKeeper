@@ -294,7 +294,7 @@ func spoolVersion() string {
 // inline in args.go rather than in a table; a contract test in this package
 // fails when the parser accepts a word this list does not have.
 var spoolSubcommands = map[string][]string{
-	"project":  {"add", "remove"},
+	"project":  {"add", "remove", "update"},
 	"provider": {"add", "remove"},
 	"hold":     {"show", "clear"},
 }
@@ -318,7 +318,7 @@ func spoolCommands() map[string]struct{} {
 // to derive this from; a contract test in this package reads args.go and fails
 // when the parser accepts an option this list does not have.
 var spoolFlags = []string{
-	"all", "components", "converge", "default-ref", "dry-run", "help", "h",
+	"all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head", "expect-release-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "repository",
 	"self", "setup-profile", "skip-unreachable", "timeout", "to", "workers",

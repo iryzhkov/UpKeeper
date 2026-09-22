@@ -128,6 +128,7 @@ func probeHelp(program, command string) string {
 func pushHelp(program string) string {
 	return "usage: " + program + " push [-h] [--components COMPONENT [COMPONENT ...]]" +
 		" [--no-commit] [--no-push] [--publish-diverged-instructions]" +
+		" [--authored --expect-head SHA --expect-release-sha256 SHA256]" +
 		" [--json] [REMOTE ...]\n\npositional arguments:\n" +
 		describe("  REMOTE", "git remotes to push to (default: all)") +
 		"\noptions:\n" + helpOption + "\n" +
@@ -135,6 +136,9 @@ func pushHelp(program string) string {
 			"capture only these; every other component keeps what the release already published") +
 		describe("  --no-commit", "write the manifest only") +
 		describe("  --no-push", "commit but do not push") +
+		describe("  --authored", "publish the reviewed release bytes without recapturing this host") +
+		describe("  --expect-head SHA", "required authored-mode source HEAD fence") +
+		describe("  --expect-release-sha256 SHA256", "required authored-mode release content fence") +
 		describe("  --publish-diverged-instructions",
 			"publish this host's agent instructions even though they differ from the "+
 				"omarchy-setup checkout that generates them, printing every path it promotes") +
@@ -191,7 +195,10 @@ func fleetPlanHelp(program string) string {
 func projectHelp(program string) string {
 	return "usage: " + program + " project add NAME --repository URL --default-ref REF" +
 		" --workers HOST[,HOST...] [--setup-profile PROFILE] [--json]\n" +
-		"       " + program + " project remove NAME [--json]\n\n" +
+		"       " + program + " project remove NAME [--json]\n" +
+		"       " + program + " project update NAME --expect-release-sha256 SHA256" +
+		" [--repository URL] [--default-ref REF] [--setup-profile PROFILE]" +
+		" [--workers HOST[,HOST...]] [--json]\n\n" +
 		"Add or remove one Steward project in the steward-fleet-configuration component\n" +
 		"of desired/release.json, validate the edited manifest with the same parser\n" +
 		"fleet-plan uses, and print the fleet-plan diff against the release committed at\n" +
@@ -202,7 +209,7 @@ func projectHelp(program string) string {
 		"eligible for needs `t3-steward worker enroll <worker> --current-catalog` on the\n" +
 		"coordinator host after the release converges.\n\n" +
 		"positional arguments:\n" +
-		describe("  {add,remove}", "") +
+		describe("  {add,remove,update}", "") +
 		describe("  NAME", "project name: lowercase letters, digits and hyphens") +
 		"\noptions:\n" + helpOption + "\n" +
 		describe("  --repository URL", "canonical https or ssh remote (add)") +
@@ -210,7 +217,8 @@ func projectHelp(program string) string {
 		describe("  --workers HOST[,HOST...]",
 			"fleet hosts eligible for the project; an unknown host is refused (add)") +
 		describe("  --setup-profile PROFILE",
-			"Steward setup profile (add; default "+projectSetupProfileDefault+")") +
+			"Steward setup profile (add default; update optional)") +
+		describe("  --expect-release-sha256 SHA256", "exact release fence (update only; required)") +
 		describe("  --json", "") +
 		"\nexit codes: 0 edited, 2 malformed command line, 30 refused (nothing written)\n" +
 		"\nexample:\n  " + program + " project add home-assistant-config \\\n" +

@@ -32,9 +32,12 @@ type arguments struct {
 	probeTimeout int
 
 	// push
-	remotes  []string
-	noCommit bool
-	noPush   bool
+	remotes             []string
+	noCommit            bool
+	noPush              bool
+	authored            bool
+	expectHead          string
+	expectReleaseSHA256 string
 	// publishDivergedInstructions is the capture gate's override. It is a
 	// separate flag rather than a mode of some general --force because the
 	// operator has to be able to say this one thing and only this one thing.
@@ -64,12 +67,17 @@ type arguments struct {
 	holdReason string
 
 	// project
-	projectAction       string
-	projectName         string
-	projectRepository   string
-	projectDefaultRef   string
-	projectSetupProfile string
-	projectWorkers      []string
+	projectAction                string
+	projectName                  string
+	projectRepository            string
+	projectDefaultRef            string
+	projectSetupProfile          string
+	projectWorkers               []string
+	projectRepositorySet         bool
+	projectDefaultRefSet         bool
+	projectSetupProfileSet       bool
+	projectWorkersSet            bool
+	projectExpectedReleaseSHA256 string
 
 	// provider
 	providerAction   string
@@ -192,6 +200,22 @@ func parsePush(parsed *arguments, argv []string, choices []string) error {
 			parsed.noPush = true
 		case token == "--publish-diverged-instructions":
 			parsed.publishDivergedInstructions = true
+		case token == "--authored":
+			parsed.authored = true
+		case token == "--expect-head":
+			value, next, err := takeValue(argv, index, "--expect-head")
+			if err != nil {
+				return err
+			}
+			parsed.expectHead = value
+			index = next
+		case token == "--expect-release-sha256":
+			value, next, err := takeValue(argv, index, "--expect-release-sha256")
+			if err != nil {
+				return err
+			}
+			parsed.expectReleaseSHA256 = value
+			index = next
 		case token == "--components":
 			values, next, err := takeValues(argv, index, "--components")
 			if err != nil {
@@ -207,6 +231,16 @@ func parsePush(parsed *arguments, argv []string, choices []string) error {
 		default:
 			parsed.remotes = append(parsed.remotes, token)
 		}
+	}
+	if parsed.authored {
+		if parsed.expectHead == "" || parsed.expectReleaseSHA256 == "" {
+			return usagef("--authored requires --expect-head and --expect-release-sha256")
+		}
+		if len(parsed.components) != 0 {
+			return usagef("--components is not valid with --authored")
+		}
+	} else if parsed.expectHead != "" || parsed.expectReleaseSHA256 != "" {
+		return usagef("--expect-head and --expect-release-sha256 require --authored")
 	}
 	return nil
 }
@@ -328,8 +362,8 @@ func parseProject(parsed *arguments, argv []string) error {
 		return usagef("the following arguments are required: action (add or remove)")
 	}
 	parsed.projectAction = argv[0]
-	if parsed.projectAction != "add" && parsed.projectAction != "remove" {
-		return usagef("argument action: invalid choice: %q (choose from \"add\", \"remove\")",
+	if parsed.projectAction != "add" && parsed.projectAction != "remove" && parsed.projectAction != "update" {
+		return usagef("argument action: invalid choice: %q (choose from \"add\", \"remove\", \"update\")",
 			parsed.projectAction)
 	}
 	if len(argv) < 2 || strings.HasPrefix(argv[1], "-") {
@@ -343,11 +377,11 @@ func parseProject(parsed *arguments, argv []string) error {
 			parsed.asJSON = true
 			continue
 		}
-		if parsed.projectAction != "add" {
+		if parsed.projectAction == "remove" {
 			return unrecognized(token)
 		}
 		switch token {
-		case "--repository", "--default-ref", "--setup-profile", "--workers":
+		case "--repository", "--default-ref", "--setup-profile", "--workers", "--expect-release-sha256":
 			value, next, err := takeValue(argv, index, token)
 			if err != nil {
 				return err
@@ -356,18 +390,32 @@ func parseProject(parsed *arguments, argv []string) error {
 			switch token {
 			case "--repository":
 				parsed.projectRepository = value
+				parsed.projectRepositorySet = true
 			case "--default-ref":
 				parsed.projectDefaultRef = value
+				parsed.projectDefaultRefSet = true
 			case "--setup-profile":
 				parsed.projectSetupProfile = value
+				parsed.projectSetupProfileSet = true
 			case "--workers":
 				parsed.projectWorkers = splitWorkers(value)
+				parsed.projectWorkersSet = true
 				if len(parsed.projectWorkers) == 0 {
 					return usagef("argument --workers: expected at least one worker")
 				}
+			case "--expect-release-sha256":
+				parsed.projectExpectedReleaseSHA256 = value
 			}
 		default:
 			return unrecognized(token)
+		}
+	}
+	if parsed.projectAction == "update" {
+		if parsed.projectExpectedReleaseSHA256 == "" {
+			return usagef("project update requires --expect-release-sha256")
+		}
+		if !parsed.projectRepositorySet && !parsed.projectDefaultRefSet && !parsed.projectSetupProfileSet && !parsed.projectWorkersSet {
+			return usagef("project update requires at least one field flag")
 		}
 	}
 	if parsed.projectAction == "add" {

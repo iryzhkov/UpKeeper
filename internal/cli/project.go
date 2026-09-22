@@ -50,6 +50,21 @@ func runProject(parsed *arguments, streams Streams) (int, error) {
 		})
 	case "remove":
 		value, err = release.RemoveProject(root, parsed.projectName)
+	case "update":
+		update := release.ProjectUpdate{}
+		if parsed.projectRepositorySet {
+			update.Repository = &parsed.projectRepository
+		}
+		if parsed.projectDefaultRefSet {
+			update.DefaultRef = &parsed.projectDefaultRef
+		}
+		if parsed.projectSetupProfileSet {
+			update.SetupProfile = &parsed.projectSetupProfile
+		}
+		if parsed.projectWorkersSet {
+			update.EligibleWorkers = &parsed.projectWorkers
+		}
+		value, err = release.UpdateProject(root, parsed.projectName, parsed.projectExpectedReleaseSHA256, update)
 	default:
 		return exitcode.Preflight, failure.Validation("unknown project action: %s", parsed.projectAction)
 	}
@@ -85,7 +100,7 @@ func runProject(parsed *arguments, streams Streams) (int, error) {
 		"release_sha256": value.Digest(),
 		"previous":       "HEAD",
 		"fleet_plan":     planReport,
-		"next":           "review `git diff " + release.File + "`, commit, then publish with upkeeper push",
+		"next":           "review `git diff " + release.File + "`, commit, then publish with upkeeper push --authored and both reported fences",
 	}
 	if parsed.asJSON {
 		if err := printJSON(streams.Out, report); err != nil {
@@ -96,10 +111,14 @@ func runProject(parsed *arguments, streams Streams) (int, error) {
 	verb := "added"
 	if parsed.projectAction == "remove" {
 		verb = "removed"
+	} else if parsed.projectAction == "update" {
+		verb = "updated"
 	}
 	preposition := "to"
 	if parsed.projectAction == "remove" {
 		preposition = "from"
+	} else if parsed.projectAction == "update" {
+		preposition = "in"
 	}
 	fmt.Fprintf(streams.Out, "%s project %s %s %s (release %s)\n",
 		verb, parsed.projectName, preposition, release.File, shorten(value.Digest(), 12))
