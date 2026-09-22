@@ -9,6 +9,7 @@
 package publish
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -173,9 +174,9 @@ func Release(root string, options Options) (map[string]any, error) {
 	if options.Authored {
 		paths = authoredReleasePaths(captured, previous)
 	}
-	var head string
+	var head, branch string
 	if options.Authored {
-		head, err = commitAuthored(root, options, runner, captured, paths, summary)
+		head, branch, err = commitAuthored(root, options, runner, captured, paths, summary)
 		if err != nil {
 			return nil, err
 		}
@@ -210,9 +211,11 @@ func Release(root string, options Options) (map[string]any, error) {
 	if !options.Push {
 		return report, nil
 	}
-	branch, err := git(runner, root, 60*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return nil, err
+	if !options.Authored {
+		branch, err = git(runner, root, 60*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if branch == "HEAD" {
 		return nil, failure.Push("cannot push a detached HEAD; check out a branch first")
@@ -251,20 +254,42 @@ func releaseCommitMessage(controller string, summary []string) string {
 	return message
 }
 
-// commitAuthored builds and validates the exact commit in a private index, then
-// advances the checked-out branch only if its parent is still the reviewed HEAD.
-// The caller's index is never read or changed.
-func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, paths, summary []string) (string, error) {
+func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, paths, summary []string) (string, string, error) {
+	branchRef, err := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return "", "", failure.Push("cannot publish authored release from a detached HEAD")
+	}
+	branch := strings.TrimPrefix(branchRef, "refs/heads/")
+	indexName, err := git(runner, root, 60*time.Second, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return "", "", err
+	}
+	if !filepath.IsAbs(indexName) {
+		indexName = filepath.Join(root, indexName)
+	}
+	originalIndex, err := os.ReadFile(indexName)
+	if err != nil {
+		return "", "", err
+	}
+	selected, err := git(runner, root, 60*time.Second,
+		append([]string{"diff", "--cached", "--name-only", options.ExpectedHead}, paths...)...)
+	if err != nil {
+		return "", "", err
+	}
+	if selected != "" {
+		return "", "", failure.Push("authored publication paths already have staged changes; preserve or unstage them before publishing")
+	}
+
 	index, err := os.CreateTemp("", "upkeeper-authored-index-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	indexPath := index.Name()
 	if err = index.Close(); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err = os.Remove(indexPath); err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer os.Remove(indexPath)
 	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
@@ -282,70 +307,168 @@ func commitAuthored(root string, options Options, runner procx.Runner, captured 
 		return result.Stdout, nil
 	}
 	if _, err = run("", "read-tree", options.ExpectedHead); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if _, err = run("", append([]string{"add"}, paths...)...); err != nil {
-		return "", err
+		return "", "", err
 	}
 	staged, err := run("", append([]string{"diff", "--cached", "--name-only", options.ExpectedHead}, paths...)...)
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	verifyFences := func() error {
+		current, checkErr := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
+		if checkErr != nil {
+			return checkErr
+		}
+		if current != options.ExpectedHead {
+			return failure.Push("authored publication HEAD changed: got %s, want %s", current, options.ExpectedHead)
+		}
+		currentRef, checkErr := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD")
+		if checkErr != nil || currentRef != branchRef {
+			return failure.Push("authored publication branch changed: got %s, want %s", currentRef, branchRef)
+		}
+		return nil
 	}
 	if strings.TrimSpace(staged) == "" {
-		return options.ExpectedHead, nil
+		if err = verifyFences(); err != nil {
+			return "", "", err
+		}
+		return options.ExpectedHead, branch, nil
 	}
 	expectedManifest, err := captured.CanonicalBytes()
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	verifyRegular := func(path string) error {
+		stage, stageErr := run("", "ls-files", "--stage", "--", path)
+		if stageErr != nil {
+			return stageErr
+		}
+		if !strings.HasPrefix(stage, "100644 ") {
+			return failure.Push("authored publication requires a regular 100644 file: %s", path)
+		}
+		return nil
+	}
+	if err = verifyRegular(release.File); err != nil {
+		return "", "", err
 	}
 	indexManifest, err := run("", "show", ":"+release.File)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if indexManifest != string(expectedManifest) {
-		return "", failure.Push("authored release changed while staging")
+		return "", "", failure.Push("authored release changed while staging")
 	}
 	for _, entry := range captured.Files() {
 		store, _ := entry["store"].(string)
 		expected, _ := entry["sha256"].(string)
-		payload, showErr := run("", "show", ":"+filepath.ToSlash(filepath.Join(release.AgentConfigDir, store)))
+		path := filepath.ToSlash(filepath.Join(release.AgentConfigDir, store))
+		if err = verifyRegular(path); err != nil {
+			return "", "", err
+		}
+		payload, showErr := run("", "show", ":"+path)
 		if showErr != nil {
-			return "", showErr
+			return "", "", showErr
 		}
 		sum := sha256.Sum256([]byte(payload))
 		if hex.EncodeToString(sum[:]) != expected {
-			return "", failure.Push("authored companion file changed while staging: %s", store)
+			return "", "", failure.Push("authored companion file changed while staging: %s", store)
 		}
 	}
-	current, err := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
-	if err != nil {
-		return "", err
-	}
-	if current != options.ExpectedHead {
-		return "", failure.Push("authored publication HEAD changed: got %s, want %s", current, options.ExpectedHead)
-	}
-	branch, err := git(runner, root, 60*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return "", err
-	}
-	if branch == "HEAD" {
-		return "", failure.Push("cannot publish authored release from a detached HEAD")
+	if err = verifyFences(); err != nil {
+		return "", "", err
 	}
 	tree, err := run("", "write-tree")
 	tree = strings.TrimSpace(tree)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	commit, err := run(releaseCommitMessage(options.Controller, summary), "commit-tree", tree, "-p", options.ExpectedHead)
 	commit = strings.TrimSpace(commit)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if _, err = run("", "update-ref", "refs/heads/"+branch, commit, options.ExpectedHead); err != nil {
-		return "", failure.Push("authored branch changed before commit: %v", err)
+	if err = reconcileAuthoredIndex(root, runner, indexName, originalIndex, paths, commit, branchRef, options.ExpectedHead); err != nil {
+		return "", "", err
 	}
-	return commit, nil
+	return commit, branch, nil
 }
+
+func reconcileAuthoredIndex(root string, runner procx.Runner, indexName string, original []byte, paths []string, commit, branchRef, parent string) error {
+	reconciled, err := os.CreateTemp("", "upkeeper-reconciled-index-*")
+	if err != nil {
+		return err
+	}
+	reconciledName := reconciled.Name()
+	defer os.Remove(reconciledName)
+	if _, err = reconciled.Write(original); err != nil {
+		reconciled.Close()
+		return err
+	}
+	if err = reconciled.Close(); err != nil {
+		return err
+	}
+	env := append(os.Environ(), "GIT_INDEX_FILE="+reconciledName)
+	result := runner(procx.Command{
+		Argv: append([]string{"git", "-C", root, "reset", "--quiet", commit}, paths...),
+		Env:  env, Timeout: 60 * time.Second,
+	})
+	if result.Err != nil || result.Code != 0 {
+		return failure.Push("cannot reconcile authored publication index: %s", result.Output())
+	}
+	next, err := os.ReadFile(reconciledName)
+	if err != nil {
+		return err
+	}
+	lockName := indexName + ".lock"
+	lock, err := os.OpenFile(lockName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return failure.Push("cannot lock index for authored commit: %v", err)
+	}
+	cleanup := func() {
+		lock.Close()
+		os.Remove(lockName)
+	}
+	current, readErr := os.ReadFile(indexName)
+	if readErr != nil || !bytes.Equal(current, original) {
+		cleanup()
+		return failure.Push("index changed during authored publication; no branch update was made")
+	}
+	currentHead, headErr := git(runner, root, 60*time.Second, "rev-parse", "HEAD")
+	currentRef, refErr := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD")
+	if headErr != nil || refErr != nil || currentHead != parent || currentRef != branchRef {
+		cleanup()
+		return failure.Push("HEAD or branch changed before authored commit; no branch update was made")
+	}
+	if _, err = git(runner, root, 60*time.Second, "update-ref", branchRef, commit, parent); err != nil {
+		cleanup()
+		return failure.Push("authored branch changed before commit: %v", err)
+	}
+	if _, err = lock.Write(next); err == nil {
+		err = lock.Sync()
+	}
+	if closeErr := lock.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(lockName, indexName)
+	}
+	if err != nil {
+		os.Remove(lockName)
+		if rollbackErr := rollbackAuthoredRef(root, runner, branchRef, parent, commit); rollbackErr != nil {
+			return failure.Push("cannot reconcile index after authored commit: %v; branch rollback also failed: %v", err, rollbackErr)
+		}
+		return failure.Push("cannot reconcile index after authored commit; branch update rolled back: %v", err)
+	}
+	return nil
+}
+
+func rollbackAuthoredRef(root string, runner procx.Runner, branchRef, parent, commit string) error {
+	_, err := git(runner, root, 60*time.Second, "update-ref", branchRef, parent, commit)
+	return err
+}
+
 func authoredReleasePaths(values ...release.Release) []string {
 	paths := []string{"--", release.File}
 	seen := map[string]bool{}

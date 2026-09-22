@@ -65,6 +65,7 @@ func newFixture(t *testing.T) *fixture {
 		filepath.Join(subject.home, ".local/share/huyang/.git"),
 		filepath.Join(subject.home, ".local/bin"),
 		subject.root,
+		filepath.Join(subject.root, ".git"),
 	} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
@@ -73,6 +74,9 @@ func newFixture(t *testing.T) *fixture {
 	if err := os.WriteFile(
 		filepath.Join(subject.root, "README.md"), []byte("UpKeeper\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subject.root, ".git/index"), []byte("fixture-index"), 0o600); err != nil {
+		t.Fatalf("WriteFile index: %v", err)
 	}
 	subject.installGenerator(t, currentGenerator)
 
@@ -178,7 +182,18 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	case strings.HasSuffix(joined, "remote"):
 		return procx.Result{Stdout: "origin\nforgejo\nbackup\n"}
 	case strings.Contains(joined, "diff --cached"):
+		if command.Env == nil && strings.Contains(joined, rootCommit) {
+			return procx.Result{}
+		}
 		return procx.Result{Stdout: release.File + "\n"}
+	case strings.HasSuffix(joined, "symbolic-ref --quiet HEAD"):
+		return procx.Result{Stdout: "refs/heads/main\n"}
+	case strings.HasSuffix(joined, "rev-parse --git-path index"):
+		return procx.Result{Stdout: ".git/index\n"}
+	case strings.Contains(joined, " ls-files --stage -- "):
+		return procx.Result{Stdout: "100644 " + strings.Repeat("6", 40) + " 0\tfile\n"}
+	case strings.Contains(joined, " reset --quiet "):
+		return procx.Result{}
 	case strings.HasSuffix(joined, "rev-parse --abbrev-ref HEAD"):
 		return procx.Result{Stdout: "main\n"}
 	case strings.HasSuffix(joined, "rev-parse HEAD"):
@@ -522,6 +537,133 @@ func TestAuthoredPublicationRefusesHeadChangedBeforeCAS(t *testing.T) {
 	if f.did(" update-ref ") || f.did(" push ") {
 		t.Fatalf("HEAD race advanced or pushed a ref: %v", f.calls)
 	}
+}
+
+func TestAuthoredPublicationRealGitReconcilesOwnedIndexOnly(t *testing.T) {
+	f, _, _ := prepareAuthoredFixture(t)
+	if err := os.RemoveAll(filepath.Join(f.root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(arguments ...string) string {
+		t.Helper()
+		result := procx.Run(procx.Command{Argv: append([]string{"git", "-C", f.root}, arguments...)})
+		if !result.OK() {
+			t.Fatalf("git %v: %s", arguments, result.Output())
+		}
+		return strings.TrimSpace(result.Stdout)
+	}
+	runGit("init", "--quiet")
+	runGit("config", "user.name", "UpKeeper Test")
+	runGit("config", "user.email", "upkeeper@example.invalid")
+	if err := os.WriteFile(filepath.Join(f.root, "unrelated"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", ".")
+	runGit("commit", "--quiet", "-m", "baseline")
+	head := runGit("rev-parse", "HEAD")
+
+	value, err := release.Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Manifest["captured_from"] = "reviewed-controller"
+	if _, err = release.Write(f.root, value); err != nil {
+		t.Fatal(err)
+	}
+	digest := value.Digest()
+	if err = os.WriteFile(filepath.Join(f.root, "unrelated"), []byte("staged-user-work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "unrelated")
+
+	runner := func(command procx.Command) procx.Result {
+		if len(command.Argv) > 0 && command.Argv[0] == "git" {
+			return procx.Run(command)
+		}
+		return f.run(command)
+	}
+	options := f.options()
+	options.Runner = runner
+	options.Remotes = nil
+	options.Push = false
+	options.Authored = true
+	options.ExpectedHead = head
+	options.ExpectedReleaseSHA256 = digest
+	if _, err = publish.Release(f.root, options); err != nil {
+		t.Fatal(err)
+	}
+	if got := runGit("diff", "--cached", "--name-only"); got != "unrelated" {
+		t.Fatalf("staged paths after publish = %q", got)
+	}
+	if got := runGit("diff", "--name-only"); got != "" {
+		t.Fatalf("working paths after publish = %q", got)
+	}
+	if got := runGit("show", "HEAD:"+release.File); got != strings.TrimSpace(string(mustRead(t, filepath.Join(f.root, release.File)))) {
+		t.Fatal("committed release differs from reviewed working bytes")
+	}
+
+	secondHead := runGit("rev-parse", "HEAD")
+	options.ExpectedHead = secondHead
+	if _, err = publish.Release(f.root, options); err != nil {
+		t.Fatalf("no-change authored publication: %v", err)
+	}
+	if got := runGit("rev-parse", "HEAD"); got != secondHead {
+		t.Fatal("no-change publication moved HEAD")
+	}
+	if got := runGit("diff", "--cached", "--name-only"); got != "unrelated" {
+		t.Fatalf("no-change publication disturbed staging: %q", got)
+	}
+
+	value, err = release.Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Manifest["captured_from"] = "pre-staged-owned-path"
+	if _, err = release.Write(f.root, value); err != nil {
+		t.Fatal(err)
+	}
+	options.ExpectedReleaseSHA256 = value.Digest()
+	runGit("add", release.File)
+	if _, err = publish.Release(f.root, options); err == nil ||
+		!strings.Contains(err.Error(), "already have staged changes") {
+		t.Fatalf("pre-staged owned path produced %v", err)
+	}
+	if got := runGit("rev-parse", "HEAD"); got != secondHead {
+		t.Fatal("pre-staged refusal moved HEAD")
+	}
+	staged := strings.Split(runGit("diff", "--cached", "--name-only"), "\n")
+	if len(staged) != 2 || staged[0] != release.File || staged[1] != "unrelated" {
+		t.Fatalf("pre-staged refusal changed index: %#v", staged)
+	}
+
+	runGit("reset", "--quiet", "HEAD", "--", release.File)
+	target := filepath.Join(f.root, "desired", "release-target.json")
+	reviewed := mustRead(t, filepath.Join(f.root, release.File))
+	if err = os.WriteFile(target, reviewed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(f.root, release.File)); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink("release-target.json", filepath.Join(f.root, release.File)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = publish.Release(f.root, options); err == nil ||
+		!strings.Contains(err.Error(), "requires a regular 100644 file") {
+		t.Fatalf("symlinked reviewed manifest produced %v", err)
+	}
+	if got := runGit("rev-parse", "HEAD"); got != secondHead {
+		t.Fatal("mode refusal moved HEAD")
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	value, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestPartialPushFailureReturnsReceipts(t *testing.T) {
