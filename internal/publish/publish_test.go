@@ -40,7 +40,8 @@ type fixture struct {
 	// depends on it: a check run against the wrong home reports on the wrong
 	// host, and one that inherits OMARCHY_SETUP_ROOT reports against whatever
 	// tree the caller's shell happened to name.
-	checkEnv []string
+	checkEnv                 []string
+	capturedRepositorySkills string
 	// generatorInstalled is whether this host has the command that decides
 	// whether it is converged. A host without it cannot be checked at all.
 	generatorInstalled bool
@@ -84,7 +85,7 @@ func newFixture(t *testing.T) *fixture {
 	previousCapturer := release.EnvironmentCapturer
 	release.EnvironmentValidator = func(map[string]any) error { return nil }
 	release.EnvironmentCapturer = func(
-		home string, provenance release.InstructionRef,
+		home, repositorySkills string, provenance release.InstructionRef,
 	) (map[string]any, error) {
 		if subject.envErr != nil {
 			return nil, subject.envErr
@@ -92,6 +93,7 @@ func newFixture(t *testing.T) *fixture {
 		if provenance.Commit != rootCommit || provenance.Path != "README.md" {
 			t.Errorf("the environment was captured with the wrong provenance: %#v", provenance)
 		}
+		subject.capturedRepositorySkills = repositorySkills
 		return map[string]any{"kind": "agent-environment", "files": []any{}}, nil
 	}
 	t.Cleanup(func() {

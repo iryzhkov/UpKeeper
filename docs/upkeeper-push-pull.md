@@ -41,12 +41,12 @@ pushes to explicitly named remotes or all configured remotes.
 
 ## The resident agent instructions are gated before anything is captured
 
-A capture photographs the pushing host's home directory. The shared `CLAUDE.md`, the
-files under `~/.config/agents` and every skill under `~/.claude/skills` are read from
-that home directory, stored as mode `file` assets, and written over the same paths on
-every other host at its next convergence. No repository installs those files onto a
-host, and `agent-environment` is applied after `omarchy-setup` in every convergence, so
-the captured bytes win over anything a setup module wrote earlier in the same run.
+A capture photographs the pushing host's shared instruction files and personal skills,
+but repository-owned skills are never taken from installed home copies. UpKeeper reads
+their complete trees from the exact pinned omarchy-setup checkout, replaces same-named
+captured copies, and emits each one under `~/.claude/skills` for Claude/OpenCode and
+`~/.agents/skills` for Codex. The agent-environment component is the only publisher and
+converger of those skill bytes; omarchy-setup supplies reviewed source and bootstrap only.
 
 That means a host that has drifted from the checkout its instructions are generated from
 would publish its drift to the whole fleet, and destroy every other host's copy while
@@ -90,8 +90,9 @@ The gate does not promise that the repository is right, only that the host match
 wrong instruction that has been committed and converged is a different problem, and it is
 solved by reviewing the omarchy-setup diff rather than by the capture.
 
-The release embeds frozen agent payloads, including home-owned skills and executable
-permissions. OS-supplied skill symlinks outside the home (such as /usr/share/omarchy)
+The release embeds frozen agent payloads, including source-projected fleet skills,
+home-owned personal skills and executable permissions. OS-supplied skill symlinks outside
+the home (such as /usr/share/omarchy)
 remain package-owned and are preserved; UpKeeper neither captures nor writes them. The Claude import block and owned settings keys, shared agent instructions,
 Codex global instructions, Claude/Codex/OpenCode MCP registrations and OpenCode instruction
 list are captured. Provider/account state and unrelated settings are not captured.

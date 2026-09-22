@@ -28,7 +28,9 @@ type InstructionRef struct {
 // EnvironmentCapturer reads this machine's owned agent environment. It is
 // injected for the same reason the validator is: the manifest model does not
 // depend on the projection that applies it.
-var EnvironmentCapturer func(home string, provenance InstructionRef) (map[string]any, error)
+var EnvironmentCapturer func(
+	home, repositorySkills string, provenance InstructionRef,
+) (map[string]any, error)
 var EnvironmentToolingNormalizer func(map[string]any) (map[string]any, error)
 
 var stewardRangePattern = regexp.MustCompile(
@@ -121,6 +123,7 @@ func Capture(
 		return Release{}, err
 	}
 	components, _ := manifest["components"].(map[string]any)
+	setup, _ := components["omarchy-setup"].(map[string]any)
 	// The resident agent instructions are gated here, inside Capture, rather
 	// than in the one command that happens to call it today. Every future
 	// caller of Capture publishes the same photograph of the same home
@@ -132,7 +135,6 @@ func Capture(
 	// that promote nothing, which on a fleet where every host is diverged today
 	// would leave no way to publish anything at all.
 	if selected == nil || selected["agent-environment"] {
-		setup, _ := components["omarchy-setup"].(map[string]any)
 		if err := guardResidentInstructions(runner, home, setup, resident); err != nil {
 			return Release{}, err
 		}
@@ -179,7 +181,10 @@ func Capture(
 	if err != nil {
 		return Release{}, failure.Capture("agent-environment: cannot read README.md")
 	}
-	environment, err := EnvironmentCapturer(home, InstructionRef{
+	repositorySkills := filepath.Join(
+		home, text(setup["path"]), "config/claude/skills",
+	)
+	environment, err := EnvironmentCapturer(home, repositorySkills, InstructionRef{
 		Repository: "github.com/iryzhkov/UpKeeper",
 		Commit:     headCommit,
 		Path:       "README.md",
@@ -223,7 +228,6 @@ func Capture(
 
 	agentConfig, _ := components["agent-config"].(map[string]any)
 	agentConfig["files"] = []any{}
-	setup, _ := components["omarchy-setup"].(map[string]any)
 	setup["modules"] = []any{"28-scripts"}
 	if _, present := components["worker-configuration"]; !present {
 		components["worker-configuration"] = map[string]any{

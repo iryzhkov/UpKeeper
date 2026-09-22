@@ -45,6 +45,9 @@ publishing host before capture; dependency environments are rebuilt per host.
 
 Agent environment capture includes personal skills in .claude/skills,
 .codex/skills and .agents/skills; Codex's bundled .system skills are excluded.
+Repository-owned skills are sourced from the pinned omarchy-setup checkout instead
+of installed copies and projected to both .claude/skills and .agents/skills by
+UpKeeper alone.
 Shared Codex model, reasoning, service-tier, personality, feature and TUI
 settings are projected, while account/provider, project trust and hooks remain
 local. Missing shared settings clear the corresponding target override.

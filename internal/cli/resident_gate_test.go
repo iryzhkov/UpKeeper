@@ -65,7 +65,7 @@ func TestPushRefusesAndWritesNothingWhenTheHostCannotBeChecked(t *testing.T) {
 	for _, wanted := range []string{
 		"cannot check whether this host's agent instructions match their source",
 		"no omarchy-setup checkout at",
-		"photographs this host's home directory",
+		"photographs this host's generated resident instructions",
 		"Nothing has been captured, written, committed or pushed.",
 	} {
 		if !strings.Contains(message, wanted) {

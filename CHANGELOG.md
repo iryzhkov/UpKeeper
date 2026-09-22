@@ -8,6 +8,13 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- UpKeeper is now the single publisher of repository-owned skills. Capture reads
+  the complete skill trees from the pinned omarchy-setup checkout, ignores stale
+  installed copies of those names, and projects the reviewed bytes to
+  `~/.claude/skills` for Claude/OpenCode and `~/.agents/skills` for Codex.
+  omarchy-setup remains the bootstrap and source repository; it does not publish
+  or converge skills.
+
 - Every invocation of `upkeeper` appends one record to the tool-feedback spool
   the fleet's MCP servers already write, at
   `~/.local/share/toolfeedback/upkeeper/<host>-<date>.jsonl`. The record holds

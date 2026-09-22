@@ -430,12 +430,20 @@ func (f File) matchesAsset(asset ManagedAsset, sourceHome string) error {
 }
 
 // CaptureEnvironment reads the controller's own agent environment and freezes
-// it as a publishable component.
-//
-// A skill directory that resolves outside the home directory is left alone: it
-// is installed by a package and its bytes are not the fleet's to republish.
+// it as a publishable component. It is retained for tests and callers without a
+// repository-owned skill source.
 func CaptureEnvironment(home string, provenance ProjectInstructionRef) (map[string]any, error) {
-	files, err := captureFiles(home)
+	return CaptureEnvironmentWithSkills(home, "", provenance)
+}
+
+// CaptureEnvironmentWithSkills makes UpKeeper the single publisher of
+// repository-owned skills. Installed home copies are outputs, not capture
+// inputs: the pinned source tree replaces same-named installed skills and is
+// projected to Claude/OpenCode and Codex discovery roots.
+func CaptureEnvironmentWithSkills(
+	home, skillsRoot string, provenance ProjectInstructionRef,
+) (map[string]any, error) {
+	files, err := captureFiles(home, skillsRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +469,7 @@ func CaptureEnvironment(home string, provenance ProjectInstructionRef) (map[stri
 	return rendered, nil
 }
 
-func captureFiles(home string) ([]File, error) {
+func captureFiles(home, skillsRoot string) ([]File, error) {
 	var files []File
 	add := func(relative, mode, kind string, value []byte) error {
 		safe, err := SafePath(relative)
@@ -513,6 +521,12 @@ func captureFiles(home string) ([]File, error) {
 	}
 	for _, relative := range skills {
 		if err := add(relative, "file", "skill", nil); err != nil {
+			return nil, err
+		}
+	}
+	if skillsRoot != "" {
+		files, err = projectSourceSkills(files, skillsRoot)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -659,6 +673,102 @@ func skillFiles(directory, resolved string) ([]string, error) {
 	}
 	sort.Strings(found)
 	return found, nil
+}
+
+type sourceSkillFile struct {
+	skill       string
+	relative    string
+	content     []byte
+	permissions int64
+}
+
+// projectSourceSkills replaces repository-owned skill names with exact bytes
+// from the pinned setup checkout and emits each skill for Claude/OpenCode and
+// Codex. Personal and package-owned skill names remain untouched.
+func projectSourceSkills(files []File, skillsRoot string) ([]File, error) {
+	entries, err := os.ReadDir(skillsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read repository skill source: %w", err)
+	}
+	var sourceFiles []sourceSkillFile
+	owned := map[string]bool{}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".system" {
+			continue
+		}
+		name := entry.Name()
+		if _, err := SafePath(filepath.Join(".agents/skills", name, "SKILL.md")); err != nil {
+			return nil, fmt.Errorf("unsafe repository skill name %q", name)
+		}
+		directory := filepath.Join(skillsRoot, name)
+		if info, err := os.Stat(filepath.Join(directory, "SKILL.md")); err != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("repository skill %s has no regular SKILL.md", name)
+		}
+		owned[name] = true
+		err := filepath.WalkDir(directory, func(path string, item fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if item.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("repository skill %s contains a symlink", name)
+			}
+			if item.IsDir() {
+				return nil
+			}
+			info, err := item.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() || !allowedPermissions[int64(info.Mode().Perm())] {
+				return fmt.Errorf("repository skill %s contains an unsupported file", name)
+			}
+			relative, err := filepath.Rel(directory, path)
+			if err != nil {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			sourceFiles = append(sourceFiles, sourceSkillFile{
+				skill: name, relative: relative, content: data,
+				permissions: int64(info.Mode().Perm()),
+			})
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(owned) == 0 {
+		return nil, errors.New("repository skill source contains no skills")
+	}
+
+	projected := make([]File, 0, len(files)+2*len(sourceFiles))
+	for _, file := range files {
+		parts := pathParts(file.Path)
+		if len(parts) >= 3 && parts[1] == "skills" &&
+			(parts[0] == ".claude" || parts[0] == ".agents" || parts[0] == ".codex") &&
+			owned[parts[2]] {
+			continue
+		}
+		projected = append(projected, file)
+	}
+	for _, source := range sourceFiles {
+		for _, root := range []string{".claude/skills", ".agents/skills"} {
+			path := filepath.Join(root, source.skill, source.relative)
+			safe, err := SafePath(path)
+			if err != nil {
+				return nil, err
+			}
+			projected = append(projected, File{
+				Path: safe, Mode: "file", Kind: "skill", Content: source.content,
+				SHA256: Digest(source.content), SizeBytes: int64(len(source.content)),
+				Permissions: source.permissions,
+			})
+		}
+	}
+	return projected, nil
 }
 
 // captureSettings freezes only the harness settings the fleet owns, and only
