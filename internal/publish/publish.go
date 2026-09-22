@@ -330,12 +330,6 @@ func commitAuthored(root string, options Options, runner procx.Runner, captured 
 		}
 		return nil
 	}
-	if strings.TrimSpace(staged) == "" {
-		if err = verifyFences(); err != nil {
-			return "", "", err
-		}
-		return options.ExpectedHead, branch, nil
-	}
 	expectedManifest, err := captured.CanonicalBytes()
 	if err != nil {
 		return "", "", err
@@ -378,6 +372,9 @@ func commitAuthored(root string, options Options, runner procx.Runner, captured 
 	}
 	if err = verifyFences(); err != nil {
 		return "", "", err
+	}
+	if strings.TrimSpace(staged) == "" {
+		return options.ExpectedHead, branch, nil
 	}
 	tree, err := run("", "write-tree")
 	tree = strings.TrimSpace(tree)

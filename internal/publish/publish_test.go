@@ -666,6 +666,77 @@ func mustRead(t *testing.T, path string) []byte {
 	return value
 }
 
+func TestAuthoredPublicationRealGitNoChangeRefusesUnsafeMode(t *testing.T) {
+	f, _, _ := prepareAuthoredFixture(t)
+	value, err := release.Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	components := value.Manifest["components"].(map[string]any)
+	agentConfig := components["agent-config"].(map[string]any)
+	agentConfig["files"] = []any{map[string]any{
+		"path": ".config/agents/link", "store": "link",
+		"sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+	}}
+	delete(components, "agent-environment")
+	delete(components, "t3")
+	delete(components, "worker-configuration")
+	components["t3-steward"].(map[string]any)["installer"] = "t3-update"
+	delete(components["omarchy-setup"].(map[string]any), "modules")
+	if _, err = release.Write(f.root, value); err != nil {
+		t.Fatal(err)
+	}
+	storeDir := filepath.Join(f.root, release.AgentConfigDir)
+	if err = os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(storeDir, "foo"), []byte("foo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink("foo", filepath.Join(storeDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(filepath.Join(f.root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	runGit := func(arguments ...string) string {
+		t.Helper()
+		result := procx.Run(procx.Command{Argv: append([]string{"git", "-C", f.root}, arguments...)})
+		if !result.OK() {
+			t.Fatalf("git %v: %s", arguments, result.Output())
+		}
+		return strings.TrimSpace(result.Stdout)
+	}
+	runGit("init", "--quiet")
+	runGit("config", "user.name", "UpKeeper Test")
+	runGit("config", "user.email", "upkeeper@example.invalid")
+	runGit("add", ".")
+	runGit("commit", "--quiet", "-m", "unsafe baseline")
+	head := runGit("rev-parse", "HEAD")
+	runner := func(command procx.Command) procx.Result {
+		if len(command.Argv) > 0 && command.Argv[0] == "git" {
+			if len(command.Argv) > 3 && command.Argv[3] == "push" {
+				t.Fatal("unsafe no-change release attempted a push")
+			}
+			return procx.Run(command)
+		}
+		return f.run(command)
+	}
+	options := f.options()
+	options.Runner = runner
+	options.Remotes = nil
+	options.Authored = true
+	options.ExpectedHead = head
+	options.ExpectedReleaseSHA256 = value.Digest()
+	if _, err = publish.Release(f.root, options); err == nil ||
+		!strings.Contains(err.Error(), "requires a regular 100644 file") {
+		t.Fatalf("unsafe no-change release produced %v", err)
+	}
+	if got := runGit("rev-parse", "HEAD"); got != head {
+		t.Fatal("unsafe no-change refusal moved HEAD")
+	}
+}
+
 func TestPartialPushFailureReturnsReceipts(t *testing.T) {
 	f := newFixture(t)
 	options := f.options()
