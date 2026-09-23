@@ -136,7 +136,6 @@ func TestAddFreshProjectOmitsGitFields(t *testing.T) {
 	}
 }
 
-
 func TestAddProjectRefusesAndLeavesTheManifestUntouched(t *testing.T) {
 	cases := []struct {
 		name     string
