@@ -139,6 +139,127 @@ func TestRenderingIsDeterministicAndMatchesTheSharedFixtures(t *testing.T) {
 	}
 }
 
+func TestFreshProjectsParseAndRenderWithoutGitFields(t *testing.T) {
+	value := edit(t, func(d map[string]any) {
+		project := object(t, d, "projects", "upkeeper")
+		project["type"] = "fresh"
+		delete(project, "repository")
+		delete(project, "default_ref")
+		delete(project, "setup_profile")
+	})
+	document, err := fleet.Parse(value)
+	if err != nil {
+		t.Fatalf("parse fresh project: %v", err)
+	}
+	project := document.Projects["upkeeper"]
+	if project.Type != "fresh" || project.Repository != "" || project.DefaultRef != "" || project.SetupProfile != "" {
+		t.Fatalf("fresh project = %+v", project)
+	}
+	projection, err := document.CoordinatorProjection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects := projection["projects"].(map[string]any)
+	rendered := projects["upkeeper"].(map[string]any)
+	if rendered["type"] != "fresh" {
+		t.Fatalf("rendered type = %#v", rendered["type"])
+	}
+	for _, key := range []string{"repository", "default_ref", "setup_profile"} {
+		if _, present := rendered[key]; present {
+			t.Errorf("fresh projection unexpectedly carries %s: %#v", key, rendered[key])
+		}
+	}
+
+	emptyGitFields := edit(t, func(d map[string]any) {
+		project := object(t, d, "projects", "upkeeper")
+		project["type"] = "fresh"
+		project["repository"] = ""
+		project["default_ref"] = ""
+		delete(project, "setup_profile")
+	})
+	emptyDocument, err := fleet.Parse(emptyGitFields)
+	if err != nil {
+		t.Fatalf("fresh project with empty Git fields: %v", err)
+	}
+	emptyProjection, err := emptyDocument.CoordinatorProjection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyRendered := emptyProjection["projects"].(map[string]any)["upkeeper"].(map[string]any)
+	for _, key := range []string{"repository", "default_ref"} {
+		if _, present := emptyRendered[key]; present {
+			t.Errorf("empty fresh %s was not canonicalized away", key)
+		}
+	}
+
+	explicitGit := edit(t, func(d map[string]any) {
+		object(t, d, "projects", "upkeeper")["type"] = "git"
+	})
+	gitDocument, err := fleet.Parse(explicitGit)
+	if err != nil {
+		t.Fatalf("parse explicit git project: %v", err)
+	}
+	if gitDocument.Projects["upkeeper"].Type != "git" {
+		t.Fatalf("explicit git type was not preserved: %+v", gitDocument.Projects["upkeeper"])
+	}
+}
+
+func TestFreshProjectRefusals(t *testing.T) {
+	cases := []struct {
+		name      string
+		change    func(map[string]any)
+		errorText string
+	}{
+		{
+			name: "unknown type",
+			change: func(d map[string]any) {
+				object(t, d, "projects", "upkeeper")["type"] = "archive"
+			},
+			errorText: "invalid type",
+		},
+		{
+			name: "fresh repository",
+			change: func(d map[string]any) {
+				project := object(t, d, "projects", "upkeeper")
+				project["type"] = "fresh"
+				delete(project, "default_ref")
+				delete(project, "setup_profile")
+			},
+			errorText: "must not name a repository",
+		},
+		{
+			name: "fresh default ref",
+			change: func(d map[string]any) {
+				project := object(t, d, "projects", "upkeeper")
+				project["type"] = "fresh"
+				delete(project, "repository")
+				delete(project, "setup_profile")
+			},
+			errorText: "must not name a default_ref",
+		},
+		{
+			name: "fresh unknown field",
+			change: func(d map[string]any) {
+				project := object(t, d, "projects", "upkeeper")
+				project["type"] = "fresh"
+				delete(project, "repository")
+				delete(project, "default_ref")
+				delete(project, "setup_profile")
+				project["workspace"] = "invented"
+			},
+			errorText: "unknown field",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := fleet.Parse(edit(t, tc.change))
+			if err == nil || !strings.Contains(err.Error(), tc.errorText) {
+				t.Fatalf("want error containing %q, got %v", tc.errorText, err)
+			}
+		})
+	}
+}
+
 // Every legacy worker entry still co-published in the release must match fleet
 // intent. Fleet-only hosts have already retired the legacy component.
 // Compare the release's current fleet intent, rather than the frozen migration

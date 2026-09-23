@@ -9,6 +9,21 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/fleet"
 )
 
+func TestCoordinatorRetirementBoundsAcceptFreshProjectsWithEmptyGitFields(t *testing.T) {
+	value, err := canonjson.DecodeObject(fleetTestFixture(t, "projection-coordinator.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := value["projects"].(map[string]any)["upkeeper"].(map[string]any)
+	project["type"] = "fresh"
+	project["repository"] = ""
+	project["default_ref"] = ""
+	delete(project, "setup_profile")
+	if !fleetKnownCoordinatorChildren(value) {
+		t.Fatal("retirement bounds rejected a fresh project accepted by fleet.Parse")
+	}
+}
+
 func TestCoordinatorRetirementRefusesOversizeAndUnknownNestedFields(t *testing.T) {
 	for _, variant := range []string{"oversize", "worker-field", "project-field", "model-object"} {
 		t.Run(variant, func(t *testing.T) {

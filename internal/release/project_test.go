@@ -116,6 +116,27 @@ func TestAddProjectWritesACanonicalManifestTheFleetParserAccepts(t *testing.T) {
 	}
 }
 
+func TestAddFreshProjectOmitsGitFields(t *testing.T) {
+	root := projectRoot(t)
+	value, err := release.AddProject(root, release.ProjectSpec{
+		Name: "scratch", Type: "fresh", EligibleWorkers: []string{"homelab"},
+	})
+	if err != nil {
+		t.Fatalf("add fresh: %v", err)
+	}
+	component := value.Component(fleet.Component)
+	entry := component["projects"].(map[string]any)["scratch"].(map[string]any)
+	if entry["type"] != "fresh" {
+		t.Fatalf("type = %#v", entry["type"])
+	}
+	for _, key := range []string{"repository", "default_ref", "setup_profile"} {
+		if _, present := entry[key]; present {
+			t.Errorf("fresh manifest unexpectedly carries %s", key)
+		}
+	}
+}
+
+
 func TestAddProjectRefusesAndLeavesTheManifestUntouched(t *testing.T) {
 	cases := []struct {
 		name     string

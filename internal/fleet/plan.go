@@ -381,8 +381,12 @@ func projectChanges(proposed, previous *Document, reenroll map[string]bool) ([]s
 			earlier, known = previous.Projects[name]
 		}
 		if !known {
+			added := "project " + name + " is added at " + project.Repository
+			if project.Type == "fresh" {
+				added = "project " + name + " is added as a fresh workspace"
+			}
 			changes = append(changes,
-				"project "+name+" is added at "+project.Repository,
+				added,
 				"project "+name+" "+ProjectAddedAdvice)
 			for _, worker := range project.EligibleWorkers {
 				reenroll[worker] = true

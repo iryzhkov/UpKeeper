@@ -69,10 +69,12 @@ type arguments struct {
 	// project
 	projectAction                string
 	projectName                  string
+	projectType                  string
 	projectRepository            string
 	projectDefaultRef            string
 	projectSetupProfile          string
 	projectWorkers               []string
+	projectTypeSet               bool
 	projectRepositorySet         bool
 	projectDefaultRefSet         bool
 	projectSetupProfileSet       bool
@@ -381,13 +383,16 @@ func parseProject(parsed *arguments, argv []string) error {
 			return unrecognized(token)
 		}
 		switch token {
-		case "--repository", "--default-ref", "--setup-profile", "--workers", "--expect-release-sha256":
+		case "--type", "--repository", "--default-ref", "--setup-profile", "--workers", "--expect-release-sha256":
 			value, next, err := takeValue(argv, index, token)
 			if err != nil {
 				return err
 			}
 			index = next
 			switch token {
+			case "--type":
+				parsed.projectType = value
+				parsed.projectTypeSet = true
 			case "--repository":
 				parsed.projectRepository = value
 				parsed.projectRepositorySet = true
@@ -411,6 +416,9 @@ func parseProject(parsed *arguments, argv []string) error {
 		}
 	}
 	if parsed.projectAction == "update" {
+		if parsed.projectTypeSet {
+			return usagef("argument --type is only valid with project add")
+		}
 		if parsed.projectExpectedReleaseSHA256 == "" {
 			return usagef("project update requires --expect-release-sha256")
 		}
@@ -419,13 +427,24 @@ func parseProject(parsed *arguments, argv []string) error {
 		}
 	}
 	if parsed.projectAction == "add" {
+		if parsed.projectType == "fresh" && !parsed.projectSetupProfileSet {
+			parsed.projectSetupProfile = ""
+		}
+		if parsed.projectType != "" && parsed.projectType != "git" && parsed.projectType != "fresh" {
+			return usagef("argument --type: invalid choice: %q (choose from \"git\", \"fresh\")", parsed.projectType)
+		}
+		if parsed.projectType == "fresh" && (parsed.projectRepository != "" || parsed.projectDefaultRef != "") {
+			return usagef("fresh projects must not use --repository or --default-ref")
+		}
 		missing := []string{}
-		for _, required := range []struct{ flag, value string }{
-			{"--repository", parsed.projectRepository},
-			{"--default-ref", parsed.projectDefaultRef},
-		} {
-			if required.value == "" {
-				missing = append(missing, required.flag)
+		if parsed.projectType != "fresh" {
+			for _, required := range []struct{ flag, value string }{
+				{"--repository", parsed.projectRepository},
+				{"--default-ref", parsed.projectDefaultRef},
+			} {
+				if required.value == "" {
+					missing = append(missing, required.flag)
+				}
 			}
 		}
 		if len(parsed.projectWorkers) == 0 {

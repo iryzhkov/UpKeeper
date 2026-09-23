@@ -194,7 +194,9 @@ func fleetPlanHelp(program string) string {
 // every other release change goes through.
 func projectHelp(program string) string {
 	return "usage: " + program + " project add NAME --repository URL --default-ref REF" +
-		" --workers HOST[,HOST...] [--setup-profile PROFILE] [--json]\n" +
+		" --workers HOST[,HOST...] [--type git] [--setup-profile PROFILE] [--json]\n" +
+		"       " + program + " project add NAME --type fresh --workers HOST[,HOST...]" +
+		" [--setup-profile PROFILE] [--json]\n" +
 		"       " + program + " project remove NAME [--json]\n" +
 		"       " + program + " project update NAME --expect-release-sha256 SHA256" +
 		" [--repository URL] [--default-ref REF] [--setup-profile PROFILE]" +
@@ -212,8 +214,9 @@ func projectHelp(program string) string {
 		describe("  {add,remove,update}", "") +
 		describe("  NAME", "project name: lowercase letters, digits and hyphens") +
 		"\noptions:\n" + helpOption + "\n" +
-		describe("  --repository URL", "canonical https or ssh remote (add)") +
-		describe("  --default-ref REF", "branch, tag or commit the project checks out (add)") +
+		describe("  --type {git,fresh}", "project workspace type; omitted preserves the legacy Git form (add)") +
+		describe("  --repository URL", "canonical https or ssh remote (Git add)") +
+		describe("  --default-ref REF", "branch, tag or commit the project checks out (Git add)") +
 		describe("  --workers HOST[,HOST...]",
 			"fleet hosts eligible for the project; an unknown host is refused (add)") +
 		describe("  --setup-profile PROFILE",

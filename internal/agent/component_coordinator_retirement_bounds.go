@@ -114,16 +114,42 @@ func fleetKnownCoordinatorChildren(entry map[string]any) bool {
 	}
 	for _, value := range projects {
 		project, ok := value.(map[string]any)
-		if !ok || !workerSameFields(project, []string{"repository", "default_ref", "setup_profile", "eligible_workers"}) {
+		if !ok || !stringsOnly(project["eligible_workers"]) {
+			return false
+		}
+		projectType, typed := project["type"].(string)
+		if !typed {
+			if !workerSameFields(project, []string{"repository", "default_ref", "setup_profile", "eligible_workers"}) {
+				return false
+			}
+		} else if projectType == "git" {
+			if !workerSameFields(project, []string{"type", "repository", "default_ref", "setup_profile", "eligible_workers"}) {
+				return false
+			}
+		} else if projectType == "fresh" {
+			allowed := []string{"type", "eligible_workers"}
+			for _, key := range []string{"repository", "default_ref", "setup_profile"} {
+				if _, present := project[key]; present {
+					allowed = append(allowed, key)
+				}
+			}
+			if !workerSameFields(project, allowed) {
+				return false
+			}
+			for _, key := range []string{"repository", "default_ref"} {
+				if value, present := project[key]; present && value != "" {
+					return false
+				}
+			}
+		} else {
 			return false
 		}
 		for _, key := range []string{"repository", "default_ref", "setup_profile"} {
-			if _, ok := project[key].(string); !ok {
-				return false
+			if value, present := project[key]; present {
+				if _, ok := value.(string); !ok {
+					return false
+				}
 			}
-		}
-		if !stringsOnly(project["eligible_workers"]) {
-			return false
 		}
 	}
 	return true

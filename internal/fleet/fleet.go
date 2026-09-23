@@ -105,20 +105,9 @@ const (
 )
 
 // ProfileFields, HostFields and ProjectFields are the complete required key
-// set of an entry of that kind; ProfileOptionalFields are the profile keys a
-// document may omit.
-//
-// Every one of them is closed. A key nobody validates is a key a credential
-// value can be authored into, and this component is published in the release
-// manifest and distributed to every host, so an unvalidated field is a secret
-// one commit away from the whole fleet. Forward compatibility comes from
-// schema_version: a newer controller that needs a new field ships a new
-// version, and an older binary refuses that version outright instead of
-// carrying fields it cannot check.
-//
-// quota_bindings is optional rather than required so that every document
-// authored before it existed still validates unchanged; it is still closed,
-// because an absent binding and an unknown key are different things.
+// sets of legacy entries. ProjectTypedFields is the complete required set for
+// an explicitly typed Git project; fresh projects have their own smaller
+// required set in parseProjects. Every set remains closed.
 var (
 	ProfileFields = []string{
 		"cpu_class", "executor_slots", "capabilities",
@@ -131,6 +120,9 @@ var (
 	ClientIntentFields = []string{"admin_credential_ref"}
 	ProjectFields      = []string{
 		"repository", "default_ref", "setup_profile", "eligible_workers",
+	}
+	ProjectTypedFields = []string{
+		"type", "repository", "default_ref", "setup_profile", "eligible_workers",
 	}
 )
 
@@ -239,9 +231,10 @@ type Client struct {
 	AdminCredentialRef string
 }
 
-// Project is one Steward project.
+// Project is one Steward project. Type is empty for the legacy Git wire form.
 type Project struct {
 	Name            string
+	Type            string
 	Repository      string
 	DefaultRef      string
 	SetupProfile    string
@@ -764,21 +757,58 @@ func (d *Document) parseProjects(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet project name")
 		}
-		if missing, unknown := checkKeys(entry, ProjectFields, nil); missing != "" || unknown != "" {
+		projectType := ""
+		if value, present := entry["type"]; present {
+			var ok bool
+			projectType, ok = value.(string)
+			if !ok || (projectType != "git" && projectType != "fresh") {
+				return failure.Value("fleet project %s has an invalid type", name)
+			}
+		}
+		required := ProjectFields
+		optional := []string{"type"}
+		if projectType != "" {
+			required = []string{"type", "eligible_workers"}
+			optional = []string{"repository", "default_ref", "setup_profile"}
+			if projectType == "git" {
+				required = ProjectTypedFields
+				optional = nil
+			}
+		}
+		if missing, unknown := checkKeys(entry, required, optional); missing != "" || unknown != "" {
 			return fieldError("fleet project "+name, missing, unknown)
 		}
+		for _, key := range []string{"repository", "default_ref", "setup_profile"} {
+			if value, present := entry[key]; present {
+				if _, ok := value.(string); !ok {
+					return failure.Value("fleet project %s has a non-string %s", name, key)
+				}
+			}
+		}
 		repository, _ := entry["repository"].(string)
-		if !repositoryPattern.MatchString(repository) {
-			return failure.Value(
-				"fleet project %s needs a canonical https or ssh repository", name)
-		}
 		ref, _ := entry["default_ref"].(string)
-		if !gitRefPattern.MatchString(ref) {
-			return failure.Value("fleet project %s has an invalid default_ref", name)
-		}
 		setup, _ := entry["setup_profile"].(string)
-		if !identifierPattern.MatchString(setup) {
-			return failure.Value("fleet project %s has an invalid setup_profile", name)
+		if projectType == "fresh" {
+			if repository != "" {
+				return failure.Value("fleet fresh project %s must not name a repository", name)
+			}
+			if ref != "" {
+				return failure.Value("fleet fresh project %s must not name a default_ref", name)
+			}
+			if setup != "" && !identifierPattern.MatchString(setup) {
+				return failure.Value("fleet project %s has an invalid setup_profile", name)
+			}
+		} else {
+			if !repositoryPattern.MatchString(repository) {
+				return failure.Value(
+					"fleet project %s needs a canonical https or ssh repository", name)
+			}
+			if !gitRefPattern.MatchString(ref) {
+				return failure.Value("fleet project %s has an invalid default_ref", name)
+			}
+			if !identifierPattern.MatchString(setup) {
+				return failure.Value("fleet project %s has an invalid setup_profile", name)
+			}
 		}
 		workers, err := identifierList(entry["eligible_workers"], name+".eligible_workers")
 		if err != nil {
@@ -792,6 +822,7 @@ func (d *Document) parseProjects(value any) error {
 		}
 		d.Projects[name] = Project{
 			Name:            name,
+			Type:            projectType,
 			Repository:      repository,
 			DefaultRef:      ref,
 			SetupProfile:    setup,

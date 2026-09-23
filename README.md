@@ -38,7 +38,8 @@ See [the release guide](docs/upkeeper-push-pull.md) and
 ```bash
 ./bin/upkeeper fleet-plan                                # report what the fleet authorizes
 ./bin/upkeeper fleet-plan --previous 6bcd2f8 --json      # and what enrolling it would change
-./bin/upkeeper project add NAME --repository URL --default-ref REF --workers a,b [--setup-profile P]
+./bin/upkeeper project add NAME --repository URL --default-ref REF --workers a,b [--type git] [--setup-profile P]
+./bin/upkeeper project add NAME --type fresh --workers a,b [--setup-profile P]
 ./bin/upkeeper project remove NAME                       # both edit desired/release.json and print the plan
 ./bin/upkeeper provider add INSTANCE --quota-pool POOL --hosts a,b [--models m1,m2]
 ./bin/upkeeper provider remove INSTANCE [--hosts a,b]    # same, for a provider instance and its binding

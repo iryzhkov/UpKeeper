@@ -321,7 +321,7 @@ var spoolFlags = []string{
 	"all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head", "expect-release-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "repository",
-	"self", "setup-profile", "skip-unreachable", "timeout", "to", "workers",
+	"self", "setup-profile", "skip-unreachable", "timeout", "to", "type", "workers",
 }
 
 func spoolDeclaredFlags() map[string]struct{} {

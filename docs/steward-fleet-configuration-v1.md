@@ -34,8 +34,10 @@ its work to; see "Quota bindings" below).
 an optional `exceptions` object whose keys are a subset of the profile's keys and which override
 them explicitly.
 
-`projects`: one entry per Steward project, carrying `repository` (canonical remote), `default_ref`,
-`setup_profile` and `eligible_workers`.
+`projects`: one entry per Steward project. The legacy Git form carries `repository` (canonical remote),
+`default_ref`, `setup_profile` and `eligible_workers`. An optional `type` may explicitly select `git` or
+`fresh`; fresh projects omit `repository` and `default_ref`, and may omit `setup_profile` so Steward uses
+its reserved empty-workspace setup profile.
 
 `observed`: written only by capture, never authored, and never read as authorization.
 
@@ -185,13 +187,15 @@ quota pool P".
 ## Adding and removing a project
 
 `upkeeper project add NAME --repository URL --default-ref REF --workers a,b
-[--setup-profile P]` and `upkeeper project remove NAME` are the one authored edit this
+[--type git] [--setup-profile P]`, `upkeeper project add NAME --type fresh --workers a,b
+[--setup-profile P]`, and `upkeeper project remove NAME` are the one authored edit this
 component has a command for. They load the release, edit the `projects` entry through the
 release model, validate the edited manifest with `fleet.Parse` before a byte is written,
 write `desired/release.json` atomically in its canonical encoding (a temporary file beside
 it, renamed over it), and print the `fleet-plan` diff against the release committed at
-`HEAD`. `--setup-profile` defaults to `git-status`. A worker the fleet intent does not
-declare is refused by name, and a refusal writes nothing.
+`HEAD`. `--setup-profile` defaults to `git-status` for Git projects; when omitted for a fresh
+project, Steward selects its reserved empty-workspace setup profile. A worker the fleet intent
+does not declare is refused by name, and a refusal writes nothing.
 
 The commands stay inside the authority this document draws: they commit, push, pull and
 enroll nothing. The operator reviews `git diff desired/release.json`, commits, publishes with

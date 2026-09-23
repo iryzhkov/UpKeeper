@@ -43,6 +43,7 @@ func runProject(parsed *arguments, streams Streams) (int, error) {
 	case "add":
 		value, err = release.AddProject(root, release.ProjectSpec{
 			Name:            parsed.projectName,
+			Type:            parsed.projectType,
 			Repository:      parsed.projectRepository,
 			DefaultRef:      parsed.projectDefaultRef,
 			SetupProfile:    parsed.projectSetupProfile,

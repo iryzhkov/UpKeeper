@@ -161,12 +161,22 @@ func (d *Document) CoordinatorProjection() (map[string]any, error) {
 	projects := map[string]any{}
 	for _, name := range d.ProjectNames() {
 		project := d.Projects[name]
-		projects[name] = map[string]any{
-			"repository":       project.Repository,
-			"default_ref":      project.DefaultRef,
-			"setup_profile":    project.SetupProfile,
+		entry := map[string]any{
 			"eligible_workers": sortedUnique(project.EligibleWorkers),
 		}
+		if project.Type != "" {
+			entry["type"] = project.Type
+		}
+		if project.Repository != "" || project.Type != "fresh" {
+			entry["repository"] = project.Repository
+		}
+		if project.DefaultRef != "" || project.Type != "fresh" {
+			entry["default_ref"] = project.DefaultRef
+		}
+		if project.SetupProfile != "" || project.Type != "fresh" {
+			entry["setup_profile"] = project.SetupProfile
+		}
+		projects[name] = entry
 	}
 	return map[string]any{
 		"kind":           CoordinatorKind,

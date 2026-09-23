@@ -17,6 +17,7 @@ import (
 // host-local binding itself.
 type ProjectSpec struct {
 	Name            string
+	Type            string
 	Repository      string
 	DefaultRef      string
 	SetupProfile    string
@@ -65,12 +66,22 @@ func AddProject(root string, spec ProjectSpec) (Release, error) {
 		projects = map[string]any{}
 		component["projects"] = projects
 	}
-	projects[spec.Name] = map[string]any{
-		"repository":       spec.Repository,
-		"default_ref":      spec.DefaultRef,
-		"setup_profile":    spec.SetupProfile,
+	entry := map[string]any{
 		"eligible_workers": workers,
 	}
+	if spec.Type != "" {
+		entry["type"] = spec.Type
+	}
+	if spec.Repository != "" || spec.Type != "fresh" {
+		entry["repository"] = spec.Repository
+	}
+	if spec.DefaultRef != "" || spec.Type != "fresh" {
+		entry["default_ref"] = spec.DefaultRef
+	}
+	if spec.SetupProfile != "" || spec.Type != "fresh" {
+		entry["setup_profile"] = spec.SetupProfile
+	}
+	projects[spec.Name] = entry
 	return writeEditedFleet(root, value)
 }
 

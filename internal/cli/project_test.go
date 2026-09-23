@@ -133,6 +133,39 @@ func TestProjectAddEditsTheManifestAndReportsThePlan(t *testing.T) {
 	}
 }
 
+func TestProjectAddAuthorsAFreshWorkspaceWithoutGitFields(t *testing.T) {
+	root := projectCheckout(t)
+	t.Setenv(cli.ConfigRootEnvironment, root)
+	var out, errs bytes.Buffer
+	code := cli.Main("upkeeper", []string{"project", "add", "scratch",
+		"--type", "fresh", "--workers", "homelab", "--json"},
+		cli.Streams{Out: &out, Err: &errs})
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%q", code, errs.String())
+	}
+	value, err := release.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	component := value.Component(fleet.Component)
+	entry := component["projects"].(map[string]any)["scratch"].(map[string]any)
+	if entry["type"] != "fresh" {
+		t.Fatalf("type = %#v", entry["type"])
+	}
+	for _, key := range []string{"repository", "default_ref", "setup_profile"} {
+		if _, present := entry[key]; present {
+			t.Errorf("fresh manifest unexpectedly carries %s: %#v", key, entry[key])
+		}
+	}
+	document, err := fleet.Parse(component)
+	if err != nil {
+		t.Fatalf("fleet.Parse refuses fresh project: %v", err)
+	}
+	if document.Projects["scratch"].SetupProfile != "" {
+		t.Fatalf("implicit setup profile was materialized: %+v", document.Projects["scratch"])
+	}
+}
+
 func TestProjectAddRefusesAnUnknownWorkerWithoutWriting(t *testing.T) {
 	root := projectCheckout(t)
 	t.Setenv(cli.ConfigRootEnvironment, root)
@@ -161,6 +194,8 @@ func TestProjectUsageErrors(t *testing.T) {
 		{"project", "add"},
 		{"project", "add", "scratch"},
 		{"project", "add", "scratch", "--repository", "https://example.invalid/x.git", "--default-ref", "main"},
+		{"project", "add", "scratch", "--type", "archive", "--workers", "homelab"},
+		{"project", "add", "scratch", "--type", "fresh", "--repository", "https://example.invalid/x.git", "--workers", "homelab"},
 		{"project", "remove"},
 		{"project", "rename", "scratch"},
 		{"project", "remove", "scratch", "--workers", "homelab"},
