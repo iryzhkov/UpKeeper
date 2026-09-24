@@ -39,9 +39,11 @@ See [scheduled convergence](../scheduled-convergence.md) for installation and re
 
 U4 adds the laptop's own timer. It refreshes only fast-forward main commits whose
 exact GitHub push gate passed, then re-executes that code and uses the local-only
-self-pull transaction. The self-managed inventory flag prevents controller pulls
-from probing or dispatching to the laptop. Its local journal/run record, not a
-controller skip, is the deployment observation. Worker enrollment remains separate.
+self-pull transaction. The self-managed inventory flag excludes the laptop from
+legacy scheduled controller pulls. An explicit manual controller pull or rollback
+may dispatch over SSH; the target deployment lock serializes it with the local
+timer. Its host receipt and local journal/run record establish deployment; a
+scheduled controller skip does not. Worker enrollment remains separate.
 See [laptop convergence](../laptop-self-convergence.md).
 
 ## State and ownership

@@ -80,12 +80,28 @@ def test_wrong_origin_refused_before_fetch(pair):
         refresh(clone, runner_for(candidate))
 
 
-def test_controller_never_probes_or_dispatches_self_managed_laptop(tmp_path):
+def test_manual_controller_pull_dispatches_self_managed_laptop(tmp_path):
+    seen = []
+
+    def runner(spec, payload, *, timeout, local_only=False):
+        seen.append((spec.name, local_only))
+        return {"host": spec.name, "reachable": True, "result": "converged"}
+
     report, code = pull_fleet(
         load_config(ROOT), release_for(tmp_path), hosts=["laptop"], stored_files={},
-        dry_run=True, skip_unreachable=True,
-        runner=lambda *a, **kw: pytest.fail("controller dispatch"),
-        reachability=lambda *a: pytest.fail("controller SSH probe"),
+        dry_run=True, runner=runner,
+    )
+    assert code == 0
+    assert seen == [("laptop", False)]
+    assert report["hosts"][0]["result"] == "converged"
+
+
+def test_scheduled_controller_still_skips_self_managed_laptop(tmp_path):
+    report, code = pull_fleet(
+        load_config(ROOT), release_for(tmp_path), hosts=["laptop"], stored_files={},
+        command="scheduled-pull", dry_run=True, skip_unreachable=True,
+        runner=lambda *a, **kw: pytest.fail("scheduled controller dispatch"),
+        reachability=lambda *a: pytest.fail("scheduled controller SSH probe"),
     )
     assert code == 0
     assert report["hosts"][0]["self_managed"]

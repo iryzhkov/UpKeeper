@@ -107,7 +107,8 @@ def main(argv=None):
             raise ValueError("checkout changed during scheduled validation")
         report, code = pull_fleet(
             config, release, hosts=sorted(config.hosts), dry_run=args.dry_run,
-            manifest_commit=revision, stored_files=stored, skip_unreachable=True,
+            command="scheduled-pull", manifest_commit=revision,
+            stored_files=stored, skip_unreachable=True,
             runner=run_host if args.dry_run else ScheduledRunner(
                 Path.home() / ".local/state/dev-fleet/scheduled-holds"
             ),

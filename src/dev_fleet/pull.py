@@ -1054,7 +1054,7 @@ def pull_fleet(
         runner_options["local_only"] = True
     for name in hosts:
         spec = config.hosts[name]
-        if spec.self_managed and not self_only:
+        if spec.self_managed and command == "scheduled-pull" and not self_only:
             results.append({"host": name, "reachable": False, "result": "skipped",
                             "self_managed": True, "error": "converges through its local timer"})
             continue
