@@ -2169,9 +2169,9 @@
         "e38-carpc": {
           "default_ref": "main",
           "eligible_workers": [
-            "omarchy-pc"
+            "homelab"
           ],
-          "repository": "https://github.com/iryzhkov/e38-carpc",
+          "repository": "git@github.com:iryzhkov/e38-carpc.git",
           "setup_profile": "git-status",
           "type": "git"
         },
