@@ -2166,6 +2166,15 @@
           "repository": "ssh://igor@normandy/home/igor/.cache/track-s-campaign/dogfood-repo",
           "setup_profile": "git-status"
         },
+        "e38-carpc": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "omarchy-pc"
+          ],
+          "repository": "https://github.com/iryzhkov/e38-carpc",
+          "setup_profile": "git-status",
+          "type": "git"
+        },
         "fleet-ops": {
           "default_ref": "main",
           "eligible_workers": [
