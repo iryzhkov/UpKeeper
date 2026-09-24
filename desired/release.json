@@ -1986,7 +1986,7 @@
         "make",
         "build"
       ],
-      "commit": "dd7dafc8f287fb305e8f1b66e997b07714e18d14",
+      "commit": "7ec7da2a02c3ec2501a009d768466b24f0a929de",
       "kind": "git-checkout",
       "path": ".local/share/huyang",
       "probe": {
