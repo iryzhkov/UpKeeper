@@ -2169,7 +2169,7 @@
         "e38-carpc": {
           "default_ref": "main",
           "eligible_workers": [
-            "homelab"
+            "normandy"
           ],
           "repository": "git@github.com:iryzhkov/e38-carpc.git",
           "setup_profile": "git-status",
