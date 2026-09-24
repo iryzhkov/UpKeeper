@@ -16,8 +16,9 @@ systemctl --user start upkeeper-self.service
 The daily timer runs at 09:00 local time with ten minutes of jitter, startup
 activation after five minutes, and persistent catch-up. It requires the existing
 GitHub CLI authentication and OS/toolchain prerequisites; credentials are never
-copied into the repository or unit. The user session must be running. No inbound
-SSH connection is needed to refresh or converge.
+copied into the repository or unit. The user session must be running. The timer
+needs no inbound SSH connection; an explicit manual controller pull may use the
+inventory's verified SSH identity when the laptop is reachable.
 
 The runner requires the laptop's inventory machine-id, a clean `main` checkout
 and canonical GitHub origin. It fetches `main`, verifies a fast-forward and the
@@ -39,12 +40,15 @@ systemctl --user disable --now upkeeper-self.timer
 ```
 
 Dry run never fetches or advances HEAD and performs no activation. A host with
-`self_managed: true` is skipped by controller pull/rollback, including reachability
-probes, and is displayed as self-managed in the fleet report. Inspect its own
-run record for deployment state; a controller skip is not evidence of convergence.
-The existing homelab drift checker understands this intentional skip.
+`self_managed: true` remains excluded from the legacy scheduled controller pull.
+Explicit manual `upkeeper pull --hosts laptop` and `upkeeper rollback --hosts laptop`
+include it, with the same target lock that serializes a local timer run. Preview a
+manual deployment with `upkeeper pull --hosts laptop --dry-run --json`, then inspect
+the actual host result and run record; a successful controller command or a scheduled
+skip alone is not evidence of convergence. The homelab drift checker continues to
+understand the scheduled skip.
 
 The laptop is not added to the worker set in this stage. S4's current worker
-contract uses inbound coordinator SSH and is still being qualified. A future
-worker decision must reconcile that transport with the laptop's no-inbound-SSH
-deployment decision. No worker credentials or enrollment are created here.
+contract uses inbound coordinator SSH and is still being qualified. Manual
+UpKeeper SSH deployment does not enroll the laptop as a Steward worker or create
+worker credentials.

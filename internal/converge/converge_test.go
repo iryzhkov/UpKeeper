@@ -135,28 +135,43 @@ func TestExitCodeAggregationOrder(t *testing.T) {
 	}
 }
 
-func TestASelfManagedHostIsNeverReachedFromAController(t *testing.T) {
+func TestManualControllerPullIncludesSelfManagedLaptop(t *testing.T) {
+	value := fleetRelease(t)
+	config := fleetConfig(t)
+	for _, command := range []string{"pull", "rollback"} {
+		t.Run(command, func(t *testing.T) {
+			choices := options(t, []string{"laptop"})
+			choices.Command = command
+			var seen []agent.Payload
+			choices.Runner = stateRunner("converged", &seen)
+			report, code, err := converge.Fleet(config, value, choices)
+			if err != nil || code != exitcode.Success {
+				t.Fatalf("Fleet: code=%d err=%v", code, err)
+			}
+			if len(seen) != 1 || seen[0].Host.Name != "laptop" {
+				t.Fatalf("manual %s did not dispatch to laptop: %+v", command, seen)
+			}
+			hosts, _ := report["hosts"].([]any)
+			entry, _ := hosts[0].(map[string]any)
+			if entry["result"] != "converged" {
+				t.Errorf("host entry is %#v", entry)
+			}
+		})
+	}
+}
+
+func TestScheduledControllerPullStillSkipsSelfManagedLaptop(t *testing.T) {
 	value := fleetRelease(t)
 	config := fleetConfig(t)
 	choices := options(t, []string{"laptop"})
-	dispatched := false
-	choices.Runner = func(
-		inventory.HostSpec, agent.Payload, time.Duration, bool,
-	) map[string]any {
-		dispatched = true
+	choices.Command = "scheduled-pull"
+	choices.Runner = func(inventory.HostSpec, agent.Payload, time.Duration, bool) map[string]any {
+		t.Fatal("scheduled controller dispatched to self-managed laptop")
 		return nil
 	}
 	report, code, err := converge.Fleet(config, value, choices)
-	if err != nil {
-		t.Fatalf("Fleet: %v", err)
-	}
-	if dispatched {
-		// Reaching into a self-managed host would race with its own timer's
-		// lock, which is exactly what the flag exists to prevent.
-		t.Fatal("a controller dispatched to a self-managed host")
-	}
-	if code != exitcode.Success {
-		t.Errorf("exit code is %d", code)
+	if err != nil || code != exitcode.Success {
+		t.Fatalf("Fleet: code=%d err=%v", code, err)
 	}
 	hosts, _ := report["hosts"].([]any)
 	entry, _ := hosts[0].(map[string]any)

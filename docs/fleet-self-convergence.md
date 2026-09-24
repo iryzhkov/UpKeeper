@@ -58,13 +58,15 @@ editor lock. A refused scheduled deployment retains a hold for inspection.
 After publishing and passing CI, start upkeeper-self.service on each reachable
 host to refresh and converge now. Triggering a service over an administrative SSH
 session does not make the deployment depend on that session: systemd owns the run.
-The laptop retains its no-inbound-SSH deployment path and can start its service
-locally. Offline hosts catch up later. Urgency never bypasses CI, local locks,
+An explicit manual controller pull can include the laptop over SSH. Its local
+timer remains available; the target lock serializes concurrent convergence.
+Offline hosts catch up later. Urgency never bypasses CI, local locks,
 busy-service deferrals, dirty-checkout guards or retained scheduled holds.
 
-Manual controller pulls remain available for hosts whose inventory allows them.
-The laptop's self_managed flag still prevents controller SSH dispatch. It is not
-necessary to change that flag for the other hosts merely to install a self timer.
+Manual controller pulls and rollbacks may include every selected inventory host,
+including the laptop. The laptop's self_managed flag excludes it only from the
+legacy scheduled controller pull; the local timer remains its automatic path.
+Preview all intended hosts before a manual fleet deployment and check each receipt.
 
 Inspect each host's journal and ~/.local/state/dev-fleet/runs. A successful Git
 push or a controller skip is not proof of convergence. After an uncertain or failed

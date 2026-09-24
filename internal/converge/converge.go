@@ -175,9 +175,10 @@ func Fleet(
 	results := make([]any, 0, len(options.Hosts))
 	for _, name := range options.Hosts {
 		spec := config.Hosts[name]
-		// A self-managed host converges through its own timer. Reaching into
-		// it from a controller would race with that timer's lock.
-		if spec.SelfManaged && !options.SelfOnly && !options.ObserveOnly {
+		// The legacy central timer leaves self-managed hosts to their local
+		// timers. An explicit manual pull or rollback may include them; the
+		// target's deployment lock serializes either action with its timer.
+		if spec.SelfManaged && options.Command == "scheduled-pull" && !options.SelfOnly && !options.ObserveOnly {
 			results = append(results, map[string]any{
 				"host": name, "reachable": false, "result": "skipped",
 				"self_managed": true, "error": "converges through its local timer",
