@@ -2274,7 +2274,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.88"
+        "steward_version": "0.11.0-rc.89"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -2288,7 +2288,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.88"
+      "version": "0.11.0-rc.89"
     },
     "worker-configuration": {
       "hosts": {
