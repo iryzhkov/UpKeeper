@@ -2236,7 +2236,7 @@
         },
         "scratch": {
           "eligible_workers": [
-            "homelab",
+            "normandy",
             "omarchy-pc"
           ],
           "type": "fresh"
