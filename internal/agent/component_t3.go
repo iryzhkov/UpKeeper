@@ -150,15 +150,226 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["check_error"] = firstLine(check.Output)
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
+	files := t3RunningFiles(c, service)
+	observed["running_file_count"] = nil
+	if files != nil {
+		observed["running_file_count"] = len(files)
+	}
+	observed["npm_prefix"] = nil
+	if prefix := c.Run([]string{"npm", "prefix", "-g"}, 30*time.Second, ""); prefix.OK {
+		if path := firstLine(prefix.Output); filepath.IsAbs(path) {
+			// A prefix reached through a symlink is the directory it names; an
+			// unresolvable one is unknown, which never counts as spared.
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				observed["npm_prefix"] = resolved
+			}
+		}
+	}
+	// The verdict travels in the observation rather than the file list, which
+	// is hundreds of paths on a busy host.
+	observed["install_spares_running"] = t3InstallSparesRunning(
+		map[string]any{"npm_prefix": observed["npm_prefix"], "running_files": files})
+	warnings := []string{}
 	if exists, known := observed["installed_path_exists"].(bool); known && !exists {
 		// A server that still answers from a deleted program keeps working until
 		// it is restarted; the warning travels with the observation so a report
 		// shows it even when nothing is refused.
-		observed["warning"] = "T3 program missing on disk: " +
-			adapterSpecString(observed, "installed_path") +
-			"; a restart will fail until T3 is reinstalled"
+		warnings = append(warnings, "T3 program missing on disk: "+
+			adapterSpecString(observed, "installed_path")+
+			"; a restart will fail until T3 is reinstalled")
+	}
+	if launcher := t3LauncherProblem(c, service); launcher != "" {
+		observed["launcher_problem"] = launcher
+		warnings = append(warnings, launcher+"; a restart of "+service+
+			" will fail until T3 is installed for the selected Node")
+	}
+	if len(warnings) > 0 {
+		observed["warning"] = strings.Join(warnings, "; ")
 	}
 	return observed, nil
+}
+
+// t3LauncherProblem reports why the unit's launcher would not start T3, or ""
+// when it would or when that cannot be told. The fleet's unit starts the mise
+// shim, which runs t3 from whichever Node mise selects now; after a Node
+// upgrade that is a prefix T3 was never installed into, while the running
+// server keeps answering from the old one. Only a restart finds out.
+func t3LauncherProblem(c *Context, service string) string {
+	if service == "" {
+		return ""
+	}
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "ExecStart", "--value"},
+		10*time.Second, "")
+	match := t3ExecStartPattern.FindStringSubmatch(result.Output)
+	if !result.OK || match == nil {
+		return ""
+	}
+	path := strings.ReplaceAll(match[1], "%h", c.Home)
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || filepath.Base(resolved) != "mise" {
+		return ""
+	}
+	which := c.Run([]string{resolved, "which", "t3"}, 15*time.Second, "")
+	if which.OK {
+		return ""
+	}
+	return "the unit's launcher " + path + " does not resolve t3 (" + firstLine(which.Output) + ")"
+}
+
+// t3RunningFiles lists, resolved, the files the running server was started
+// from: its executable, every file-path argument on its command line (the T3
+// entry script), and every file it has mapped (Node itself, libraries and
+// native modules such as node-pty). The Node binary alone is not enough: npm's
+// global prefix can be configured away from Node, and then T3's own code lives
+// somewhere the executable's path says nothing about. nil means the answer is
+// unknown, because there is no running process or /proc could not be read.
+func t3RunningFiles(c *Context, service string) []any {
+	if service == "" {
+		return nil
+	}
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "MainPID", "--value"},
+		10*time.Second, "")
+	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
+	if !result.OK || err != nil || pid <= 0 {
+		return nil
+	}
+	main := filepath.Join(t3ProcRoot, strconv.Itoa(pid))
+	if exe, err := os.Readlink(filepath.Join(main, "exe")); err != nil || filepath.Base(exe) == "mise" {
+		return nil
+	}
+	// The server's children (a PTY helper, a worker) can load files of their
+	// own, so the whole process tree is read; any process that cannot be read
+	// makes the answer unknown.
+	candidates := []string{}
+	pending := []string{strconv.Itoa(pid)}
+	visited := map[string]bool{}
+	for len(pending) > 0 {
+		current := pending[0]
+		pending = pending[1:]
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		process := filepath.Join(t3ProcRoot, current)
+		files, children, ok := t3ProcessFiles(process)
+		if !ok {
+			// A child that exited while the tree was read holds no files; the
+			// server's sessions start and end short commands all the time.
+			if _, err := os.Stat(process); os.IsNotExist(err) && current != strconv.Itoa(pid) {
+				continue
+			}
+			return nil
+		}
+		candidates = append(candidates, files...)
+		pending = append(pending, children...)
+	}
+	seen := map[string]bool{}
+	files := []any{}
+	for _, candidate := range candidates {
+		path := candidate
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			path = resolved
+		}
+		if !seen[path] {
+			seen[path] = true
+			files = append(files, path)
+		}
+	}
+	return files
+}
+
+// t3ProcessFiles reads one process's executable, the file-path arguments on
+// its command line (a relative one resolved against its working directory)
+// and its mapped files, plus the ids of its children. ok is false when any of
+// that cannot be read.
+func t3ProcessFiles(process string) (files, children []string, ok bool) {
+	exe, err := os.Readlink(filepath.Join(process, "exe"))
+	if err != nil {
+		return nil, nil, false
+	}
+	cmdline, err := os.ReadFile(filepath.Join(process, "cmdline"))
+	if err != nil {
+		return nil, nil, false
+	}
+	maps, err := os.ReadFile(filepath.Join(process, "maps"))
+	if err != nil {
+		return nil, nil, false
+	}
+	cwd, _ := os.Readlink(filepath.Join(process, "cwd"))
+	files = []string{strings.TrimSuffix(exe, " (deleted)")}
+	for _, argument := range strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")[1:] {
+		switch {
+		case filepath.IsAbs(argument):
+			files = append(files, argument)
+		case cwd != "" && argument != "" && !strings.HasPrefix(argument, "-"):
+			// Only an argument naming an existing file is a path; "serve" is not.
+			if _, err := os.Stat(filepath.Join(cwd, argument)); err == nil {
+				files = append(files, filepath.Join(cwd, argument))
+			}
+		}
+	}
+	for _, line := range strings.Split(string(maps), "\n") {
+		// The path is everything after the fifth field, so it may hold spaces;
+		// the kernel appends " (deleted)" to a removed file.
+		fields := strings.SplitN(line, " ", 6)
+		if len(fields) < 6 {
+			continue
+		}
+		path := strings.TrimSuffix(strings.TrimLeft(fields[5], " "), " (deleted)")
+		if filepath.IsAbs(path) {
+			files = append(files, path)
+		}
+	}
+	tasks, err := os.ReadDir(filepath.Join(process, "task"))
+	if err != nil {
+		// A /proc without per-thread children lists has no children to report.
+		return files, nil, true
+	}
+	for _, task := range tasks {
+		listed, err := os.ReadFile(filepath.Join(process, "task", task.Name(), "children"))
+		if err != nil {
+			return nil, nil, false
+		}
+		children = append(children, strings.Fields(string(listed))...)
+	}
+	return files, children, true
+}
+
+// t3InstallSparesRunning reports whether installing T3 into npm's global
+// prefix provably writes none of the files the running server's process tree
+// uses. The install then needs no idle proof; only a restart does. Any unknown
+// answer is false.
+func t3InstallSparesRunning(observed map[string]any) bool {
+	prefix, _ := observed["npm_prefix"].(string)
+	files, _ := observed["running_files"].([]any)
+	if prefix == "" || len(files) == 0 {
+		return false
+	}
+	// "npm install -g t3" writes the package directory and its bin link and
+	// nothing else in the prefix, so those are the paths a running file must
+	// stay out of. Node itself and other packages in the prefix are untouched,
+	// which matters because the server's children (agent sessions and the MCP
+	// servers they start) routinely run the Node mise selects now.
+	written := []string{
+		filepath.Join(prefix, "lib", "node_modules", "t3"),
+		filepath.Join(prefix, "bin", "t3"),
+	}
+	for _, file := range files {
+		path, _ := file.(string)
+		if path == "" {
+			return false
+		}
+		for _, target := range written {
+			relative, err := filepath.Rel(target, path)
+			if err != nil || relative == "." ||
+				!(relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // firstLine returns the first non-empty line of a command's output.
@@ -269,6 +480,20 @@ func t3Apply(
 		return "converged", nil
 	}
 	if c.DryRun {
+		if spared, _ := before["install_spares_running"].(bool); installed != version && !t3Idle(before) && spared {
+			next := "; restart requires a fresh zero-running-thread observation"
+			if served == version {
+				next = "; no restart needed"
+			}
+			*actions = append(*actions, "would install t3@"+version+" into "+
+				adapterSpecString(before, "npm_prefix")+" beside the running server"+next)
+			return "updated", nil
+		}
+		if installed == version {
+			*actions = append(*actions, "would restart onto t3@"+version+
+				" once a fresh observation proves zero running threads")
+			return "updated", nil
+		}
 		*actions = append(*actions, "would install t3@"+version+
 			"; restart requires a fresh zero-running-thread observation")
 		return "updated", nil
@@ -282,12 +507,15 @@ func t3Apply(
 	if err != nil {
 		return "", err
 	}
-	if !t3Idle(fresh) {
+	busy := !t3Idle(fresh)
+	freshVersion, _ := fresh["installed"].(string)
+	spared, _ := fresh["install_spares_running"].(bool)
+	if busy && (freshVersion == version || !spared) {
 		*actions = append(*actions,
 			"T3 change deferred: steward cannot prove zero running threads")
 		return "deferred", nil
 	}
-	if freshVersion, _ := fresh["installed"].(string); freshVersion != version {
+	if freshVersion != version {
 		if _, err := c.Must([]string{"npm", "install", "-g", "t3@" + version},
 			400*time.Second, "", "install pinned T3"); err != nil {
 			return "", err
@@ -303,6 +531,18 @@ func t3Apply(
 	}
 	if fresh, err = t3Observe(c, spec); err != nil {
 		return "", err
+	}
+	if busy && served == version {
+		// The running server already serves the pin; the install only made the
+		// unit's launcher able to start it again. Nothing needs a restart.
+		*actions = append(*actions, "installed t3@"+version+" into "+
+			adapterSpecString(fresh, "npm_prefix")+" beside the running server; no restart needed")
+		return "updated", nil
+	}
+	if busy {
+		*actions = append(*actions, "T3 installed beside the running server; "+
+			"restart deferred: steward cannot prove zero running threads")
+		return "deferred", nil
 	}
 	if !t3Idle(fresh) {
 		*actions = append(*actions,
