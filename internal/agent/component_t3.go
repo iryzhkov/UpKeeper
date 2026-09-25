@@ -150,6 +150,24 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["check_error"] = firstLine(check.Output)
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
+	observed["running_path"] = nil
+	if path, exists, known := t3RunningProgram(c, service); known && exists {
+		observed["running_path"] = path
+	}
+	observed["npm_prefix"] = nil
+	if prefix := c.Run([]string{"npm", "prefix", "-g"}, 30*time.Second, ""); prefix.OK {
+		if path := firstLine(prefix.Output); filepath.IsAbs(path) {
+			observed["npm_prefix"] = filepath.Clean(path)
+		}
+	}
+	if launcher := t3LauncherProblem(c, service); launcher != "" {
+		observed["launcher_problem"] = launcher
+		warning := launcher + "; a restart of " + service + " will fail until T3 is installed for the selected Node"
+		if earlier, _ := observed["warning"].(string); earlier != "" {
+			warning = earlier + "; " + warning
+		}
+		observed["warning"] = warning
+	}
 	if exists, known := observed["installed_path_exists"].(bool); known && !exists {
 		// A server that still answers from a deleted program keeps working until
 		// it is restarted; the warning travels with the observation so a report
@@ -159,6 +177,48 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 			"; a restart will fail until T3 is reinstalled"
 	}
 	return observed, nil
+}
+
+// t3LauncherProblem reports why the unit's launcher would not start T3, or ""
+// when it would or when that cannot be told. The fleet's unit starts the mise
+// shim, which runs t3 from whichever Node mise selects now; after a Node
+// upgrade that is a prefix T3 was never installed into, while the running
+// server keeps answering from the old one. Only a restart finds out.
+func t3LauncherProblem(c *Context, service string) string {
+	if service == "" {
+		return ""
+	}
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "ExecStart", "--value"},
+		10*time.Second, "")
+	match := t3ExecStartPattern.FindStringSubmatch(result.Output)
+	if !result.OK || match == nil {
+		return ""
+	}
+	path := strings.ReplaceAll(match[1], "%h", c.Home)
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || filepath.Base(resolved) != "mise" {
+		return ""
+	}
+	which := c.Run([]string{resolved, "which", "t3"}, 15*time.Second, "")
+	if which.OK {
+		return ""
+	}
+	return "the unit's launcher " + path + " does not resolve t3 (" + firstLine(which.Output) + ")"
+}
+
+// t3InstallSparesRunning reports whether npm's global prefix is provably not
+// the one the running server was started from. npm then writes into a Node
+// install the running process never reads, so installing needs no idle proof;
+// only a restart does. Any unknown answer is false.
+func t3InstallSparesRunning(observed map[string]any) bool {
+	prefix, _ := observed["npm_prefix"].(string)
+	running, _ := observed["running_path"].(string)
+	if prefix == "" || running == "" {
+		return false
+	}
+	relative, err := filepath.Rel(prefix, running)
+	return err == nil && (relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 // firstLine returns the first non-empty line of a command's output.
@@ -269,6 +329,15 @@ func t3Apply(
 		return "converged", nil
 	}
 	if c.DryRun {
+		if installed != version && !t3Idle(before) && t3InstallSparesRunning(before) {
+			next := "; restart requires a fresh zero-running-thread observation"
+			if served == version {
+				next = "; no restart needed"
+			}
+			*actions = append(*actions, "would install t3@"+version+" into "+
+				adapterSpecString(before, "npm_prefix")+" beside the running server"+next)
+			return "updated", nil
+		}
 		*actions = append(*actions, "would install t3@"+version+
 			"; restart requires a fresh zero-running-thread observation")
 		return "updated", nil
@@ -282,12 +351,14 @@ func t3Apply(
 	if err != nil {
 		return "", err
 	}
-	if !t3Idle(fresh) {
+	busy := !t3Idle(fresh)
+	freshVersion, _ := fresh["installed"].(string)
+	if busy && (freshVersion == version || !t3InstallSparesRunning(fresh)) {
 		*actions = append(*actions,
 			"T3 change deferred: steward cannot prove zero running threads")
 		return "deferred", nil
 	}
-	if freshVersion, _ := fresh["installed"].(string); freshVersion != version {
+	if freshVersion != version {
 		if _, err := c.Must([]string{"npm", "install", "-g", "t3@" + version},
 			400*time.Second, "", "install pinned T3"); err != nil {
 			return "", err
@@ -303,6 +374,18 @@ func t3Apply(
 	}
 	if fresh, err = t3Observe(c, spec); err != nil {
 		return "", err
+	}
+	if busy && served == version {
+		// The running server already serves the pin; the install only made the
+		// unit's launcher able to start it again. Nothing needs a restart.
+		*actions = append(*actions, "installed t3@"+version+" into "+
+			adapterSpecString(fresh, "npm_prefix")+" beside the running server; no restart needed")
+		return "updated", nil
+	}
+	if busy {
+		*actions = append(*actions, "T3 installed beside the running server; "+
+			"restart deferred: steward cannot prove zero running threads")
+		return "deferred", nil
 	}
 	if !t3Idle(fresh) {
 		*actions = append(*actions,
