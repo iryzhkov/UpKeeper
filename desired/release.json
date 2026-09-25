@@ -618,7 +618,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3997f4d7ada96b36e88252ff4fde2fcf9657c50ae9d09d5b3bc85d0f594b092f",
             "size_bytes": 6427,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000000"
           },
           {
@@ -629,7 +629,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "37e202ab9bd16de8fd7f776966079c71b6f554bcaa3eb152099507fad0f4a567",
             "size_bytes": 4541,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000001"
           },
           {
@@ -640,7 +640,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "4c46d852f6737f9c62b85b34275109c8f586b64fd60ae342a58047d35245f595",
             "size_bytes": 3979,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000002"
           },
           {
@@ -651,7 +651,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c9ae9a8555c7533d2cf24a9aaa235a165da35cf3215b194902363de31e53e82f",
             "size_bytes": 4582,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000003"
           },
           {
@@ -662,7 +662,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a7d2b5f8b98251dffa177d8fee927bd697e1e95c23b1eba4955353245b825a38",
             "size_bytes": 7237,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000004"
           },
           {
@@ -673,7 +673,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8b16260ce2c5dd30ea6a16f9ddec1dfb133194fa041e45dd9d2e9657fed207e2",
             "size_bytes": 5039,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000005"
           },
           {
@@ -684,7 +684,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "bd5c3fea79a726bf0e3fed457c327ca93984ac69da3d4b1cb6206bc389a5dadb",
             "size_bytes": 35030,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000006"
           },
           {
@@ -695,7 +695,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "230cde90ae691ba6f3bd750fa1ba1cd11eb589331cc8ef6b9d35237eba073a5c",
             "size_bytes": 9876,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000007"
           },
           {
@@ -706,7 +706,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "27d73291e1e910abbcff278332dd77aa0dbdb96951de109d6af73cec3e4e2610",
             "size_bytes": 16088,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000008"
           },
           {
@@ -717,7 +717,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "27cfe0e3cd91b563f6b5a7b4944b71924b1dcf87b83f3235e323e2722d236189",
             "size_bytes": 16060,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000009"
           },
           {
@@ -728,7 +728,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8a604fb60a21e18c2c220abe427656e007faa841b98a91519789c09ac9989381",
             "size_bytes": 649,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000010"
           },
           {
@@ -739,7 +739,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "e311929865f4759a1735ec53e4f4490abada358e7b8dcfdd496f49a28e556bdd",
             "size_bytes": 36,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000011"
           },
           {
@@ -750,7 +750,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "e2ecc97351436af00f4a65733184f9ec0f748f88f15db46d2801104fa64f6829",
             "size_bytes": 13298,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000012"
           },
           {
@@ -761,7 +761,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f0a7ab37da18a720fa8f7db1aea548ed6e5fbb7e79e640494e16dabe7692eab7",
             "size_bytes": 272,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000013"
           },
           {
@@ -772,7 +772,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "e86f4b56765fc288859a8a1f3e3814c990ba920b326c40c55667b56d44c58c1e",
             "size_bytes": 1902,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000014"
           },
           {
@@ -783,7 +783,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c4d7354b4b063d54601fcdd5097a5b1713d1a1a2e386ac39efa438aa1ffef8ce",
             "size_bytes": 7022,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000015"
           },
           {
@@ -794,7 +794,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "47f4e52c21694def9c7c11cbfbf891ca35eac7a93e395797515be3c8a409ae50",
             "size_bytes": 6589,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000016"
           },
           {
@@ -805,7 +805,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8229ca854e11dc8e6aef2131ee03f31fb1561cf905fab9ccc325180cf3331352",
             "size_bytes": 100,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000017"
           },
           {
@@ -816,7 +816,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f3dd099ce99289bd213914d8ee3e2429b78309c3957ca4583f7659551b1d53c1",
             "size_bytes": 2553,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000018"
           },
           {
@@ -827,7 +827,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8e740bf98446dbd4dfdc132ac4346d9a7eedaf93de6a495889171cf7f99f16bd",
             "size_bytes": 2664,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000019"
           },
           {
@@ -838,7 +838,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "2c20617f87ec8af6a434859f381b2f061a69b530444e74eb39e78bb016a6d1e2",
             "size_bytes": 6446,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000020"
           },
           {
@@ -849,7 +849,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "edebc9e4fcfe102114012575eaa9600b9b5fd08c311664f389c36e7bc717740f",
             "size_bytes": 102,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000021"
           },
           {
@@ -860,7 +860,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "77f3cf31bc99b2f49af943222526531fcc9fc41d047626d3640e875e85af3e84",
             "size_bytes": 8529,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000022"
           },
           {
@@ -871,7 +871,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3e430dbe4334a87597488c060cb3dc3786bb00c9182877d6f5ec41f62490e90b",
             "size_bytes": 103,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000023"
           },
           {
@@ -882,7 +882,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503",
             "size_bytes": 1316,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000024"
           },
           {
@@ -893,7 +893,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
             "size_bytes": 2733,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000025"
           },
           {
@@ -904,7 +904,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "17ab16ce783e4d2801ee52fd9acdf550cbf44de65ae76797a93943bbedf22a13",
             "size_bytes": 2290,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000026"
           },
           {
@@ -915,7 +915,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "327a2b50620e2fd70abc6893cd6965e76b20f8d0adb0dc2c8d5eb3845efb643e",
             "size_bytes": 3331,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000027"
           },
           {
@@ -926,7 +926,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b",
             "size_bytes": 101,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000028"
           },
           {
@@ -937,7 +937,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c00eeea0e13e74fe4a9d84ba0a8542205a1b736d65f13134fe1a6647eb14976f",
             "size_bytes": 5472,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000029"
           },
           {
@@ -948,7 +948,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "10ff989e7498b23b5acb49d5048f11dcd906757d2f79c5cdf8a00001381296f2",
             "size_bytes": 1987,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000030"
           },
           {
@@ -959,7 +959,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b",
             "size_bytes": 113,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000031"
           },
           {
@@ -970,7 +970,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3997f4d7ada96b36e88252ff4fde2fcf9657c50ae9d09d5b3bc85d0f594b092f",
             "size_bytes": 6427,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000032"
           },
           {
@@ -981,7 +981,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "37e202ab9bd16de8fd7f776966079c71b6f554bcaa3eb152099507fad0f4a567",
             "size_bytes": 4541,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000033"
           },
           {
@@ -992,7 +992,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "4c46d852f6737f9c62b85b34275109c8f586b64fd60ae342a58047d35245f595",
             "size_bytes": 3979,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000034"
           },
           {
@@ -1003,7 +1003,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "581e8bb5a521e46bbda8ca7e19b15948bed882187108092ebb90c62513b77528",
             "size_bytes": 6641,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000035"
           },
           {
@@ -1014,7 +1014,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "d1ac25511a936ff4250a48dbcefda363837d6bb9321b3cba73df99fa37270a75",
             "size_bytes": 5993,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000036"
           },
           {
@@ -1025,7 +1025,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c8cb20f68ebf0edb4e497bc11ae5fcaa196004e661cd189015b04f4109ced7f1",
             "size_bytes": 166,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000037"
           },
           {
@@ -1036,7 +1036,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "c9ae9a8555c7533d2cf24a9aaa235a165da35cf3215b194902363de31e53e82f",
             "size_bytes": 4582,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000038"
           },
           {
@@ -1047,7 +1047,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a7d2b5f8b98251dffa177d8fee927bd697e1e95c23b1eba4955353245b825a38",
             "size_bytes": 7237,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000039"
           },
           {
@@ -1058,7 +1058,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "f61c7d249e786a79ef289018901c348271e1798dd0b0bc5607b5c6f4d4a01ab9",
             "size_bytes": 6036,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000040"
           },
           {
@@ -1069,7 +1069,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "714de632d116bb73f65cdb5a882db15b9369a6713b9a47c0fad827848f0bfbe3",
             "size_bytes": 2931,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000041"
           },
           {
@@ -1080,7 +1080,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "723211e878acbc7b6ff09755263f3295cde724ba902ff0064da41eed51d45ad3",
             "size_bytes": 6913,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000042"
           },
           {
@@ -1091,7 +1091,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "5af65e43ab41a350436697b81e27b7f848d36782043b73c322bb2c9fa9cc55dc",
             "size_bytes": 100,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000043"
           },
           {
@@ -1102,7 +1102,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8b16260ce2c5dd30ea6a16f9ddec1dfb133194fa041e45dd9d2e9657fed207e2",
             "size_bytes": 5039,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000044"
           },
           {
@@ -1113,7 +1113,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "9d8114f8ef0b31f535a265fc05c364bd8cf2e2895a830040e06c22acb11f54b0",
             "size_bytes": 918,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000045"
           },
           {
@@ -1124,7 +1124,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a1f4f96838f2ed6282eb28abbbf99029cb8fadce552baf53da90a025b8bffddf",
             "size_bytes": 113,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000046"
           },
           {
@@ -1135,7 +1135,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "bd5c3fea79a726bf0e3fed457c327ca93984ac69da3d4b1cb6206bc389a5dadb",
             "size_bytes": 35030,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000047"
           },
           {
@@ -1146,7 +1146,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "230cde90ae691ba6f3bd750fa1ba1cd11eb589331cc8ef6b9d35237eba073a5c",
             "size_bytes": 9876,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000048"
           },
           {
@@ -1157,7 +1157,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "27d73291e1e910abbcff278332dd77aa0dbdb96951de109d6af73cec3e4e2610",
             "size_bytes": 16088,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000049"
           },
           {
@@ -1168,7 +1168,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "27cfe0e3cd91b563f6b5a7b4944b71924b1dcf87b83f3235e323e2722d236189",
             "size_bytes": 16060,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000050"
           },
           {
@@ -1179,7 +1179,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "cb01f66bebfaa25fa1f88e6b7e769cd9fd9f35b1120b8563749820738814c927",
             "size_bytes": 3549,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000051"
           },
           {
@@ -1190,7 +1190,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "ea6f01cf1b8c06a4b0f5b649d74b1b8ce8685e72af1b38d70d877693e092af0b",
             "size_bytes": 87,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000052"
           },
           {
@@ -1201,7 +1201,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef",
             "size_bytes": 1481,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000053"
           },
           {
@@ -1212,7 +1212,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a",
             "size_bytes": 2214,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000054"
           },
           {
@@ -1223,7 +1223,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "8dea4ae06c7686c50d64e11924408b74088a2fdd06094bf55fa483f268247659",
             "size_bytes": 6341,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000055"
           },
           {
@@ -1234,7 +1234,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "041a68a8cacf7b5b8b8dc06a70729760db25d6742e2370a01fa2d8c856d558ad",
             "size_bytes": 984,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000056"
           },
           {
@@ -1245,7 +1245,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "37cb435707798ffc17d2dc2135b86bb8adb72efbd77acada223ad86710eea463",
             "size_bytes": 6301,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000057"
           },
           {
@@ -1256,7 +1256,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "a9da8a7fd479d0ea45f3b2b7e40f41c6e2f2d14964dbe00a7fd62567909f48ac",
             "size_bytes": 11025,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000058"
           },
           {
@@ -1267,7 +1267,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "d2d7df6cf0d7af6c50189482d22933f6f863a64e46cb566ed203c9c57c9a610b",
             "size_bytes": 1380,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000059"
           },
           {
@@ -1278,7 +1278,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "9aa879fe15a7ac2c09622be0884c1685ac8e107048bdc088b8a5150137c6221c",
             "size_bytes": 10987,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000060"
           },
           {
@@ -1289,7 +1289,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "230cde90ae691ba6f3bd750fa1ba1cd11eb589331cc8ef6b9d35237eba073a5c",
             "size_bytes": 9876,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000061"
           },
           {
@@ -1300,7 +1300,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "99229e540e09ddff1080cf59ca4ae4fa2cacf099c06b4e6e0c413819e411b1aa",
             "size_bytes": 65883,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000062"
           },
           {
@@ -1311,7 +1311,7 @@
             "provenance": "github.com/iryzhkov/UpKeeper",
             "sha256": "b64fb9f88b00dff154a5c122ecdb6486830a0063621bd822c5107bee240be985",
             "size_bytes": 825,
-            "source_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "source_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000063"
           }
         ],
@@ -1729,7 +1729,7 @@
           {
             "path": "README.md",
             "repository": "github.com/iryzhkov/UpKeeper",
-            "repository_revision": "4756e3a1b5bde9a6621863fc11b7a5f16613b4c4",
+            "repository_revision": "1933e50f12981150a65b038e485686b436e2053f",
             "sha256": "4291314171904e0a22d73a3b5c215a67d805d7312ff8faae3341511802429b74"
           }
         ],
@@ -2281,7 +2281,7 @@
       "compatibility": {
         "max": "0.0.38",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.92"
+        "steward_version": "0.11.0-rc.93"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -2295,7 +2295,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.92"
+      "version": "0.11.0-rc.93"
     },
     "worker-configuration": {
       "hosts": {
