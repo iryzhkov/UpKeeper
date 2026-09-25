@@ -2234,6 +2234,13 @@
           "repository": "ssh://igor@normandy/home/igor/Work/steward-tests",
           "setup_profile": "git-status"
         },
+        "scratch": {
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "type": "fresh"
+        },
         "steward-tests-homelab": {
           "default_ref": "ad5533839c4f3ce131da8c81d44cab21f1510918",
           "eligible_workers": [
