@@ -247,8 +247,9 @@ func TestT3InstallSparesRunningNeedsEveryFileOutside(t *testing.T) {
 		{"npm_prefix": "/n/26.10.0"},
 		{"running_files": []any{"/n/26.7.0/bin/node"}},
 		{"npm_prefix": "/n/26.10.0", "running_files": []any{}},
-		{"npm_prefix": "/n/26.10.0", "running_files": []any{"/n/26.10.0/bin/node"}},
-		{"npm_prefix": "/n/26", "running_files": []any{"/n/26/bin/node"}},
+		{"npm_prefix": "/n/26.10.0", "running_files": []any{"/n/26.10.0/bin/t3"}},
+		{"npm_prefix": "/n/26", "running_files": []any{"/n/26/lib/node_modules/t3/dist/bin.mjs"}},
+		{"npm_prefix": "/n/26", "running_files": []any{"/n/26/lib/node_modules/t3"}},
 		{"npm_prefix": "/g", "running_files": []any{"/usr/bin/node", "/g/lib/node_modules/t3/pty.node"}},
 	} {
 		if t3InstallSparesRunning(observed) {
@@ -258,5 +259,11 @@ func TestT3InstallSparesRunningNeedsEveryFileOutside(t *testing.T) {
 	if !t3InstallSparesRunning(map[string]any{"npm_prefix": "/n/26.10.0",
 		"running_files": []any{"/n/26.7.0/bin/node", "/n/26.7.0/lib/node_modules/t3/dist/bin.mjs", "/usr/lib/libc.so.6"}}) {
 		t.Fatal("a different prefix was not spared")
+	}
+	// A child running the prefix's own Node or another package in it reads
+	// nothing the install writes.
+	if !t3InstallSparesRunning(map[string]any{"npm_prefix": "/n/26.10.0",
+		"running_files": []any{"/n/26.7.0/bin/node", "/n/26.10.0/bin/node", "/n/26.10.0/lib/node_modules/other/x.node", "/n/26.10.0/lib/node_modules/t3x/y"}}) {
+		t.Fatal("the prefix's Node or another package blocked the install")
 	}
 }

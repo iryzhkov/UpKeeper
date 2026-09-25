@@ -150,9 +150,10 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["check_error"] = firstLine(check.Output)
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
-	observed["running_files"] = nil
-	if files := t3RunningFiles(c, service); files != nil {
-		observed["running_files"] = files
+	files := t3RunningFiles(c, service)
+	observed["running_file_count"] = nil
+	if files != nil {
+		observed["running_file_count"] = len(files)
 	}
 	observed["npm_prefix"] = nil
 	if prefix := c.Run([]string{"npm", "prefix", "-g"}, 30*time.Second, ""); prefix.OK {
@@ -164,6 +165,10 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 			}
 		}
 	}
+	// The verdict travels in the observation rather than the file list, which
+	// is hundreds of paths on a busy host.
+	observed["install_spares_running"] = t3InstallSparesRunning(
+		map[string]any{"npm_prefix": observed["npm_prefix"], "running_files": files})
 	warnings := []string{}
 	if exists, known := observed["installed_path_exists"].(bool); known && !exists {
 		// A server that still answers from a deleted program keeps working until
@@ -247,8 +252,14 @@ func t3RunningFiles(c *Context, service string) []any {
 			continue
 		}
 		visited[current] = true
-		files, children, ok := t3ProcessFiles(filepath.Join(t3ProcRoot, current))
+		process := filepath.Join(t3ProcRoot, current)
+		files, children, ok := t3ProcessFiles(process)
 		if !ok {
+			// A child that exited while the tree was read holds no files; the
+			// server's sessions start and end short commands all the time.
+			if _, err := os.Stat(process); os.IsNotExist(err) && current != strconv.Itoa(pid) {
+				continue
+			}
 			return nil
 		}
 		candidates = append(candidates, files...)
@@ -326,22 +337,36 @@ func t3ProcessFiles(process string) (files, children []string, ok bool) {
 	return files, children, true
 }
 
-// t3InstallSparesRunning reports whether npm's global prefix provably holds
-// none of the files the running server was started from. npm then writes into
-// a tree the running process never reads, so installing needs no idle proof;
-// only a restart does. Any unknown answer is false.
+// t3InstallSparesRunning reports whether installing T3 into npm's global
+// prefix provably writes none of the files the running server's process tree
+// uses. The install then needs no idle proof; only a restart does. Any unknown
+// answer is false.
 func t3InstallSparesRunning(observed map[string]any) bool {
 	prefix, _ := observed["npm_prefix"].(string)
 	files, _ := observed["running_files"].([]any)
 	if prefix == "" || len(files) == 0 {
 		return false
 	}
+	// "npm install -g t3" writes the package directory and its bin link and
+	// nothing else in the prefix, so those are the paths a running file must
+	// stay out of. Node itself and other packages in the prefix are untouched,
+	// which matters because the server's children (agent sessions and the MCP
+	// servers they start) routinely run the Node mise selects now.
+	written := []string{
+		filepath.Join(prefix, "lib", "node_modules", "t3"),
+		filepath.Join(prefix, "bin", "t3"),
+	}
 	for _, file := range files {
 		path, _ := file.(string)
-		relative, err := filepath.Rel(prefix, path)
-		if path == "" || err != nil ||
-			!(relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+		if path == "" {
 			return false
+		}
+		for _, target := range written {
+			relative, err := filepath.Rel(target, path)
+			if err != nil || relative == "." ||
+				!(relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+				return false
+			}
 		}
 	}
 	return true
@@ -455,7 +480,7 @@ func t3Apply(
 		return "converged", nil
 	}
 	if c.DryRun {
-		if installed != version && !t3Idle(before) && t3InstallSparesRunning(before) {
+		if spared, _ := before["install_spares_running"].(bool); installed != version && !t3Idle(before) && spared {
 			next := "; restart requires a fresh zero-running-thread observation"
 			if served == version {
 				next = "; no restart needed"
@@ -484,7 +509,8 @@ func t3Apply(
 	}
 	busy := !t3Idle(fresh)
 	freshVersion, _ := fresh["installed"].(string)
-	if busy && (freshVersion == version || !t3InstallSparesRunning(fresh)) {
+	spared, _ := fresh["install_spares_running"].(bool)
+	if busy && (freshVersion == version || !spared) {
 		*actions = append(*actions,
 			"T3 change deferred: steward cannot prove zero running threads")
 		return "deferred", nil
