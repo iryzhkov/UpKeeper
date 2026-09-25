@@ -150,31 +150,36 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["check_error"] = firstLine(check.Output)
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
-	observed["running_path"] = nil
-	if path, exists, known := t3RunningProgram(c, service); known && exists {
-		observed["running_path"] = path
+	observed["running_files"] = nil
+	if files := t3RunningFiles(c, service); files != nil {
+		observed["running_files"] = files
 	}
 	observed["npm_prefix"] = nil
 	if prefix := c.Run([]string{"npm", "prefix", "-g"}, 30*time.Second, ""); prefix.OK {
 		if path := firstLine(prefix.Output); filepath.IsAbs(path) {
-			observed["npm_prefix"] = filepath.Clean(path)
+			// A prefix reached through a symlink is the directory it names; an
+			// unresolvable one is unknown, which never counts as spared.
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				observed["npm_prefix"] = resolved
+			}
 		}
 	}
-	if launcher := t3LauncherProblem(c, service); launcher != "" {
-		observed["launcher_problem"] = launcher
-		warning := launcher + "; a restart of " + service + " will fail until T3 is installed for the selected Node"
-		if earlier, _ := observed["warning"].(string); earlier != "" {
-			warning = earlier + "; " + warning
-		}
-		observed["warning"] = warning
-	}
+	warnings := []string{}
 	if exists, known := observed["installed_path_exists"].(bool); known && !exists {
 		// A server that still answers from a deleted program keeps working until
 		// it is restarted; the warning travels with the observation so a report
 		// shows it even when nothing is refused.
-		observed["warning"] = "T3 program missing on disk: " +
-			adapterSpecString(observed, "installed_path") +
-			"; a restart will fail until T3 is reinstalled"
+		warnings = append(warnings, "T3 program missing on disk: "+
+			adapterSpecString(observed, "installed_path")+
+			"; a restart will fail until T3 is reinstalled")
+	}
+	if launcher := t3LauncherProblem(c, service); launcher != "" {
+		observed["launcher_problem"] = launcher
+		warnings = append(warnings, launcher+"; a restart of "+service+
+			" will fail until T3 is installed for the selected Node")
+	}
+	if len(warnings) > 0 {
+		observed["warning"] = strings.Join(warnings, "; ")
 	}
 	return observed, nil
 }
@@ -207,18 +212,82 @@ func t3LauncherProblem(c *Context, service string) string {
 	return "the unit's launcher " + path + " does not resolve t3 (" + firstLine(which.Output) + ")"
 }
 
-// t3InstallSparesRunning reports whether npm's global prefix is provably not
-// the one the running server was started from. npm then writes into a Node
-// install the running process never reads, so installing needs no idle proof;
+// t3RunningFiles lists, resolved, the files the running server was started
+// from: its executable, every file-path argument on its command line (the T3
+// entry script), and every file it has mapped (Node itself, libraries and
+// native modules such as node-pty). The Node binary alone is not enough: npm's
+// global prefix can be configured away from Node, and then T3's own code lives
+// somewhere the executable's path says nothing about. nil means the answer is
+// unknown, because there is no running process or /proc could not be read.
+func t3RunningFiles(c *Context, service string) []any {
+	if service == "" {
+		return nil
+	}
+	result := c.Run(
+		[]string{"systemctl", "--user", "show", service, "-p", "MainPID", "--value"},
+		10*time.Second, "")
+	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
+	if !result.OK || err != nil || pid <= 0 {
+		return nil
+	}
+	process := filepath.Join(t3ProcRoot, strconv.Itoa(pid))
+	exe, err := os.Readlink(filepath.Join(process, "exe"))
+	if err != nil || filepath.Base(exe) == "mise" {
+		return nil
+	}
+	cmdline, err := os.ReadFile(filepath.Join(process, "cmdline"))
+	if err != nil {
+		return nil
+	}
+	maps, err := os.ReadFile(filepath.Join(process, "maps"))
+	if err != nil {
+		return nil
+	}
+	candidates := []string{strings.TrimSuffix(exe, " (deleted)")}
+	for _, argument := range strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")[1:] {
+		if filepath.IsAbs(argument) {
+			candidates = append(candidates, argument)
+		}
+	}
+	for _, line := range strings.Split(string(maps), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 6 && filepath.IsAbs(fields[5]) {
+			candidates = append(candidates, fields[5])
+		}
+	}
+	seen := map[string]bool{}
+	files := []any{}
+	for _, candidate := range candidates {
+		path := candidate
+		if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+			path = resolved
+		}
+		if !seen[path] {
+			seen[path] = true
+			files = append(files, path)
+		}
+	}
+	return files
+}
+
+// t3InstallSparesRunning reports whether npm's global prefix provably holds
+// none of the files the running server was started from. npm then writes into
+// a tree the running process never reads, so installing needs no idle proof;
 // only a restart does. Any unknown answer is false.
 func t3InstallSparesRunning(observed map[string]any) bool {
 	prefix, _ := observed["npm_prefix"].(string)
-	running, _ := observed["running_path"].(string)
-	if prefix == "" || running == "" {
+	files, _ := observed["running_files"].([]any)
+	if prefix == "" || len(files) == 0 {
 		return false
 	}
-	relative, err := filepath.Rel(prefix, running)
-	return err == nil && (relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+	for _, file := range files {
+		path, _ := file.(string)
+		relative, err := filepath.Rel(prefix, path)
+		if path == "" || err != nil ||
+			!(relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+			return false
+		}
+	}
+	return true
 }
 
 // firstLine returns the first non-empty line of a command's output.
@@ -336,6 +405,11 @@ func t3Apply(
 			}
 			*actions = append(*actions, "would install t3@"+version+" into "+
 				adapterSpecString(before, "npm_prefix")+" beside the running server"+next)
+			return "updated", nil
+		}
+		if installed == version {
+			*actions = append(*actions, "would restart onto t3@"+version+
+				" once a fresh observation proves zero running threads")
 			return "updated", nil
 		}
 		*actions = append(*actions, "would install t3@"+version+

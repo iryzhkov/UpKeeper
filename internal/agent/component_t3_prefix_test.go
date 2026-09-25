@@ -16,6 +16,11 @@ type t3PrefixHost struct {
 	t3TestHost
 	runningPrefix string
 	npmPrefix     string
+	// codePrefix is where T3's entry script and its native module live, when
+	// that is not the running Node's own prefix.
+	codePrefix string
+	// npmPrefixVia, when set, is a symlink to npmPrefix that npm reports.
+	npmPrefixVia string
 }
 
 func t3PrefixPrepare(t *testing.T, host t3PrefixHost) (*Context, *adapterTestRunner) {
@@ -24,6 +29,31 @@ func t3PrefixPrepare(t *testing.T, host t3PrefixHost) (*Context, *adapterTestRun
 	running := context.Path(host.runningPrefix + "/bin/node")
 	adapterTestWrite(t, running, "#!/bin/sh\n")
 	t3TestProc(t, "4242", running)
+	code := host.codePrefix
+	if code == "" {
+		code = host.runningPrefix
+	}
+	script := context.Path(code + "/lib/node_modules/t3/dist/bin.mjs")
+	native := context.Path(code + "/lib/node_modules/t3/node_modules/node-pty/build/Release/pty.node")
+	adapterTestWrite(t, script, "\n")
+	adapterTestWrite(t, native, "\n")
+	process := filepath.Join(t3ProcRoot, "4242")
+	adapterTestWrite(t, filepath.Join(process, "cmdline"),
+		running+"\x00"+script+"\x00serve\x00--port\x007391\x00")
+	adapterTestWrite(t, filepath.Join(process, "maps"),
+		"55d0-55d1 r--p 00000000 103:02 1 "+running+"\n"+
+			"7f00-7f01 r-xp 00000000 103:02 2 "+native+"\n"+
+			"7f02-7f03 rw-p 00000000 00:00 0 [heap]\n")
+	if err := os.MkdirAll(context.Path(host.npmPrefix), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reported := host.npmPrefix
+	if host.npmPrefixVia != "" {
+		if err := os.Symlink(context.Path(host.npmPrefix), context.Path(host.npmPrefixVia)); err != nil {
+			t.Fatal(err)
+		}
+		reported = host.npmPrefixVia
+	}
 	shim := context.Path(".local/share/mise/shims/t3")
 	mise := context.Path("usr/bin/mise")
 	adapterTestWrite(t, mise, "#!/bin/sh\n")
@@ -39,7 +69,7 @@ func t3PrefixPrepare(t *testing.T, host t3PrefixHost) (*Context, *adapterTestRun
 	runner.handle = func(command procx.Command) procx.Result {
 		switch {
 		case adapterTestMatches(command.Argv, "npm", "prefix", "-g"):
-			return procx.Result{Stdout: context.Path(host.npmPrefix) + "\n"}
+			return procx.Result{Stdout: context.Path(reported) + "\n"}
 		case adapterTestMatches(command.Argv, "npm", "install"):
 			installedNow = true
 		case adapterTestMatches(command.Argv, "mise", "which", "t3"):
@@ -133,18 +163,59 @@ func TestT3BusyServerInNpmPrefixIsNotTouched(t *testing.T) {
 	}
 }
 
-func TestT3InstallSparesRunningNeedsBothFacts(t *testing.T) {
+// A Node outside npm's prefix does not make the install safe when T3's own
+// code lives inside it: npm's global prefix can be configured away from Node
+// (an ~/.npmrc prefix, say), and then the entry script and node-pty are the
+// files npm would replace.
+func TestT3BusyServerWithCodeInNpmPrefixIsNotTouched(t *testing.T) {
+	context, runner := t3PrefixPrepare(t, t3PrefixHost{
+		t3TestHost: t3TestHost{
+			served: t3TestPinned, running: 1, checkOK: true, active: true,
+		},
+		runningPrefix: "usr", codePrefix: ".npm-global", npmPrefix: ".npm-global",
+	})
+	spec := context.Spec("t3")
+	before, _ := t3Observe(context, spec)
+	actions := []string{}
+	state, err := t3Apply(context, spec, before, &actions)
+	if err != nil || state != "deferred" || runner.ran("npm", "install") {
+		t.Fatalf("state = %q, error = %v, calls %v", state, err, runner.calls)
+	}
+}
+
+// A prefix npm reports through a symlink is the directory it points at: here
+// the running server's own, so nothing is installed.
+func TestT3SymlinkedNpmPrefixIsResolved(t *testing.T) {
+	context, runner := t3PrefixPrepare(t, t3PrefixHost{
+		t3TestHost: t3TestHost{
+			served: t3TestPinned, running: 1, checkOK: true, active: true,
+		},
+		runningPrefix: "node/26.7.0", npmPrefix: "node/26.7.0", npmPrefixVia: "node/26",
+	})
+	spec := context.Spec("t3")
+	before, _ := t3Observe(context, spec)
+	actions := []string{}
+	state, err := t3Apply(context, spec, before, &actions)
+	if err != nil || state != "deferred" || runner.ran("npm", "install") {
+		t.Fatalf("state = %q, error = %v, calls %v", state, err, runner.calls)
+	}
+}
+
+func TestT3InstallSparesRunningNeedsEveryFileOutside(t *testing.T) {
 	for _, observed := range []map[string]any{
 		{"npm_prefix": "/n/26.10.0"},
-		{"running_path": "/n/26.7.0/bin/node"},
-		{"npm_prefix": "/n/26.10.0", "running_path": "/n/26.10.0/bin/node"},
-		{"npm_prefix": "/n/26", "running_path": "/n/26/bin/node"},
+		{"running_files": []any{"/n/26.7.0/bin/node"}},
+		{"npm_prefix": "/n/26.10.0", "running_files": []any{}},
+		{"npm_prefix": "/n/26.10.0", "running_files": []any{"/n/26.10.0/bin/node"}},
+		{"npm_prefix": "/n/26", "running_files": []any{"/n/26/bin/node"}},
+		{"npm_prefix": "/g", "running_files": []any{"/usr/bin/node", "/g/lib/node_modules/t3/pty.node"}},
 	} {
 		if t3InstallSparesRunning(observed) {
 			t.Fatalf("spared on %v", observed)
 		}
 	}
-	if !t3InstallSparesRunning(map[string]any{"npm_prefix": "/n/26.10.0", "running_path": "/n/26.7.0/bin/node"}) {
+	if !t3InstallSparesRunning(map[string]any{"npm_prefix": "/n/26.10.0",
+		"running_files": []any{"/n/26.7.0/bin/node", "/n/26.7.0/lib/node_modules/t3/dist/bin.mjs", "/usr/lib/libc.so.6"}}) {
 		t.Fatal("a different prefix was not spared")
 	}
 }
