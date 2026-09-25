@@ -201,6 +201,47 @@ func TestT3SymlinkedNpmPrefixIsResolved(t *testing.T) {
 	}
 }
 
+// A child of the server loads files of its own, and a relative entry script is
+// resolved against the working directory; both count, and a path with spaces
+// in maps is read whole.
+func TestT3RunningFilesReadsTheProcessTree(t *testing.T) {
+	context, _ := t3PrefixPrepare(t, t3PrefixHost{
+		t3TestHost:    t3TestHost{served: t3TestPinned, running: 1, checkOK: true, active: true},
+		runningPrefix: "node/26.7.0", npmPrefix: "node/26.10.0",
+	})
+	main := filepath.Join(t3ProcRoot, "4242")
+	child := filepath.Join(t3ProcRoot, "4300")
+	workdir := context.Path("work dir")
+	script := filepath.Join(workdir, "bin/t3")
+	spaced := context.Path("node/26.10.0/lib/node_modules/t3/a b/helper.node")
+	adapterTestWrite(t, script, "\n")
+	adapterTestWrite(t, spaced, "\n")
+	adapterTestWrite(t, filepath.Join(main, "task/4242/children"), "4300 ")
+	adapterTestWrite(t, filepath.Join(child, "cmdline"), "node\x00bin/t3\x00worker\x00")
+	if err := os.Symlink(context.Path("node/26.7.0/bin/node"), filepath.Join(child, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(workdir, filepath.Join(child, "cwd")); err != nil {
+		t.Fatal(err)
+	}
+	adapterTestWrite(t, filepath.Join(child, "maps"), "7f00-7f01 r-xp 00000000 103:02 9                          "+spaced+"\n")
+	files := t3RunningFiles(context, "t3code.service")
+	want := map[string]bool{script: false, spaced: false}
+	for _, file := range files {
+		if _, ok := want[file.(string)]; ok {
+			want[file.(string)] = true
+		}
+	}
+	for path, found := range want {
+		if !found {
+			t.Fatalf("%s missing from %v", path, files)
+		}
+	}
+	if t3InstallSparesRunning(map[string]any{"npm_prefix": context.Path("node/26.10.0"), "running_files": files}) {
+		t.Fatal("a child's file inside npm's prefix was spared")
+	}
+}
+
 func TestT3InstallSparesRunningNeedsEveryFileOutside(t *testing.T) {
 	for _, observed := range []map[string]any{
 		{"npm_prefix": "/n/26.10.0"},

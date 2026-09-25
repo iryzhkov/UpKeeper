@@ -230,29 +230,29 @@ func t3RunningFiles(c *Context, service string) []any {
 	if !result.OK || err != nil || pid <= 0 {
 		return nil
 	}
-	process := filepath.Join(t3ProcRoot, strconv.Itoa(pid))
-	exe, err := os.Readlink(filepath.Join(process, "exe"))
-	if err != nil || filepath.Base(exe) == "mise" {
+	main := filepath.Join(t3ProcRoot, strconv.Itoa(pid))
+	if exe, err := os.Readlink(filepath.Join(main, "exe")); err != nil || filepath.Base(exe) == "mise" {
 		return nil
 	}
-	cmdline, err := os.ReadFile(filepath.Join(process, "cmdline"))
-	if err != nil {
-		return nil
-	}
-	maps, err := os.ReadFile(filepath.Join(process, "maps"))
-	if err != nil {
-		return nil
-	}
-	candidates := []string{strings.TrimSuffix(exe, " (deleted)")}
-	for _, argument := range strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")[1:] {
-		if filepath.IsAbs(argument) {
-			candidates = append(candidates, argument)
+	// The server's children (a PTY helper, a worker) can load files of their
+	// own, so the whole process tree is read; any process that cannot be read
+	// makes the answer unknown.
+	candidates := []string{}
+	pending := []string{strconv.Itoa(pid)}
+	visited := map[string]bool{}
+	for len(pending) > 0 {
+		current := pending[0]
+		pending = pending[1:]
+		if visited[current] {
+			continue
 		}
-	}
-	for _, line := range strings.Split(string(maps), "\n") {
-		if fields := strings.Fields(line); len(fields) >= 6 && filepath.IsAbs(fields[5]) {
-			candidates = append(candidates, fields[5])
+		visited[current] = true
+		files, children, ok := t3ProcessFiles(filepath.Join(t3ProcRoot, current))
+		if !ok {
+			return nil
 		}
+		candidates = append(candidates, files...)
+		pending = append(pending, children...)
 	}
 	seen := map[string]bool{}
 	files := []any{}
@@ -267,6 +267,63 @@ func t3RunningFiles(c *Context, service string) []any {
 		}
 	}
 	return files
+}
+
+// t3ProcessFiles reads one process's executable, the file-path arguments on
+// its command line (a relative one resolved against its working directory)
+// and its mapped files, plus the ids of its children. ok is false when any of
+// that cannot be read.
+func t3ProcessFiles(process string) (files, children []string, ok bool) {
+	exe, err := os.Readlink(filepath.Join(process, "exe"))
+	if err != nil {
+		return nil, nil, false
+	}
+	cmdline, err := os.ReadFile(filepath.Join(process, "cmdline"))
+	if err != nil {
+		return nil, nil, false
+	}
+	maps, err := os.ReadFile(filepath.Join(process, "maps"))
+	if err != nil {
+		return nil, nil, false
+	}
+	cwd, _ := os.Readlink(filepath.Join(process, "cwd"))
+	files = []string{strings.TrimSuffix(exe, " (deleted)")}
+	for _, argument := range strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")[1:] {
+		switch {
+		case filepath.IsAbs(argument):
+			files = append(files, argument)
+		case cwd != "" && argument != "" && !strings.HasPrefix(argument, "-"):
+			// Only an argument naming an existing file is a path; "serve" is not.
+			if _, err := os.Stat(filepath.Join(cwd, argument)); err == nil {
+				files = append(files, filepath.Join(cwd, argument))
+			}
+		}
+	}
+	for _, line := range strings.Split(string(maps), "\n") {
+		// The path is everything after the fifth field, so it may hold spaces;
+		// the kernel appends " (deleted)" to a removed file.
+		fields := strings.SplitN(line, " ", 6)
+		if len(fields) < 6 {
+			continue
+		}
+		path := strings.TrimSuffix(strings.TrimLeft(fields[5], " "), " (deleted)")
+		if filepath.IsAbs(path) {
+			files = append(files, path)
+		}
+	}
+	tasks, err := os.ReadDir(filepath.Join(process, "task"))
+	if err != nil {
+		// A /proc without per-thread children lists has no children to report.
+		return files, nil, true
+	}
+	for _, task := range tasks {
+		listed, err := os.ReadFile(filepath.Join(process, "task", task.Name(), "children"))
+		if err != nil {
+			return nil, nil, false
+		}
+		children = append(children, strings.Fields(string(listed))...)
+	}
+	return files, children, true
 }
 
 // t3InstallSparesRunning reports whether npm's global prefix provably holds
