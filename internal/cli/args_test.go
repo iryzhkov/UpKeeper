@@ -132,8 +132,18 @@ func TestUsageErrors(t *testing.T) {
 			"an unknown command",
 			[]string{"converge"},
 			`argument command: invalid choice: "converge" (choose from "doctor", ` +
-				`"status", "push", "pull", "rollback", "fleet-plan", "project", "provider", "self-pull", "scheduled-pull", ` +
-				`"install-self-timer", "install-pull-timer", "hold", "version")`,
+				`"status", "push", "pull", "rollback", "fleet-plan", "project", "provider", "author", "self-pull", ` +
+				`"scheduled-pull", "install-self-timer", "install-pull-timer", "hold", "version")`,
+		},
+		{
+			"author without its pins",
+			[]string{"author", "--dry-run"},
+			"the following arguments are required: --steward, --omarchy-setup",
+		},
+		{
+			"author with a flag it does not take",
+			[]string{"author", "--steward", "0.11.0", "--omarchy-setup", "abcdef1", "--components", "t3"},
+			"unrecognized arguments: --components",
 		},
 		{
 			"no command at all",

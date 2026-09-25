@@ -19,6 +19,8 @@ GitHub-gated release and converges through its own local timer. See
 ./scripts/upkeeper push gitea --no-push      # capture and commit only
 ./scripts/upkeeper pull --hosts homelab omarchy-pc --dry-run
 ./scripts/upkeeper pull --all
+./bin/upkeeper author --steward VERSION --omarchy-setup COMMIT [--dry-run]   # authored pins, no capture
+./bin/upkeeper push --authored --expect-head SHA --expect-release-sha256 SHA256
 ```
 
 `push` captures clean reachable checkout commits, the installed T3/steward pair and
@@ -30,6 +32,9 @@ omarchy-setup checkout generates, and refuses when it has drifted or when the ch
 cannot be run at all.
 `pull` carries the validated payload over strict SSH, observes before changing,
 preserves unowned settings and compensates failed environment/Huyang/steward activation.
+`author` writes a release that only moves the Steward and omarchy-setup pins without
+capturing any host: it refreshes the skills and instructions derived from that commit and
+leaves every other byte of the manifest alone, for `push --authored` to publish.
 See [the release guide](docs/upkeeper-push-pull.md) and
 [the S4 distribution contract](docs/worker-distribution-v1.md).
 

@@ -112,6 +112,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runProject(parsed, streams)
 	case "provider":
 		return runProvider(parsed, streams)
+	case "author":
+		return runAuthor(parsed, streams)
 	case "self-pull":
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":
