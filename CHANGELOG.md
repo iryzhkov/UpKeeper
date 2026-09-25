@@ -8,6 +8,14 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- `upkeeper author --steward VERSION --omarchy-setup COMMIT` writes an authored
+  release into `desired/release.json` without capturing any host. It sets the
+  Steward and omarchy-setup pins and refreshes the agent-environment skills and
+  instructions that derive from that commit, running the commit's own
+  instruction generator against a scratch home. It replaces the out-of-repository
+  helper that had to copy a test file into the tree, and its output is
+  byte-identical to that helper's for the same inputs.
+
 - UpKeeper is now the single publisher of repository-owned skills. Capture reads
   the complete skill trees from the pinned omarchy-setup checkout, ignores stale
   installed copies of those names, and projects the reviewed bytes to

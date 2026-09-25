@@ -43,6 +43,7 @@ var commandSummaries = [][2]string{
 	{"fleet-plan", "report the Steward fleet intent and what enrolling it would change"},
 	{"project", "add or remove a Steward project in the release manifest and show the plan"},
 	{"provider", "register or remove a provider instance and its quota binding in the release manifest"},
+	{"author", "pin a Steward release and an omarchy-setup commit in the release manifest, without capturing this host"},
 	{"self-pull", "refresh the gated release and converge this machine only"},
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
@@ -74,6 +75,8 @@ func helpText(program, command string) string {
 		return projectHelp(program)
 	case "provider":
 		return providerHelp(program)
+	case "author":
+		return authorHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
 	case "hold":
@@ -264,6 +267,40 @@ func providerHelp(program string) string {
 		"\nexit codes: 0 edited, 2 malformed command line, 30 refused (nothing written)\n" +
 		"\nexample:\n  " + program + " provider add opencode --quota-pool opencode-free \\\n" +
 		"    --hosts homelab,normandy,omarchy-pc --models glm-4.6,kimi-k2\n"
+}
+
+// authorHelp documents the command that writes an authored release. Its one
+// promise is determinism: the output depends on the named versions and the
+// checkout's HEAD, never on what this host has installed.
+func authorHelp(program string) string {
+	return "usage: " + program + " author [-h] --steward VERSION --omarchy-setup COMMIT" +
+		" [--omarchy-setup-repo PATH] [--dry-run] [--json]\n\n" +
+		"Edit desired/release.json in this checkout for an authored release: pin\n" +
+		"t3-steward.version and t3.compatibility.steward_version to VERSION and\n" +
+		"omarchy-setup.commit to COMMIT, then refresh every agent-environment file that\n" +
+		"derives from that commit: the skills under config/claude/skills, projected to\n" +
+		".claude/skills and .agents/skills; ~/.config/agents and ~/.codex/AGENTS.md as the\n" +
+		"commit's own config/bin/agents-instructions-gen writes them into an empty scratch\n" +
+		"home; and ~/.claude/omarchy-setup/CLAUDE.md. New skill files are added, files the\n" +
+		"commit no longer produces are retired, and the spec is rebuilt the way capture\n" +
+		"builds it, with the instruction provenance at this checkout's HEAD. When no\n" +
+		"derived file changed, the component is left byte for byte as it was.\n\n" +
+		"Nothing is read from this host's home directory. The commit is read from\n" +
+		"the omarchy-setup clone, which fetches origin first and must reach it from\n" +
+		"the ref the release follows. The checkout may have no local change except to\n" +
+		"desired/release.json itself. The edit is validated as push validates it, and\n" +
+		"every other byte of the manifest is preserved.\n\n" +
+		"It commits nothing and pushes nothing: review the diff, commit it, and publish\n" +
+		"it with `" + program + " push --authored --expect-head SHA --expect-release-sha256 SHA256`.\n\n" +
+		"options:\n" + helpOption + "\n" +
+		describe("  --steward VERSION", "t3-steward release version to pin") +
+		describe("  --omarchy-setup COMMIT", "omarchy-setup commit to pin, in hexadecimal; recorded in full") +
+		describe("  --omarchy-setup-repo PATH", "local omarchy-setup clone (default: ~/Work/omarchy-setup)") +
+		describe("  --dry-run", "report what would change; write nothing") +
+		describe("  --json", "") +
+		"\nexit codes: 0 authored or already current, 2 malformed command line, 30 refused (nothing written)\n" +
+		"\nexample:\n  " + program + " author --steward 0.11.0-rc.95 \\\n" +
+		"    --omarchy-setup 89e222624c983f33b4f54d28fb5b4c3ea5b555ad --dry-run\n"
 }
 
 func scheduledHelp(program, command string) string {

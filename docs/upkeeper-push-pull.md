@@ -39,6 +39,47 @@ and credential-bearing MCP registration fields. It never silently substitutes de
 for a damaged existing manifest. After capture, push commits only release paths and
 pushes to explicitly named remotes or all configured remotes.
 
+## Authored releases
+
+```bash
+git switch -c release/steward-rc96 origin/main
+./bin/upkeeper author --steward 0.11.0-rc.96 --omarchy-setup <commit> --dry-run
+./bin/upkeeper author --steward 0.11.0-rc.96 --omarchy-setup <commit>
+git commit -m "Pin Steward 0.11.0-rc.96" -- desired/release.json
+./bin/upkeeper push --authored --expect-head <that commit> --expect-release-sha256 <digest>
+```
+
+A release that only moves the Steward pin and the omarchy-setup commit does not need a
+capture, and should not take one: a capture photographs one host. `author` computes the
+release from its inputs instead. It sets `t3-steward.version` and
+`t3.compatibility.steward_version` to the Steward version and `omarchy-setup.commit` to the
+commit, then refreshes every agent-environment file that derives from that commit:
+
+- the skills under `config/claude/skills`, projected to `.claude/skills` and
+  `.agents/skills` exactly as capture projects them, with the modes Git records;
+- `~/.config/agents/*.md` and `~/.codex/AGENTS.md`, as the commit's own
+  `config/bin/agents-instructions-gen` writes them into an empty scratch home;
+- `~/.claude/omarchy-setup/CLAUDE.md`, from `config/claude/CLAUDE.md`.
+
+A file the commit adds is added, and a file it no longer produces, including every file of a
+skill the previously pinned commit had, is retired with the tombstone capture would write.
+When anything changed, the spec is rebuilt with the builder capture uses and the instruction
+provenance is moved to the checkout's `HEAD`; when nothing did, the component is left byte for
+byte as it was, so authoring the release that is already published reports no changes.
+
+The commit is read out of the omarchy-setup clone (`--omarchy-setup-repo`, default
+`~/Work/omarchy-setup`) after fetching origin, and must be reachable from the ref the release
+follows. Nothing is read from the home directory of the host running the command, and the
+scratch tree and home are removed afterwards. The checkout may carry no local change except to
+`desired/release.json` itself, so that a mistaken run can be recomputed before it is
+committed. The result is validated the way authored publication validates it, written in the
+manifest's canonical encoding with every other byte preserved, and never committed or pushed.
+`author` does not change the T3 version or its tested range, or the Steward session hook
+digest: a Steward release that changes either still needs a capture.
+
+`push --authored` publishes the reviewed bytes as they stand, without recapturing anything,
+once `HEAD` and the release digest match both fences.
+
 ## The resident agent instructions are gated before anything is captured
 
 A capture photographs the pushing host's shared instruction files and personal skills,

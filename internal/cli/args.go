@@ -87,6 +87,11 @@ type arguments struct {
 	providerPool     string
 	providerModels   []string
 	providerHosts    []string
+
+	// author
+	authorSteward         string
+	authorSetupCommit     string
+	authorSetupRepository string
 }
 
 // Commands are the subcommands `upkeeper` accepts. The two names beginning
@@ -94,7 +99,7 @@ type arguments struct {
 // target; they are deliberately undocumented in help output.
 var Commands = []string{
 	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project", "provider",
-	"self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
+	"author", "self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
 	"hold", "version",
 }
 
@@ -138,6 +143,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseProject(parsed, rest)
 	case "provider":
 		return parsed, parseProvider(parsed, rest)
+	case "author":
+		return parsed, parseAuthor(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
 	case "hold":
@@ -519,6 +526,49 @@ func parseProvider(parsed *arguments, argv []string) error {
 		if len(missing) > 0 {
 			return usagef("the following arguments are required: %s", strings.Join(missing, ", "))
 		}
+	}
+	return nil
+}
+
+// parseAuthor reads `author --steward VERSION --omarchy-setup COMMIT
+// [--omarchy-setup-repo PATH] [--dry-run] [--json]`. The repository has no
+// default here because the default is a home-relative path, which the command
+// resolves when it runs.
+func parseAuthor(parsed *arguments, argv []string) error {
+	for index := 0; index < len(argv); index++ {
+		token := argv[index]
+		switch token {
+		case "--json":
+			parsed.asJSON = true
+		case "--dry-run":
+			parsed.dryRun = true
+		case "--steward", "--omarchy-setup", "--omarchy-setup-repo":
+			value, next, err := takeValue(argv, index, token)
+			if err != nil {
+				return err
+			}
+			index = next
+			switch token {
+			case "--steward":
+				parsed.authorSteward = value
+			case "--omarchy-setup":
+				parsed.authorSetupCommit = value
+			case "--omarchy-setup-repo":
+				parsed.authorSetupRepository = value
+			}
+		default:
+			return unrecognized(token)
+		}
+	}
+	missing := []string{}
+	if parsed.authorSteward == "" {
+		missing = append(missing, "--steward")
+	}
+	if parsed.authorSetupCommit == "" {
+		missing = append(missing, "--omarchy-setup")
+	}
+	if len(missing) > 0 {
+		return usagef("the following arguments are required: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }
