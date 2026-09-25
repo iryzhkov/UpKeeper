@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
@@ -59,11 +60,30 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Setenv("TMPDIR", subject.temporary)
 
-	manifest, err := os.ReadFile(filepath.Join("..", "..", "testdata", "release", "paired-v1.json"))
+	// The previously pinned commit has no skills yet, and the release pins it.
+	write(t, filepath.Join(subject.setup, "config/claude/CLAUDE.md"), "# Global\n", 0o644)
+	write(t, filepath.Join(subject.setup, author.Generator), fakeGenerator, 0o755)
+	gitIn(t, subject.setup, "init", "--quiet", "--initial-branch=main")
+	pinned := subject.commit(t, subject.setup, "setup")
+	// origin is the release's source spelled the scp way, and Git is told to
+	// fetch it from the clone itself, so that fetching needs no network.
+	gitIn(t, subject.setup, "remote", "add", "origin", fixtureOrigin)
+	gitIn(t, subject.setup, "config", "url."+subject.setup+".insteadOf", fixtureOrigin)
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "release", "paired-v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(subject.root, release.File), string(manifest), 0o644)
+	manifest, err := canonjson.DecodeObject(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest["components"].(map[string]any)["omarchy-setup"].(map[string]any)["commit"] = pinned
+	encoded, err := canonjson.MarshalFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(subject.root, release.File), string(encoded), 0o644)
 	write(t, filepath.Join(subject.root, "README.md"), "UpKeeper\n", 0o644)
 	gitIn(t, subject.root, "init", "--quiet", "--initial-branch=main")
 	subject.commit(t, subject.root, "fixture release")
@@ -72,14 +92,13 @@ func newFixture(t *testing.T) *fixture {
 	write(t, filepath.Join(subject.setup, "config/claude/skills/alpha/references/notes.md"), "notes\n", 0o644)
 	write(t, filepath.Join(subject.setup, "config/claude/skills/beta/SKILL.md"), "beta\n", 0o644)
 	write(t, filepath.Join(subject.setup, "config/claude/skills/beta/scripts/run.sh"), "#!/bin/sh\n", 0o755)
-	write(t, filepath.Join(subject.setup, "config/claude/CLAUDE.md"), "# Global\n", 0o644)
-	write(t, filepath.Join(subject.setup, author.Generator), fakeGenerator, 0o755)
-	gitIn(t, subject.setup, "init", "--quiet", "--initial-branch=main")
-	subject.commit(t, subject.setup, "setup")
-	// The clone is its own origin, so that fetching origin/main needs no network.
-	gitIn(t, subject.setup, "remote", "add", "origin", subject.setup)
+	subject.commit(t, subject.setup, "skills")
 	return subject
 }
+
+// fixtureOrigin is the omarchy-setup source paired-v1.json names, in the
+// spelling an ssh clone of it has.
+const fixtureOrigin = "git@github.com:iryzhkov/omarchy-setup.git"
 
 func write(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()
@@ -393,6 +412,86 @@ func TestAuthorRefusesADirtyCheckout(t *testing.T) {
 	}
 	if result, err := subject.author(t, commit, false); err != nil || result.Changed {
 		t.Fatalf("rerun on an uncommitted release: %+v, %v", result, err)
+	}
+}
+
+func TestAuthorRefusesAForeignOrigin(t *testing.T) {
+	subject := newFixture(t)
+	commit := gitIn(t, subject.setup, "rev-parse", "HEAD")
+	gitIn(t, subject.setup, "remote", "set-url", "origin", "https://github.com/someone/omarchy-setup.git")
+	gitIn(t, subject.setup, "config", "url."+subject.setup+".insteadOf", "https://github.com/someone/omarchy-setup.git")
+	_, err := subject.author(t, commit, true)
+	if err == nil || !strings.Contains(err.Error(), "but the release takes omarchy-setup from") {
+		t.Fatalf("err = %v, want a refusal for a foreign origin", err)
+	}
+	// The https spelling of the same repository is the same repository.
+	gitIn(t, subject.setup, "remote", "set-url", "origin", "https://GitHub.com/iryzhkov/omarchy-setup/")
+	gitIn(t, subject.setup, "config", "url."+subject.setup+".insteadOf", "https://GitHub.com/iryzhkov/omarchy-setup/")
+	if _, err := subject.author(t, commit, true); err != nil {
+		t.Fatalf("the https spelling of the source was refused: %v", err)
+	}
+}
+
+func TestAuthorRefusesWithoutThePreviousPin(t *testing.T) {
+	subject := newFixture(t)
+	commit := gitIn(t, subject.setup, "rev-parse", "HEAD")
+	manifest, _ := subject.manifest(t)
+	manifest["components"].(map[string]any)["omarchy-setup"].(map[string]any)["commit"] = strings.Repeat("a", 40)
+	encoded, err := canonjson.MarshalFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(subject.root, release.File), string(encoded), 0o644)
+	subject.commit(t, subject.root, "pin an unknown commit")
+	_, err = subject.author(t, commit, true)
+	if err == nil || !strings.Contains(err.Error(), "previously pinned commit aaaaaaaaaaaa is not in") {
+		t.Fatalf("err = %v, want a refusal for a missing previous pin", err)
+	}
+}
+
+func TestAuthorRefusesALinkOutOfTheCheckout(t *testing.T) {
+	subject := newFixture(t)
+	if err := os.Symlink("../../../../../etc", filepath.Join(subject.setup, "config/claude/skills/escape")); err != nil {
+		t.Fatal(err)
+	}
+	commit := subject.commit(t, subject.setup, "link out")
+	_, err := subject.author(t, commit, true)
+	if err == nil || !strings.Contains(err.Error(), "outside the checkout") {
+		t.Fatalf("err = %v, want a refusal for a link out of the checkout", err)
+	}
+}
+
+func TestAuthorModesDoNotDependOnTheUmask(t *testing.T) {
+	subject := newFixture(t)
+	commit := gitIn(t, subject.setup, "rev-parse", "HEAD")
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	if _, err := subject.author(t, commit, false); err != nil {
+		t.Fatal(err)
+	}
+	files := environmentFiles(t, func() map[string]any { manifest, _ := subject.manifest(t); return manifest }(), "files")
+	for path, want := range map[string]string{
+		".config/agents/alpha.md":            "420",
+		".codex/AGENTS.md":                   "420",
+		".claude/omarchy-setup/CLAUDE.md":    "420",
+		".claude/skills/alpha/SKILL.md":      "420",
+		".agents/skills/beta/scripts/run.sh": "493",
+	} {
+		if got := files[path]["permissions"].(interface{ String() string }).String(); got != want {
+			t.Errorf("%s: permissions %s under umask 077, want %s", path, got, want)
+		}
+	}
+}
+
+func TestAuthorIgnoresALeftoverTemporaryRelease(t *testing.T) {
+	subject := newFixture(t)
+	commit := gitIn(t, subject.setup, "rev-parse", "HEAD")
+	write(t, filepath.Join(subject.root, "desired/.release.json.tmp"), "torn\n", 0o644)
+	if result, err := subject.author(t, commit, false); err != nil || !result.Written {
+		t.Fatalf("a leftover temporary release blocked the run: %+v, %v", result, err)
+	}
+	if _, err := release.Load(subject.root); err != nil {
+		t.Fatal(err)
 	}
 }
 

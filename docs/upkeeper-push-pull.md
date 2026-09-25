@@ -61,15 +61,32 @@ commit, then refreshes every agent-environment file that derives from that commi
   `config/bin/agents-instructions-gen` writes them into an empty scratch home;
 - `~/.claude/omarchy-setup/CLAUDE.md`, from `config/claude/CLAUDE.md`.
 
-A file the commit adds is added, and a file it no longer produces, including every file of a
-skill the previously pinned commit had, is retired with the tombstone capture would write.
+A file the commit adds is added, and a file it no longer produces is retired with the tombstone
+capture would write. Skills are matched by name: every released file under
+`.claude/skills/<name>`, `.agents/skills/<name>` or `.codex/skills/<name>` for a skill the new
+commit or the previously pinned commit has under `config/claude/skills` is replaced by the new
+commit's files, so a skill the new commit deleted is retired, while a personal skill that
+happens to share a repository skill's name is replaced too. The whole `~/.config/agents/`
+prefix counts as generated: a released file there that the generator no longer writes is
+retired, whoever put it there. The previously pinned commit has to be in the clone; when it is
+not, `author` refuses rather than keep a dropped skill in the release.
 When anything changed, the spec is rebuilt with the builder capture uses and the instruction
 provenance is moved to the checkout's `HEAD`; when nothing did, the component is left byte for
 byte as it was, so authoring the release that is already published reports no changes.
 
 The commit is read out of the omarchy-setup clone (`--omarchy-setup-repo`, default
 `~/Work/omarchy-setup`) after fetching origin, and must be reachable from the ref the release
-follows. Nothing is read from the home directory of the host running the command, and the
+follows. The clone's configured origin URL must name the repository the release gives as
+omarchy-setup's `source` (https, `ssh://` and `git@host:` spellings, with or without `.git`,
+are the same repository), so a fork or stale mirror is refused. Archive entries that link
+outside the extracted tree are refused as well.
+
+**`author` runs the pinned commit's `config/bin/agents-instructions-gen` on the operator's
+machine, as the operator, without a sandbox.** Its only confinement is an empty scratch
+`HOME` and `TMPDIR` and a minimal environment; it can still read and write anything the
+operator can. Pin only commits you would run yourself, and review the generator's diff in
+omarchy-setup before authoring a release from it. Generated files are published as 0644, or
+0755 when executable, whatever the operator's umask. Nothing is read from the home directory of the host running the command, and the
 scratch tree and home are removed afterwards. The checkout may carry no local change except to
 `desired/release.json` itself, so that a mistaken run can be recomputed before it is
 committed. The result is validated the way authored publication validates it, written in the

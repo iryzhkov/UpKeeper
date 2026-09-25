@@ -43,6 +43,10 @@ const skillsDirectory = "config/claude/skills"
 // instructionDirectory is the home-relative directory the generator owns.
 const instructionDirectory = ".config/agents"
 
+// temporaryRelease is where the new manifest is written before it is renamed
+// over desired/release.json.
+const temporaryRelease = "desired/.release.json.tmp"
+
 // abbreviatedCommit is the spelling --omarchy-setup accepts: hexadecimal, so
 // that a branch name, which moves, can never be mistaken for a pin.
 var abbreviatedCommit = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
@@ -142,6 +146,10 @@ func Run(root string, options Options) (Result, error) {
 		return Result{}, failure.Validation("cannot resolve the omarchy-setup repository: %v", err)
 	}
 	ref, _ := setup["ref"].(string)
+	source, _ := setup["source"].(string)
+	if err := checkOrigin(runner, repository, source); err != nil {
+		return Result{}, err
+	}
 	commit, err := resolveSetupCommit(runner, repository, options.SetupCommit, ref)
 	if err != nil {
 		return Result{}, err
@@ -150,7 +158,7 @@ func Run(root string, options Options) (Result, error) {
 	previousCommit, _ := setup["commit"].(string)
 	former, err := formerSkills(runner, repository, previousCommit)
 	if err != nil {
-		result.Notes = append(result.Notes, err.Error())
+		return Result{}, err
 	}
 
 	scratch, err := os.MkdirTemp("", "upkeeper-author-*")
@@ -204,7 +212,7 @@ func Run(root string, options Options) (Result, error) {
 	if options.DryRun || !result.Changed {
 		return result, nil
 	}
-	temporary := filepath.Join(filepath.Dir(path), ".release.json.tmp")
+	temporary := filepath.Join(root, temporaryRelease)
 	if err := os.WriteFile(temporary, payload, 0o644); err != nil {
 		return Result{}, err
 	}
@@ -240,6 +248,11 @@ func refuseUnrelatedChanges(runner procx.Runner, root string) error {
 		if path == release.File && strings.Trim(code, "M ") == "" {
 			continue
 		}
+		// A run interrupted between writing and renaming leaves this behind;
+		// the next write replaces it.
+		if path == temporaryRelease && code == "??" {
+			continue
+		}
 		unrelated = append(unrelated, path)
 	}
 	if len(unrelated) > 0 {
@@ -248,6 +261,49 @@ func refuseUnrelatedChanges(runner procx.Runner, root string) error {
 			release.File, strings.Join(unrelated, ", "))
 	}
 	return nil
+}
+
+// checkOrigin refuses a clone whose origin is not the repository the release
+// names as omarchy-setup's source. The pinned commit's generator is run on this
+// machine, so a fork or a stale mirror as origin would mean running code the
+// release never named. The configured URL is compared, not the one insteadOf
+// rewriting produces: what the operator's own Git configuration redirects to
+// is theirs to decide.
+func checkOrigin(runner procx.Runner, repository, source string) error {
+	configured, err := git(runner, repository, 30*time.Second, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return failure.Validation("omarchy-setup: %s has no origin remote", repository)
+	}
+	if sameRepository(configured, source) {
+		return nil
+	}
+	return failure.Validation(
+		"omarchy-setup: origin of %s is %s, but the release takes omarchy-setup from %s",
+		repository, configured, source)
+}
+
+// sameRepository compares two Git URLs by host and path, so that the https,
+// ssh:// and scp-like spellings of one repository, with or without .git or a
+// trailing slash, are the same repository.
+func sameRepository(left, right string) bool {
+	normal := func(value string) string {
+		value = strings.TrimSpace(value)
+		if scheme := strings.Index(value, "://"); scheme >= 0 {
+			value = value[scheme+3:]
+		} else if colon := strings.Index(value, ":"); colon >= 0 && !strings.Contains(value[:colon], "/") {
+			value = value[:colon] + "/" + value[colon+1:]
+		}
+		if at := strings.Index(value, "@"); at >= 0 && at < strings.Index(value+"/", "/") {
+			value = value[at+1:]
+		}
+		value = strings.TrimSuffix(strings.TrimSuffix(value, "/"), ".git")
+		host, path, _ := strings.Cut(value, "/")
+		if colon := strings.Index(host, ":"); colon >= 0 {
+			host = host[:colon]
+		}
+		return strings.ToLower(host) + "/" + path
+	}
+	return left != "" && right != "" && normal(left) == normal(right)
 }
 
 // resolveSetupCommit fetches the ref the release follows and resolves the
@@ -289,21 +345,28 @@ func resolveSetupCommit(runner procx.Runner, repository, commit, ref string) (st
 
 // formerSkills lists the skills the currently pinned commit owns, so that a
 // skill the new commit deleted is retired instead of being left in the release
-// as if it were somebody's personal skill.
+// as if it were somebody's personal skill. Retirement goes by skill name, so
+// without this list a dropped skill would be published forever; a previous pin
+// that cannot be read is therefore a refusal, not a warning.
 func formerSkills(runner procx.Runner, repository, commit string) ([]string, error) {
 	if _, err := safety.ValidateGitCommit(commit); err != nil {
-		return nil, errors.New("the release pins no omarchy-setup commit, so no removed skill can be retired")
+		return nil, failure.Validation("the release pins no full omarchy-setup commit to retire skills against")
+	}
+	if _, err := git(runner, repository, 30*time.Second,
+		"rev-parse", "--verify", "--quiet", "--end-of-options", commit+"^{commit}"); err != nil {
+		return nil, failure.Validation(
+			"omarchy-setup: the previously pinned commit %s is not in %s; fetch it first, "+
+				"because without it a skill the new commit removed cannot be retired", commit[:12], repository)
 	}
 	listing, err := git(runner, repository, 30*time.Second,
-		"ls-tree", "-d", "--name-only", commit+":"+skillsDirectory)
+		"ls-tree", "-d", "--name-only", commit, "--", skillsDirectory+"/")
 	if err != nil {
-		return nil, errors.New("the previously pinned omarchy-setup commit " + commit[:12] +
-			" is not in the repository, so a skill it published and the new commit removed is not retired")
+		return nil, err
 	}
 	names := []string{}
 	for _, name := range strings.Split(listing, "\n") {
 		if name != "" {
-			names = append(names, name)
+			names = append(names, strings.TrimPrefix(name, skillsDirectory+"/"))
 		}
 	}
 	sort.Strings(names)
@@ -347,6 +410,13 @@ func extract(runner procx.Runner, repository, commit, destination string) error 
 				err = writeExtracted(target, reader, gitMode(header.Mode))
 			}
 		case tar.TypeSymlink:
+			// A link may point within the tree and nowhere else: the generator
+			// and the skill walk must never read through it into this host.
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(target), header.Linkname))
+			if filepath.IsAbs(header.Linkname) || !isWithin(resolved, destination) {
+				return failure.Validation("omarchy-setup: commit %s links %s outside the checkout",
+					commit[:12], header.Name)
+			}
 			if err = os.MkdirAll(filepath.Dir(target), 0o755); err == nil {
 				err = os.Symlink(header.Linkname, target)
 			}
@@ -362,9 +432,36 @@ func extract(runner procx.Runner, repository, commit, destination string) error 
 	}
 }
 
+// isWithin reports whether path is directory or below it.
+func isWithin(path, directory string) bool {
+	relative, err := filepath.Rel(directory, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
+		!filepath.IsAbs(relative)
+}
+
+// insideCheckout refuses a source whose real path, after every link is
+// resolved, is not in the extracted checkout. A missing source is allowed; the
+// caller decides what its absence means.
+func insideCheckout(checkout, path string) error {
+	root, err := filepath.EvalSymlinks(checkout)
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !isWithin(resolved, root) {
+		return failure.Validation("omarchy-setup: %s resolves outside the checkout", path)
+	}
+	return nil
+}
+
 // gitMode is the mode Git records for a file, which is all a checkout of it
 // has: 0755 when it is executable and 0644 otherwise. The archive's own mode
-// has the tar.umask setting applied and is not used as it stands.
+// has the tar.umask setting applied and is not used as it stands, and the
+// generator's output has the operator's umask applied, so both are normalised
+// through this.
 func gitMode(archived int64) os.FileMode {
 	if archived&0o100 != 0 {
 		return 0o755
@@ -434,7 +531,7 @@ func derive(runner procx.Runner, scratch, checkout string) (agentenv.DerivedSour
 			return err
 		}
 		instructions[relative] = agentenv.DerivedFile{
-			Content: content, Permissions: int64(info.Mode().Perm()),
+			Content: content, Permissions: int64(gitMode(int64(info.Mode().Perm()))),
 		}
 		return nil
 	}
@@ -459,6 +556,13 @@ func derive(runner procx.Runner, scratch, checkout string) (agentenv.DerivedSour
 		return agentenv.DerivedSources{}, err
 	}
 	// The Claude global instructions are installed verbatim from the checkout.
+	for _, source := range []string{
+		filepath.Join(checkout, skillsDirectory), filepath.Join(checkout, "config/claude/CLAUDE.md"),
+	} {
+		if err := insideCheckout(checkout, source); err != nil {
+			return agentenv.DerivedSources{}, err
+		}
+	}
 	if err := add(".claude/omarchy-setup/CLAUDE.md", filepath.Join(checkout, "config/claude/CLAUDE.md")); err != nil {
 		return agentenv.DerivedSources{}, err
 	}
