@@ -39,7 +39,9 @@ def bootstrap_huyang(home, spec, run_id, dry_run, env, must, probe, actions):
     stage.rmdir()
     unit.parent.mkdir(parents=True, exist_ok=True)
     content = (
-        "[Unit]\nDescription=Huyang semantic workspace service\nAfter=default.target\n\n"
+        # No After=default.target: the unit is wanted by default.target, and that
+        # ordering would put every unit ordered after it in a cycle at boot.
+        "[Unit]\nDescription=Huyang semantic workspace service\n\n"
         "[Service]\nType=simple\n"
         f"WorkingDirectory=%h/{spec['path']}\n"
         f"ExecStart=%h/{spec['path']}/bin/huyang serve\n"

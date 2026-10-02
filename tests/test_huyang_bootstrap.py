@@ -57,6 +57,18 @@ def test_absent_checkout_is_cloned_pinned_built_and_service_seeded(tmp_path, sou
     assert ["systemctl", "--user", "enable", "--now", "huyang.service"] in commands
 
 
+def test_seeded_unit_is_not_ordered_after_the_target_that_wants_it(tmp_path, source):
+    # WantedBy=default.target plus After=default.target closes an ordering cycle
+    # with every unit ordered after huyang.service, and systemd then deletes that
+    # unit's start job at boot.
+    home = tmp_path / "home"
+    home.mkdir()
+    installer(home, source)
+    text = (home / ".config/systemd/user/huyang.service").read_text()
+    assert "WantedBy=default.target" in text
+    assert "After=default.target" not in text
+
+
 def test_absent_checkout_preview_writes_nothing(tmp_path, source):
     home = tmp_path / "home"
     home.mkdir()

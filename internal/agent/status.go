@@ -59,7 +59,8 @@ func observationMatches(c *Context, name string, spec, observed map[string]any) 
 			return false
 		}
 		if name == "huyang" {
-			return observed["service_active"] == true && observed["socket"] == true && observed["binary_sha256"] != nil
+			return observed["service_active"] == true && observed["socket"] == true && observed["binary_sha256"] != nil &&
+				huyangUnitOrderingClean(observed)
 		}
 		stale, ok := observed["stale_files"].([]string)
 		return ok && len(stale) == 0

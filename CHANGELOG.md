@@ -130,3 +130,29 @@ release tags (`v0.1.x`).
   stays, because an unverified reload does not say whether the coordinator
   loaded it, and reverting it could silently undo a catalog the coordinator is
   running (R7).
+- The Huyang user unit is no longer ordered `After=default.target`. It is
+  wanted by `default.target`, so that line put every unit ordered after
+  `huyang.service` in a cycle with `default.target` (a target is implicitly
+  ordered after the units it wants, so the unit alone already closes one), and
+  systemd broke the cycle at boot by deleting `t3-steward-worker.service/start`
+  (and at shutdown by deleting `huyang.service/stop`), leaving the worker down
+  after every reboot. Both bootstrap renderers drop the line. Because the
+  bootstrap never replaces an existing unit, the `huyang` component now removes
+  `default.target` from the `After=` lines of an installed unit's `[Unit]`
+  section, whether or not the checkout exists. Lines it does not rewrite stay
+  byte-exact, a rewritten `After=` line is normalised, the file mode and the
+  drop-ins are kept, and nothing inside a value continued with a backslash
+  (comment lines within it included) is rewritten. It
+  runs `systemctl --user daemon-reload` and does not restart Huyang for it; a
+  marker under `~/.local/state/dev-fleet/unit-migrations/` makes a failed
+  reload retried by the next run. The component then checks every installed
+  user unit under `~/.config/systemd/user`: wanted by `default.target` through
+  `WantedBy=` in the unit or a drop-in or an entry in `default.target.wants/`,
+  and ordered after it through `After=` in the unit or a drop-in, continuation
+  lines joined. A cycle left in Huyang's own unit fails the component; a cycle
+  in any other unit is a warning naming the unit and the fix, and `status`
+  reports it as drift (`user_unit_ordering_cycles`, and `unit_ordering_cycle`
+  for Huyang's unit), without stopping later components. `status` also
+  reports drift while a reload is pending (`unit_reload_pending`) and when
+  the ordering could not be observed.
+  `systemd-analyze --user verify` does not report such a cycle (P0.1).

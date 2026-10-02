@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/fsatomic"
 )
 
 func init() {
@@ -33,8 +34,11 @@ var (
 )
 
 // huyangUnitTemplate is the unit a bootstrap seeds for a host that has none.
+// It is wanted by default.target and so must not be ordered after it: that
+// puts the unit, and every unit ordered after huyang.service, in a cycle with
+// default.target (see user_unit_ordering.go).
 const huyangUnitTemplate = "[Unit]\nDescription=Huyang semantic workspace service\n" +
-	"After=default.target\n\n[Service]\nType=simple\n" +
+	"\n[Service]\nType=simple\n" +
 	"WorkingDirectory=%%h/%[1]s\nExecStart=%%h/%[1]s/bin/huyang serve\n" +
 	"Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 
@@ -247,6 +251,21 @@ func huyangObserve(c *Context, spec map[string]any) (map[string]any, error) {
 		"socket":         pathExists(huyangSocket(c)),
 		"binary_sha256":  nil,
 	}
+	// Both are unknown (nil) when the units cannot be read; apply's check then
+	// fails with the reason.
+	observed["unit_ordering_cycle"] = nil
+	if cycle, err := userUnitOrderingCycle(
+		c.Path(userUnitDir), adapterSpecString(spec, "service"), nil); err == nil {
+		observed["unit_ordering_cycle"] = cycle
+	}
+	observed["user_unit_ordering_cycles"] = nil
+	if cycles, err := userUnitOrderingCycles(c, nil); err == nil {
+		observed["user_unit_ordering_cycles"] = cycles
+	}
+	// A reconciled unit whose daemon-reload has not completed: the bytes are
+	// right, but systemd still schedules by the old ordering.
+	_, markerErr := os.Lstat(c.Path(huyangReloadPending))
+	observed["unit_reload_pending"] = markerErr == nil
 	if head != "" {
 		observed["commit"] = head
 		if dirty := c.GitDirty(checkout); dirty != nil {
@@ -257,6 +276,24 @@ func huyangObserve(c *Context, spec map[string]any) (map[string]any, error) {
 		observed["binary_sha256"] = digest
 	}
 	return observed, nil
+}
+
+// huyangUnitOrderingClean reports whether observe proved that no user unit is
+// in an ordering cycle with default.target and that no reload of the
+// reconciled Huyang unit is outstanding. An unknown observation is not clean.
+// A cycle in a unit Huyang does not own does not fail the step, so status is
+// where it stays visible as drift.
+func huyangUnitOrderingClean(observed map[string]any) bool {
+	if observed["unit_ordering_cycle"] != false || observed["unit_reload_pending"] != false {
+		return false
+	}
+	switch cycles := observed["user_unit_ordering_cycles"].(type) {
+	case []string:
+		return len(cycles) == 0
+	case []any:
+		return len(cycles) == 0
+	}
+	return false
 }
 
 // huyangProbeTools is the tool count the release expects a build to serve.
@@ -315,7 +352,119 @@ func huyangBuildAndRestart(
 	return nil
 }
 
+// huyangApply converges the checkout and the installed unit, then checks that
+// no user unit is left in an ordering cycle with default.target.
 func huyangApply(
+	c *Context, spec map[string]any, before map[string]any, actions *[]string,
+) (string, error) {
+	pending, touched, err := huyangReconcileUnit(c, spec, actions)
+	if err != nil {
+		return "", err
+	}
+	state, err := huyangApplyCheckout(c, spec, before, actions)
+	if err != nil {
+		return state, err
+	}
+	service := adapterSpecString(spec, "service")
+	if err := checkUserUnitOrdering(c, service, pending, actions); err != nil {
+		return "", err
+	}
+	if state == "converged" && touched {
+		state = "updated"
+	}
+	return state, nil
+}
+
+// huyangReloadPending marks a reconciled unit whose daemon-reload has not
+// completed yet. It is created before the unit is rewritten and removed after
+// the reload, so a run that rewrote the unit but failed to reload leaves it
+// behind, and the next run reloads although the bytes on disk already match.
+const huyangReloadPending = ".local/state/dev-fleet/unit-migrations/huyang-ordering.reload-pending"
+
+// huyangReconcileUnit removes After=default.target from an installed Huyang
+// unit and changes nothing else in it. Units seeded before that line was
+// dropped from the template still carry it, and the bootstrap never replaces
+// an existing unit.
+//
+// Ordering only decides how systemd schedules jobs, so a daemon-reload is
+// enough and a running Huyang is not restarted. A unit that is a symlink or
+// not a regular file is left alone; the ordering check then names it.
+//
+// It runs whether or not a checkout exists: the bootstrap refuses a host that
+// has a unit but no checkout, and that unit must not keep the cycle meanwhile.
+//
+// pending holds the rewritten content when the unit changed (or would have,
+// in a dry run), keyed by unit name, and is nil otherwise. touched reports
+// whether the run changed the unit or completed a reload an earlier run left
+// pending.
+func huyangReconcileUnit(
+	c *Context, spec map[string]any, actions *[]string,
+) (pending map[string][]byte, touched bool, err error) {
+	service := adapterSpecString(spec, "service")
+	unit := c.Path(userUnitDir, service)
+	marker := c.Path(huyangReloadPending)
+	_, markerErr := os.Lstat(marker)
+	reloadPending := markerErr == nil
+	info, err := os.Lstat(unit)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	raw, err := os.ReadFile(unit)
+	if err != nil {
+		return nil, false, err
+	}
+	reconciled, changed := unitDropOrderingAfter(raw, userUnitBootTarget)
+	if !changed && !reloadPending {
+		return nil, false, nil
+	}
+	if changed {
+		pending = map[string][]byte{service: reconciled}
+	}
+	if c.DryRun {
+		if changed {
+			*actions = append(*actions, "would remove After=default.target from "+service)
+		} else {
+			*actions = append(*actions, "would reload systemd for the reconciled "+service)
+		}
+		return pending, true, nil
+	}
+	if changed {
+		if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+			return nil, false, err
+		}
+		if err := fsatomic.WritePrivateFile(marker, []byte(service+"\n")); err != nil {
+			return nil, false, err
+		}
+		if err := fsatomic.WriteFile(unit, reconciled, info.Mode().Perm()); err != nil {
+			return nil, false, err
+		}
+	}
+	if _, err := c.Must([]string{"systemctl", "--user", "daemon-reload"},
+		0, "", "Huyang unit reload"); err != nil {
+		return nil, false, err
+	}
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, err
+	}
+	if changed {
+		*actions = append(*actions, "removed After=default.target from "+service+
+			"; reloaded systemd without restarting Huyang")
+	} else {
+		*actions = append(*actions, "reloaded systemd for the reconciled "+service+
+			" after an earlier reload failed; Huyang was not restarted")
+	}
+	return pending, true, nil
+}
+
+// huyangApplyCheckout moves the checkout to the pinned commit, or seeds Huyang
+// on a host that has none.
+func huyangApplyCheckout(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
 	checkout := c.Path(adapterSpecString(spec, "path"))
