@@ -2015,7 +2015,7 @@
       "version": "0.1.6"
     },
     "omarchy-setup": {
-      "commit": "e5d95167afa19410095c46ae99c28cd7a1c54c6b",
+      "commit": "c142c9f7fb691cfb3a97dcc6c19b4110a546f19b",
       "kind": "git-checkout",
       "modules": [
         "28-scripts"
