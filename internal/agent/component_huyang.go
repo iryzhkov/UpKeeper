@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/fsatomic"
 )
 
 func init() {
@@ -33,8 +34,11 @@ var (
 )
 
 // huyangUnitTemplate is the unit a bootstrap seeds for a host that has none.
+// It is wanted by default.target and so must not be ordered after it: that
+// would put every unit ordered after huyang.service in a cycle with
+// default.target (see user_unit_ordering.go).
 const huyangUnitTemplate = "[Unit]\nDescription=Huyang semantic workspace service\n" +
-	"After=default.target\n\n[Service]\nType=simple\n" +
+	"\n[Service]\nType=simple\n" +
 	"WorkingDirectory=%%h/%[1]s\nExecStart=%%h/%[1]s/bin/huyang serve\n" +
 	"Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"
 
@@ -247,6 +251,13 @@ func huyangObserve(c *Context, spec map[string]any) (map[string]any, error) {
 		"socket":         pathExists(huyangSocket(c)),
 		"binary_sha256":  nil,
 	}
+	// Unknown (nil) when the unit cannot be read; apply's check then fails
+	// with the reason.
+	observed["unit_ordering_cycle"] = nil
+	if cycle, err := userUnitOrderingCycle(
+		c.Path(userUnitDir), adapterSpecString(spec, "service"), nil); err == nil {
+		observed["unit_ordering_cycle"] = cycle
+	}
 	if head != "" {
 		observed["commit"] = head
 		if dirty := c.GitDirty(checkout); dirty != nil {
@@ -315,7 +326,85 @@ func huyangBuildAndRestart(
 	return nil
 }
 
+// huyangApply converges the checkout and the installed unit, then checks that
+// no user unit is left in an ordering cycle with default.target.
 func huyangApply(
+	c *Context, spec map[string]any, before map[string]any, actions *[]string,
+) (string, error) {
+	var pending map[string][]byte
+	if commit, _ := before["commit"].(string); commit != "" {
+		var err error
+		if pending, err = huyangReconcileUnit(c, spec, actions); err != nil {
+			return "", err
+		}
+	}
+	state, err := huyangApplyCheckout(c, spec, before, actions)
+	if err != nil {
+		return state, err
+	}
+	if err := checkUserUnitOrdering(c, pending); err != nil {
+		return "", err
+	}
+	if state == "converged" && pending != nil {
+		state = "updated"
+	}
+	return state, nil
+}
+
+// huyangReconcileUnit removes After=default.target from an installed Huyang
+// unit and changes nothing else in it. Units seeded before that line was
+// dropped from the template still carry it, and the bootstrap never replaces
+// an existing unit.
+//
+// Ordering only decides how systemd schedules jobs, so a daemon-reload is
+// enough and a running Huyang is not restarted. A unit that is a symlink or
+// not a regular file is left alone; the ordering check then names it.
+//
+// The returned map holds the rewritten content when the unit changed (or
+// would have, in a dry run), keyed by unit name, and is nil otherwise.
+func huyangReconcileUnit(
+	c *Context, spec map[string]any, actions *[]string,
+) (map[string][]byte, error) {
+	service := adapterSpecString(spec, "service")
+	unit := c.Path(userUnitDir, service)
+	info, err := os.Lstat(unit)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(unit)
+	if err != nil {
+		return nil, err
+	}
+	reconciled, changed := unitDropOrderingAfter(raw, userUnitBootTarget)
+	if !changed {
+		return nil, nil
+	}
+	pending := map[string][]byte{service: reconciled}
+	if c.DryRun {
+		*actions = append(*actions, "would remove After=default.target from "+service)
+		return pending, nil
+	}
+	if err := fsatomic.WriteFile(unit, reconciled, info.Mode().Perm()); err != nil {
+		return nil, err
+	}
+	if _, err := c.Must([]string{"systemctl", "--user", "daemon-reload"},
+		0, "", "Huyang unit reload"); err != nil {
+		return nil, err
+	}
+	*actions = append(*actions, "removed After=default.target from "+service+
+		"; reloaded systemd without restarting Huyang")
+	return pending, nil
+}
+
+// huyangApplyCheckout moves the checkout to the pinned commit, or seeds Huyang
+// on a host that has none.
+func huyangApplyCheckout(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
 	checkout := c.Path(adapterSpecString(spec, "path"))

@@ -130,3 +130,18 @@ release tags (`v0.1.x`).
   stays, because an unverified reload does not say whether the coordinator
   loaded it, and reverting it could silently undo a catalog the coordinator is
   running (R7).
+- The Huyang user unit is no longer ordered `After=default.target`. It is
+  wanted by `default.target`, so that line put every unit ordered after
+  `huyang.service` in a cycle with `default.target`, and systemd broke the
+  cycle at boot by deleting `t3-steward-worker.service/start` (and at shutdown
+  by deleting `huyang.service/stop`), leaving the worker down after every
+  reboot. Both bootstrap renderers drop the line. Because the bootstrap never
+  replaces an existing unit, the `huyang` component now removes
+  `default.target` from the `After=` lines of an installed unit's `[Unit]`
+  section, leaves every other byte and its drop-ins alone, runs
+  `systemctl --user daemon-reload` and does not restart Huyang for it. The
+  component then fails, naming the units, when any installed user unit under
+  `~/.config/systemd/user` (drop-ins included) is still both wanted by and
+  ordered after `default.target`; `systemd-analyze --user verify` does not
+  report such a cycle. `status` reports a Huyang unit with the cycle as drift
+  (`unit_ordering_cycle`) (P0.1).
