@@ -3,8 +3,11 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
 // huyangCycleUnit is the unit every host had installed on 2026-10-02, byte
@@ -156,34 +159,64 @@ func TestHuyangUnitReconcileDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestHuyangApplyFailsOnAnyUserUnitWithAnOrderingCycle(t *testing.T) {
+func TestHuyangApplyChecksEveryUserUnitForAnOrderingCycle(t *testing.T) {
+	otherCycle := strings.Replace(huyangCycleUnit, "Huyang", "Other", 1)
+	otherClean := strings.Replace(huyangReconciledUnit, "Huyang", "Other", 1)
 	cases := []struct {
 		name  string
 		files map[string]string
-		// failing names the unit the failure has to name; empty means pass.
-		failing string
+		// links are symlinks to create, name to target, under the unit dir.
+		links map[string]string
+		// warned names another unit the run must warn about without failing.
+		warned string
+		// failing is set when Huyang's own unit keeps a cycle.
+		failing bool
 	}{
 		{
-			name: "another unit wanted by and ordered after default.target",
-			files: map[string]string{
-				"bellerophon.service": strings.Replace(huyangCycleUnit, "Huyang", "Other", 1),
-			},
-			failing: "bellerophon.service",
+			name:   "another unit wanted by and ordered after default.target",
+			files:  map[string]string{"bellerophon.service": otherCycle},
+			warned: "bellerophon.service",
 		},
 		{
 			name: "a drop-in that adds the ordering",
 			files: map[string]string{
-				"other.service":                 huyangReconciledUnit,
+				"other.service":                 otherClean,
 				"other.service.d/ordering.conf": "[Unit]\nAfter=default.target\n",
 			},
-			failing: "other.service",
+			warned: "other.service",
 		},
 		{
-			name: "a drop-in that resets the ordering",
+			// An empty After= does not reset a dependency list (systemd 252).
+			name: "a drop-in with an empty After= keeps the ordering",
 			files: map[string]string{
-				"other.service":              strings.Replace(huyangCycleUnit, "Huyang", "Other", 1),
-				"other.service.d/reset.conf": "[Unit]\nAfter=\n",
+				"other.service":              otherCycle,
+				"other.service.d/reset.conf": "[Unit]\nAfter=\nAfter=basic.target\n",
 			},
+			warned: "other.service",
+		},
+		{
+			name: "a drop-in that adds WantedBy=default.target",
+			files: map[string]string{
+				"other.service":                "[Unit]\nAfter=default.target\n\n[Service]\nExecStart=/bin/true\n",
+				"other.service.d/install.conf": "[Install]\nWantedBy=default.target\n",
+			},
+			warned: "other.service",
+		},
+		{
+			name: "a unit enabled into default.target.wants",
+			files: map[string]string{
+				"other.service": "[Unit]\nAfter=default.target\n\n[Service]\nExecStart=/bin/true\n",
+			},
+			links:  map[string]string{"default.target.wants/other.service": "../other.service"},
+			warned: "other.service",
+		},
+		{
+			name: "an After= continued onto the next line",
+			files: map[string]string{
+				"other.service": "[Unit]\nAfter=network.target \\\n  default.target\n\n" +
+					"[Install]\nWantedBy=default.target\n",
+			},
+			warned: "other.service",
 		},
 		{
 			name: "ordering after default.target without being wanted by it",
@@ -192,10 +225,15 @@ func TestHuyangApplyFailsOnAnyUserUnitWithAnOrderingCycle(t *testing.T) {
 			},
 		},
 		{
-			name: "a backup file is not a unit",
+			name:  "a backup file is not a unit",
+			files: map[string]string{"t3code.service.bak.lan-20260905": huyangCycleUnit},
+		},
+		{
+			name: "a drop-in that orders Huyang itself after default.target",
 			files: map[string]string{
-				"t3code.service.bak.lan-20260905": huyangCycleUnit,
+				"huyang.service.d/ordering.conf": "[Unit]\nAfter=default.target\n",
 			},
+			failing: true,
 		},
 	}
 	for _, test := range cases {
@@ -206,25 +244,112 @@ func TestHuyangApplyFailsOnAnyUserUnitWithAnOrderingCycle(t *testing.T) {
 			for name, content := range test.files {
 				adapterTestWrite(t, context.Path(huyangTestUnitDir, name), content)
 			}
+			for name, target := range test.links {
+				link := context.Path(huyangTestUnitDir, name)
+				if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+			}
 			state, actions, err := huyangTestApply(t, context)
-			if test.failing == "" {
-				if err != nil || state != "converged" {
-					t.Fatalf("state = %q, error = %v (actions %v)", state, err, actions)
+			if test.failing {
+				if err == nil {
+					t.Fatalf("a cycle in huyang.service passed as %q (actions %v)", state, actions)
+				}
+				if failed, _ := classify(err); failed != "failed" ||
+					!strings.Contains(err.Error(), "huyang.service") ||
+					!strings.Contains(err.Error(), "ordering cycle") {
+					t.Fatalf("failure does not name huyang.service as an ordering cycle: %v", err)
 				}
 				return
 			}
-			if err == nil {
-				t.Fatalf("an ordering cycle in %s passed as %q", test.failing, state)
+			if err != nil || state != "converged" {
+				t.Fatalf("state = %q, error = %v (actions %v)", state, err, actions)
 			}
-			if failed, _ := classify(err); failed != "failed" ||
-				!strings.Contains(err.Error(), test.failing) ||
-				!strings.Contains(err.Error(), "ordering cycle") {
-				t.Fatalf("failure does not name %s as an ordering cycle: %v", test.failing, err)
+			warnings := []string{}
+			for _, action := range actions {
+				if strings.HasPrefix(action, "warning:") {
+					warnings = append(warnings, action)
+				}
 			}
-			if strings.Contains(err.Error(), "huyang.service") {
-				t.Fatalf("failure names the reconciled huyang.service: %v", err)
+			if test.warned == "" {
+				if len(warnings) != 0 {
+					t.Fatalf("unexpected warnings %v", warnings)
+				}
+				return
+			}
+			if len(warnings) != 1 || !strings.Contains(warnings[0], "user unit "+test.warned) ||
+				!strings.Contains(warnings[0], "ordering cycle") ||
+				!strings.Contains(warnings[0], "systemctl --user daemon-reload") ||
+				strings.Contains(warnings[0], "huyang.service") {
+				t.Fatalf("warnings %v do not name %s, the cycle and the fix", warnings, test.warned)
 			}
 		})
+	}
+}
+
+func TestHuyangUnitReconcileRetriesAFailedReload(t *testing.T) {
+	context, runner := huyangTestPrepare(t, huyangConvergedWorld)
+	huyangTestPatch(t, huyangTestProbe(true, 19))
+	unit := context.Path(huyangTestUnitDir, "huyang.service")
+	adapterTestWrite(t, unit, huyangCycleUnit)
+	passThrough := runner.handle
+	reloads := 0
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "systemctl", "daemon-reload") {
+			reloads++
+			if reloads == 1 {
+				return procx.Result{Code: 1, Stderr: "transport endpoint is not connected"}
+			}
+		}
+		return passThrough(command)
+	}
+
+	if _, actions, err := huyangTestApply(t, context); err == nil {
+		t.Fatalf("a failed reload passed (actions %v)", actions)
+	}
+	if got := huyangTestRead(t, unit); got != huyangReconciledUnit {
+		t.Fatalf("unit after the first run:\n%s", got)
+	}
+
+	// The bytes on disk are already right; the retry must still reload.
+	state, actions, err := huyangTestApply(t, context)
+	if err != nil || state != "updated" {
+		t.Fatalf("retry: state = %q, error = %v (actions %v)", state, err, actions)
+	}
+	if reloads != 2 {
+		t.Fatalf("the retry ran %d reloads in total, want 2", reloads)
+	}
+	if !adapterTestMatches(actions, "reloaded systemd") {
+		t.Fatalf("actions %v do not report the reload", actions)
+	}
+
+	// Once the reload has gone through, nothing is pending any more.
+	state, _, err = huyangTestApply(t, context)
+	if err != nil || state != "converged" || reloads != 2 {
+		t.Fatalf("third run: state = %q, error = %v, reloads = %d", state, err, reloads)
+	}
+}
+
+func TestHuyangUnitIsReconciledWhenTheCheckoutIsAbsent(t *testing.T) {
+	runner := &adapterTestRunner{}
+	context := adapterTestContext(t, runner)
+	context.Components["huyang"] = huyangTestSpec()
+	huyangTestPatch(t, huyangTestProbe(true, 19))
+	unit := context.Path(huyangTestUnitDir, "huyang.service")
+	adapterTestWrite(t, unit, huyangCycleUnit)
+
+	_, actions, err := huyangTestApply(t, context)
+	if err == nil || !strings.Contains(err.Error(), "a user unit exists; inspect it first") {
+		t.Fatalf("want the bootstrap refusal, got %v (actions %v)", err, actions)
+	}
+	if got := huyangTestRead(t, unit); got != huyangReconciledUnit {
+		t.Fatalf("unit without a checkout was not reconciled:\n%s", got)
+	}
+	if !runner.ran("systemctl", "--user", "daemon-reload") {
+		t.Fatalf("the rewritten unit was not reloaded: %v", runner.calls)
 	}
 }
 
@@ -232,19 +357,26 @@ func TestHuyangObserveReportsAnInstalledOrderingCycleAsDrift(t *testing.T) {
 	context, _ := huyangTestPrepare(t, huyangConvergedWorld)
 	adapterTestWrite(t, context.Path(".local/share/huyang/bin/huyang"), "binary")
 	unit := context.Path(huyangTestUnitDir, "huyang.service")
+	other := context.Path(huyangTestUnitDir, "other.service")
 	spec := context.Spec("huyang")
 	for _, test := range []struct {
-		content string
-		matches bool
-	}{{huyangCycleUnit, false}, {huyangReconciledUnit, true}} {
-		adapterTestWrite(t, unit, test.content)
+		huyang, other string
+		matches       bool
+	}{
+		{huyangCycleUnit, huyangReconciledUnit, false},
+		{huyangReconciledUnit, huyangCycleUnit, false},
+		{huyangReconciledUnit, huyangReconciledUnit, true},
+	} {
+		adapterTestWrite(t, unit, test.huyang)
+		adapterTestWrite(t, other, test.other)
 		observed, err := huyangObserve(context, spec)
 		if err != nil {
 			t.Fatal(err)
 		}
 		observed["dirty"] = false
 		if got := observationMatches(context, "huyang", spec, observed); got != test.matches {
-			t.Fatalf("status match = %v for unit:\n%s(observed %v)", got, test.content, observed)
+			t.Fatalf("status match = %v for huyang:\n%s\nother:\n%s(observed %v)",
+				got, test.huyang, test.other, observed)
 		}
 	}
 }

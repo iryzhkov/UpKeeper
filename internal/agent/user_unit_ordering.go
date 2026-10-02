@@ -8,11 +8,13 @@ import (
 	"strings"
 )
 
-// A user unit that is wanted by default.target and also ordered after it is
-// harmless on its own, but every unit ordered after it then closes a cycle with
-// default.target. systemd breaks that cycle by deleting one of the start jobs
-// at boot ("Job t3-steward-worker.service/start deleted to break ordering
-// cycle") and one of the stop jobs at shutdown, so the deleted unit simply does
+// A target is implicitly ordered after every unit it Wants=, so a user unit
+// that is wanted by default.target and also ordered After=default.target is
+// already in an ordering cycle with default.target on its own, and so is
+// every unit ordered after it. systemd breaks such a cycle by deleting one of
+// the jobs in it: at boot it deleted t3-steward-worker.service/start ("Job
+// t3-steward-worker.service/start deleted to break ordering cycle") and at
+// shutdown huyang.service/stop, so the unit whose job was deleted simply does
 // not run. `systemd-analyze --user verify` does not report it, which is why the
 // agent checks the unit files itself.
 
@@ -36,6 +38,10 @@ func userUnitName(name string) bool {
 	return false
 }
 
+func unitComment(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";")
+}
+
 // unitDirective splits a unit-file line into its key and value when the line
 // is an assignment, and reports the section header when it is one.
 func unitDirective(line string) (section, key, value string, assignment bool) {
@@ -43,7 +49,7 @@ func unitDirective(line string) (section, key, value string, assignment bool) {
 	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 		return trimmed[1 : len(trimmed)-1], "", "", false
 	}
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+	if trimmed == "" || unitComment(trimmed) {
 		return "", "", "", false
 	}
 	key, value, found := strings.Cut(trimmed, "=")
@@ -53,22 +59,55 @@ func unitDirective(line string) (section, key, value string, assignment bool) {
 	return "", strings.TrimSpace(key), strings.TrimSpace(value), true
 }
 
-// unitListDirective folds every assignment of a list directive in one section
-// into the list systemd ends up with: values accumulate, and an empty
-// assignment resets everything assigned before it.
+// unitContinued reports whether a physical line continues on the next one.
+func unitContinued(line string) bool {
+	trimmed := strings.TrimRight(line, " \t\r\n")
+	return strings.HasSuffix(trimmed, "\\") && !unitComment(strings.TrimSpace(trimmed))
+}
+
+// unitLogicalLines joins lines that end in a backslash with the lines that
+// continue them, the way systemd reads a unit file. Comment lines inside a
+// continuation are skipped.
+func unitLogicalLines(raw []byte) []string {
+	lines := []string{}
+	joined := ""
+	continuing := false
+	for _, physical := range strings.Split(string(raw), "\n") {
+		line := strings.TrimRight(physical, " \t\r")
+		if continuing {
+			trimmed := strings.TrimSpace(line)
+			if unitComment(trimmed) {
+				continue
+			}
+			line = joined + " " + trimmed
+		}
+		if unitContinued(line) {
+			joined = strings.TrimSuffix(line, "\\")
+			continuing = true
+			continue
+		}
+		continuing = false
+		lines = append(lines, line)
+	}
+	if continuing {
+		lines = append(lines, joined)
+	}
+	return lines
+}
+
+// unitListDirective adds every value a list directive is given in one section
+// to list. An empty assignment does not reset a dependency list such as
+// After= or WantedBy= (checked on systemd 252), so it adds nothing and keeps
+// what is already there.
 func unitListDirective(list []string, raw []byte, section, key string) []string {
 	current := ""
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range unitLogicalLines(raw) {
 		header, name, value, assignment := unitDirective(line)
 		if header != "" {
 			current = header
 			continue
 		}
 		if !assignment || current != section || name != key {
-			continue
-		}
-		if value == "" {
-			list = nil
 			continue
 		}
 		list = append(list, strings.Fields(value)...)
@@ -86,14 +125,22 @@ func unitListContains(list []string, wanted string) bool {
 }
 
 // unitDropOrderingAfter removes target from every After= line of the [Unit]
-// section and leaves every other byte as it was. A line that named only the
-// target is removed rather than emptied, because an empty After= would also
-// reset the ordering earlier lines declared.
+// section. Every line it does not rewrite is kept byte for byte; a rewritten
+// line is normalised to "After=" and the remaining names separated by single
+// spaces. A line that named only the target is removed. A line continued with
+// a backslash, and its continuation, are never rewritten; the ordering check
+// reports such a unit instead.
 func unitDropOrderingAfter(raw []byte, target string) ([]byte, bool) {
 	var out strings.Builder
 	changed := false
 	current := ""
+	continuation := false
 	for _, line := range strings.SplitAfter(string(raw), "\n") {
+		if continuation || unitContinued(line) {
+			continuation = unitContinued(line)
+			out.WriteString(line)
+			continue
+		}
 		header, key, value, assignment := unitDirective(line)
 		if header != "" {
 			current = header
@@ -124,10 +171,11 @@ func unitDropOrderingAfter(raw []byte, target string) ([]byte, bool) {
 	return []byte(out.String()), changed
 }
 
-// userUnitOrderingCycle reports whether one unit file in the user unit
-// directory is both wanted by default.target and, after its drop-ins are
-// applied, ordered after it. pending holds content a dry run would have
-// written instead of what is on disk.
+// userUnitOrderingCycle reports whether one unit in the user unit directory
+// is both wanted by default.target and ordered after it. A unit is wanted
+// when [Install] WantedBy= of the unit file or a drop-in names default.target,
+// or when default.target.wants/ holds an entry for it. pending holds content a
+// dry run would have written in place of the unit file on disk.
 func userUnitOrderingCycle(directory, name string, pending map[string][]byte) (bool, error) {
 	raw, planned := pending[name]
 	if !planned {
@@ -140,23 +188,32 @@ func userUnitOrderingCycle(directory, name string, pending map[string][]byte) (b
 			return false, err
 		}
 	}
-	if !unitListContains(unitListDirective(nil, raw, "Install", "WantedBy"), userUnitBootTarget) {
-		return false, nil
-	}
-	after := unitListDirective(nil, raw, "Unit", "After")
 	dropIns, err := filepath.Glob(filepath.Join(directory, name+".d", "*.conf"))
 	if err != nil {
 		return false, err
 	}
 	sort.Strings(dropIns)
+	files := [][]byte{raw}
 	for _, dropIn := range dropIns {
 		content, err := os.ReadFile(dropIn)
 		if err != nil {
 			return false, err
 		}
-		after = unitListDirective(after, content, "Unit", "After")
+		files = append(files, content)
 	}
-	return unitListContains(after, userUnitBootTarget), nil
+	var after, wantedBy []string
+	for _, content := range files {
+		after = unitListDirective(after, content, "Unit", "After")
+		wantedBy = unitListDirective(wantedBy, content, "Install", "WantedBy")
+	}
+	if !unitListContains(after, userUnitBootTarget) {
+		return false, nil
+	}
+	if unitListContains(wantedBy, userUnitBootTarget) {
+		return true, nil
+	}
+	_, err = os.Lstat(filepath.Join(directory, userUnitBootTarget+".wants", name))
+	return err == nil, nil
 }
 
 // userUnitOrderingCycles lists every installed user unit with an ordering
@@ -165,7 +222,7 @@ func userUnitOrderingCycles(c *Context, pending map[string][]byte) ([]string, er
 	directory := c.Path(userUnitDir)
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return []string{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -193,23 +250,35 @@ func userUnitOrderingCycles(c *Context, pending map[string][]byte) ([]string, er
 	return cycles, nil
 }
 
-// checkUserUnitOrdering fails the step when any installed user unit has an
-// ordering cycle on default.target, naming the units and the fix.
-func checkUserUnitOrdering(c *Context, pending map[string][]byte) error {
+// userUnitOrderingProblem describes a cycle in one unit and how to remove it.
+func userUnitOrderingProblem(c *Context, name string) string {
+	return "user unit " + name + " is wanted by default.target and ordered " +
+		"After=default.target, an ordering cycle that makes systemd delete start jobs at boot; " +
+		"remove default.target from its After= lines under " + c.Path(userUnitDir) +
+		" (unit file and drop-ins), then run systemctl --user daemon-reload"
+}
+
+// checkUserUnitOrdering fails the step when the component's own unit is in an
+// ordering cycle on default.target. A cycle in any other user unit is not the
+// component's to fix, so it is reported as a warning action, and as drift by
+// observe, without stopping the components after this one.
+func checkUserUnitOrdering(
+	c *Context, own string, pending map[string][]byte, actions *[]string,
+) error {
 	cycles, err := userUnitOrderingCycles(c, pending)
 	if err != nil {
 		return Failf("cannot check user unit ordering: %s", err.Error())
 	}
-	if len(cycles) == 0 {
-		return nil
+	ownCycle := false
+	for _, name := range cycles {
+		if name == own {
+			ownCycle = true
+			continue
+		}
+		*actions = append(*actions, "warning: "+userUnitOrderingProblem(c, name))
 	}
-	subject := "user unit " + cycles[0] + " is"
-	if len(cycles) > 1 {
-		subject = "user units " + strings.Join(cycles, ", ") + " are"
+	if ownCycle {
+		return Failf("%s", userUnitOrderingProblem(c, own))
 	}
-	return Failf("%s wanted by default.target and ordered After=default.target, "+
-		"an ordering cycle that makes systemd delete start jobs at boot; "+
-		"remove default.target from its After= lines under %s (unit file and drop-ins), "+
-		"then run systemctl --user daemon-reload",
-		subject, c.Path(userUnitDir))
+	return nil
 }
