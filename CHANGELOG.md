@@ -141,7 +141,8 @@ release tags (`v0.1.x`).
   `default.target` from the `After=` lines of an installed unit's `[Unit]`
   section, whether or not the checkout exists. Lines it does not rewrite stay
   byte-exact, a rewritten `After=` line is normalised, the file mode and the
-  drop-ins are kept, and a line continued with a backslash is left alone. It
+  drop-ins are kept, and nothing inside a value continued with a backslash
+  (comment lines within it included) is rewritten. It
   runs `systemctl --user daemon-reload` and does not restart Huyang for it; a
   marker under `~/.local/state/dev-fleet/unit-migrations/` makes a failed
   reload retried by the next run. The component then checks every installed
@@ -151,5 +152,7 @@ release tags (`v0.1.x`).
   lines joined. A cycle left in Huyang's own unit fails the component; a cycle
   in any other unit is a warning naming the unit and the fix, and `status`
   reports it as drift (`user_unit_ordering_cycles`, and `unit_ordering_cycle`
-  for Huyang's unit), without stopping later components.
+  for Huyang's unit), without stopping later components. `status` also
+  reports drift while a reload is pending (`unit_reload_pending`) and when
+  the ordering could not be observed.
   `systemd-analyze --user verify` does not report such a cycle (P0.1).

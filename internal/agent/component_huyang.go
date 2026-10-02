@@ -262,6 +262,10 @@ func huyangObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	if cycles, err := userUnitOrderingCycles(c, nil); err == nil {
 		observed["user_unit_ordering_cycles"] = cycles
 	}
+	// A reconciled unit whose daemon-reload has not completed: the bytes are
+	// right, but systemd still schedules by the old ordering.
+	_, markerErr := os.Lstat(c.Path(huyangReloadPending))
+	observed["unit_reload_pending"] = markerErr == nil
 	if head != "" {
 		observed["commit"] = head
 		if dirty := c.GitDirty(checkout); dirty != nil {
@@ -274,15 +278,20 @@ func huyangObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	return observed, nil
 }
 
-// huyangUserUnitCyclesObserved reports whether observe found any user unit in
-// an ordering cycle with default.target. A cycle in a unit Huyang does not own
-// does not fail the step, so status is where it stays visible as drift.
-func huyangUserUnitCyclesObserved(observed map[string]any) bool {
+// huyangUnitOrderingClean reports whether observe proved that no user unit is
+// in an ordering cycle with default.target and that no reload of the
+// reconciled Huyang unit is outstanding. An unknown observation is not clean.
+// A cycle in a unit Huyang does not own does not fail the step, so status is
+// where it stays visible as drift.
+func huyangUnitOrderingClean(observed map[string]any) bool {
+	if observed["unit_ordering_cycle"] != false || observed["unit_reload_pending"] != false {
+		return false
+	}
 	switch cycles := observed["user_unit_ordering_cycles"].(type) {
 	case []string:
-		return len(cycles) > 0
+		return len(cycles) == 0
 	case []any:
-		return len(cycles) > 0
+		return len(cycles) == 0
 	}
 	return false
 }

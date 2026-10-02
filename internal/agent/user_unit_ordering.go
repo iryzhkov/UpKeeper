@@ -136,6 +136,12 @@ func unitDropOrderingAfter(raw []byte, target string) ([]byte, bool) {
 	current := ""
 	continuation := false
 	for _, line := range strings.SplitAfter(string(raw), "\n") {
+		// systemd skips a comment line inside a continued value, so the value
+		// goes on after it; nothing inside a continued value is rewritten.
+		if continuation && unitComment(strings.TrimSpace(line)) {
+			out.WriteString(line)
+			continue
+		}
 		if continuation || unitContinued(line) {
 			continuation = unitContinued(line)
 			out.WriteString(line)

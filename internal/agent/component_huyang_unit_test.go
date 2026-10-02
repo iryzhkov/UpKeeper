@@ -333,6 +333,85 @@ func TestHuyangUnitReconcileRetriesAFailedReload(t *testing.T) {
 	}
 }
 
+// huyangContinuedCommentUnit continues Description= across a comment line.
+// systemd skips the comment inside the continuation, so the physical line
+// After=default.target is part of the description, not an ordering.
+const huyangContinuedCommentUnit = "[Unit]\nDescription=keep \\\n# comment\nAfter=default.target\n" +
+	"[Install]\nWantedBy=default.target\n"
+
+func TestHuyangUnitReconcileNeverRewritesInsideAContinuedValue(t *testing.T) {
+	if out, changed := unitDropOrderingAfter([]byte(huyangContinuedCommentUnit), "default.target"); changed ||
+		string(out) != huyangContinuedCommentUnit {
+		t.Fatalf("rewrite changed = %v, output:\n%s", changed, out)
+	}
+	context, runner := huyangTestPrepare(t, huyangConvergedWorld)
+	huyangTestPatch(t, huyangTestProbe(true, 19))
+	unit := context.Path(huyangTestUnitDir, "huyang.service")
+	adapterTestWrite(t, unit, huyangContinuedCommentUnit)
+	state, actions, err := huyangTestApply(t, context)
+	if err != nil || state != "converged" {
+		t.Fatalf("state = %q, error = %v (actions %v)", state, err, actions)
+	}
+	if got := huyangTestRead(t, unit); got != huyangContinuedCommentUnit {
+		t.Fatalf("unit bytes changed:\n%s", got)
+	}
+	if runner.ran("daemon-reload") {
+		t.Fatalf("an unchanged unit was reloaded: %v", runner.calls)
+	}
+}
+
+func huyangTestStatusMatches(t *testing.T, context *Context) (bool, map[string]any) {
+	t.Helper()
+	spec := context.Spec("huyang")
+	observed, err := huyangObserve(context, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return observationMatches(context, "huyang", spec, observed), observed
+}
+
+func TestHuyangStatusTreatsAPendingReloadAsDrift(t *testing.T) {
+	context, runner := huyangTestPrepare(t, huyangConvergedWorld)
+	huyangTestPatch(t, huyangTestProbe(true, 19))
+	adapterTestWrite(t, context.Path(".local/share/huyang/bin/huyang"), "binary")
+	adapterTestWrite(t, context.Path(huyangTestUnitDir, "huyang.service"), huyangCycleUnit)
+	passThrough := runner.handle
+	failReload := true
+	runner.handle = func(command procx.Command) procx.Result {
+		if failReload && adapterTestMatches(command.Argv, "systemctl", "daemon-reload") {
+			return procx.Result{Code: 1, Stderr: "transport endpoint is not connected"}
+		}
+		return passThrough(command)
+	}
+	if _, _, err := huyangTestApply(t, context); err == nil {
+		t.Fatal("a failed reload passed")
+	}
+	// The bytes on disk are reconciled, but systemd still runs the old graph.
+	if matches, observed := huyangTestStatusMatches(t, context); matches {
+		t.Fatalf("status is clean right after a failed reload (observed %v)", observed)
+	}
+	failReload = false
+	if _, actions, err := huyangTestApply(t, context); err != nil {
+		t.Fatalf("retry: %v (actions %v)", err, actions)
+	}
+	if matches, observed := huyangTestStatusMatches(t, context); !matches {
+		t.Fatalf("status drifts after the successful retry (observed %v)", observed)
+	}
+}
+
+func TestHuyangStatusTreatsAnUnreadableOrderingObservationAsDrift(t *testing.T) {
+	context, _ := huyangTestPrepare(t, huyangConvergedWorld)
+	adapterTestWrite(t, context.Path(".local/share/huyang/bin/huyang"), "binary")
+	// A directory where the unit file belongs cannot be read as a unit, so
+	// the ordering of huyang.service is unknown, which is not clean.
+	if err := os.MkdirAll(context.Path(huyangTestUnitDir, "huyang.service"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if matches, observed := huyangTestStatusMatches(t, context); matches {
+		t.Fatalf("an unknown ordering observation counts as clean (observed %v)", observed)
+	}
+}
+
 func TestHuyangUnitIsReconciledWhenTheCheckoutIsAbsent(t *testing.T) {
 	runner := &adapterTestRunner{}
 	context := adapterTestContext(t, runner)
