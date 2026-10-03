@@ -32,7 +32,7 @@ from .environment import (
 CLAUDE_BEGIN = "<!-- >>> omarchy-setup:claude >>> -->"
 CLAUDE_END = "<!-- <<< omarchy-setup:claude <<< -->"
 SECRET_RE = re.compile(r"(password|token|credential|api.?key|authorization|secret)", re.I)
-SAFE_ENV = {"OV_AGENT", "LOCAL_LLM_MODEL", "LOCAL_LLM_NUM_CTX", "LOCAL_LLM_URL"}
+SAFE_ENV = {"OV_AGENT", "OV_BASE_URL", "LOCAL_LLM_MODEL", "LOCAL_LLM_NUM_CTX", "LOCAL_LLM_URL"}
 ROOTS = {".config", ".local", ".claude", ".codex", ".agents"}
 SETTINGS_KEYS = ("model", "theme", "tui", "syntaxHighlightingDisabled", "permissions")
 REF_RE = re.compile(r"secretref:[A-Za-z0-9][A-Za-z0-9._/-]*")

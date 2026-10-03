@@ -46,7 +46,8 @@ var credentialValuePattern = regexp.MustCompile(
 // safeEnvironmentKeys are the only environment variables a captured MCP
 // registration may set. Anything else has to become a secret reference.
 var safeEnvironmentKeys = map[string]bool{
-	"OV_AGENT": true, "LOCAL_LLM_MODEL": true, "LOCAL_LLM_NUM_CTX": true, "LOCAL_LLM_URL": true,
+	"OV_AGENT": true, "OV_BASE_URL": true,
+	"LOCAL_LLM_MODEL": true, "LOCAL_LLM_NUM_CTX": true, "LOCAL_LLM_URL": true,
 }
 
 // managedRoots are the home directory entries a managed path may start with.
