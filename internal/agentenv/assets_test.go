@@ -726,6 +726,25 @@ func TestCaptureRejectsCredentialsInOwnedRegistrations(t *testing.T) {
 	}
 }
 
+// TestOpenVikingBaseURLIsPublicButNotItsCredentials admits the OpenViking
+// URL as a registration environment key, and still refuses one that carries
+// credentials in its userinfo.
+func TestOpenVikingBaseURLIsPublicButNotItsCredentials(t *testing.T) {
+	registration := func(url string) map[string]any {
+		return map[string]any{"ov-memory": map[string]any{
+			"command": "/home/user/.local/bin/ov-memory-mcp",
+			"env":     map[string]any{"OV_AGENT": "claude-code", "OV_BASE_URL": url},
+		}}
+	}
+	if err := CheckPublic(registration("https://ov.example.test"), ""); err != nil {
+		t.Errorf("an https OV_BASE_URL was refused: %v", err)
+	}
+	err := CheckPublic(registration("https://user:secret@ov.example.test"), "")
+	if err == nil || !strings.Contains(err.Error(), "credential-bearing registration value") {
+		t.Errorf("an OV_BASE_URL with userinfo was accepted: %v", err)
+	}
+}
+
 // TestNoBlindOverwriteWhenAFileChangesDuringActivation refuses to reclaim a
 // path somebody edited while the transaction was running.
 func TestNoBlindOverwriteWhenAFileChangesDuringActivation(t *testing.T) {

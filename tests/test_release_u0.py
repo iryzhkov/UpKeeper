@@ -15,6 +15,7 @@ from dev_fleet.release_assets import (
     CLAUDE_END,
     apply_environment,
     capture_environment,
+    check_public,
     observe_environment,
     validate_environment,
 )
@@ -481,3 +482,17 @@ def test_remote_agent_has_no_repository_import_dependency(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["result"] == "updated"
     assert list(target.iterdir()) == []
+
+
+def test_openviking_base_url_is_public_but_not_its_credentials():
+    def registration(url):
+        return {
+            "ov-memory": {
+                "command": "/home/user/.local/bin/ov-memory-mcp",
+                "env": {"OV_AGENT": "claude-code", "OV_BASE_URL": url},
+            }
+        }
+
+    check_public(registration("https://ov.example.test"))
+    with pytest.raises(ValueError, match="credential-bearing registration value"):
+        check_public(registration("https://user:secret@ov.example.test"))
