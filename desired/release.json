@@ -2193,6 +2193,15 @@
           "repository": "ssh://git@git.ryzhkov.dev/igor/home-assistant-config.git",
           "setup_profile": "git-status"
         },
+        "homelab-cli-github": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "git@github.com:iryzhkov/homelab-cli.git",
+          "setup_profile": "git-status"
+        },
         "huyang": {
           "default_ref": "feature/huyang",
           "eligible_workers": [
@@ -2208,6 +2217,15 @@
             "omarchy-pc"
           ],
           "repository": "ssh://igor@normandy/home/igor/Work/huyang",
+          "setup_profile": "git-status"
+        },
+        "omarchy-setup-github": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "git@github.com:iryzhkov/omarchy-setup.git",
           "setup_profile": "git-status"
         },
         "s4-homelab": {
@@ -2263,6 +2281,15 @@
             "normandy"
           ],
           "repository": "ssh://igor@normandy/home/igor/Work/t3-steward",
+          "setup_profile": "git-status"
+        },
+        "t3-steward-github": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "homelab",
+            "omarchy-pc"
+          ],
+          "repository": "git@github.com:iryzhkov/t3-steward.git",
           "setup_profile": "git-status"
         },
         "upkeeper-migration": {
