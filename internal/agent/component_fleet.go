@@ -648,6 +648,9 @@ func fleetResolveSecretReference(
 // Both documents are retained even when only one changes, so that restoring a
 // run puts the whole of what it found back rather than half of it.
 func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) error {
+	if err := fleetValidateReusedRetention(c, runID); err != nil {
+		return err
+	}
 	if err := fleetPreparePolicyReceipt(c, documents); err != nil {
 		return err
 	}
@@ -837,7 +840,8 @@ func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) erro
 	case errors.Is(err, fs.ErrExist):
 		info, statErr := os.Stat(recordPath)
 		if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			return nil
+			_, err := fleetReadRetainedRecord(c.Home, runID)
+			return err
 		}
 		return errors.New(
 			"fleet retention directory " + filepath.Join(fleet.StateDirectory, runID) +
@@ -890,24 +894,16 @@ func FleetRestorePrior(home, runID string) error {
 	if err != nil {
 		return err
 	}
-	prior, err := canonjson.DecodeObject(record)
+	documents, err := fleetDecodeRetainedRecord(record)
 	if err != nil {
 		return err
 	}
-	documents, ok := prior["documents"].([]any)
-	if !ok || len(documents) == 0 {
-		return errors.New("retained fleet record names no documents")
-	}
 	policyRestored := false
-	for _, item := range documents {
-		entry, isObject := item.(map[string]any)
-		if !isObject {
-			return errors.New("retained fleet record is malformed")
-		}
-		if err := fleetRestoreDocument(home, entry); err != nil {
+	for _, entry := range documents {
+		if err := fleetRestoreDecodedDocument(home, entry, nil, false); err != nil {
 			return err
 		}
-		policyRestored = policyRestored || entry["destination"] == fleet.RoutePolicyDestination
+		policyRestored = policyRestored || entry.destination == fleet.RoutePolicyDestination
 	}
 	if policyRestored {
 		return fleetReconcilePolicyReceipt(&Context{Home: home})
@@ -936,51 +932,41 @@ func fleetRestoreRetainedExpected(home, runID, destination string, expected []by
 	if err != nil {
 		return false, err
 	}
-	prior, err := canonjson.DecodeObject(record)
+	documents, err := fleetDecodeRetainedRecord(record)
 	if err != nil {
 		return false, err
 	}
-	documents, ok := prior["documents"].([]any)
-	if !ok || len(documents) == 0 {
-		return false, errors.New("retained fleet record names no documents")
+	if !fleetOwnedDestinations[destination] {
+		return false, errors.New("unexpected restore destination")
 	}
-	for _, item := range documents {
-		entry, isObject := item.(map[string]any)
-		if !isObject {
-			return false, errors.New("retained fleet record is malformed")
+	for _, entry := range documents {
+		if entry.destination == destination {
+			return entry.existed, fleetRestoreDecodedDocument(home, entry, expected, guarded)
 		}
-		if named, _ := entry["destination"].(string); named != destination {
-			continue
-		}
-		existed, _ := entry["existed"].(bool)
-		if guarded {
-			entry["expected"] = expected
-		}
-		return existed, fleetRestoreDocument(home, entry)
 	}
 	return false, errors.New("retained fleet record does not name " + destination)
 }
 
 func fleetRestoreDocument(home string, entry map[string]any) error {
-	destination, _ := entry["destination"].(string)
-	if !fleetOwnedDestinations[destination] {
-		return errors.New("retained fleet record names an unexpected destination")
+	return fleetRestoreDocumentExpected(home, entry, nil, false)
+}
+
+func fleetRestoreDocumentExpected(home string, entry map[string]any, expected []byte, guarded bool) error {
+	decoded, err := fleetValidateRetainedEntry(entry)
+	if err != nil {
+		return err
 	}
+	return fleetRestoreDecodedDocument(home, decoded, expected, guarded)
+}
+
+func fleetRestoreDecodedDocument(home string, entry fleetRetainedDocument, expected []byte, guarded bool) error {
+	destination, existed := entry.destination, entry.existed
 	target := filepath.Join(home, destination)
 	if err := fleetOwnedPathSafe(home, target); err != nil {
 		return err
 	}
-	existed, _ := entry["existed"].(bool)
-	if expected, guarded := entry["expected"].([]byte); guarded {
-		var payload []byte
-		var err error
-		if existed {
-			payload, err = fleetRetainedBytes(entry)
-			if err != nil {
-				return err
-			}
-		}
-		return fleetActivate(&fleetDocument{destination: destination, target: target, before: expected, payload: payload, remove: !existed, restorePolicy: true})
+	if guarded {
+		return fleetActivate(&fleetDocument{destination: destination, target: target, before: expected, payload: entry.payload, remove: !existed, restorePolicy: true})
 	}
 	directory, err := fleetOpenParent(home, target)
 	if errors.Is(err, os.ErrNotExist) && !existed {
@@ -996,10 +982,7 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 		}
 		return directory.Sync()
 	}
-	content, err := fleetRetainedBytes(entry)
-	if err != nil {
-		return err
-	}
+	content := entry.payload
 	// The same staging discipline as the forward path, and for a reason the
 	// forward path does not have: worker-bootstrap.json is also written by
 	// worker-configuration v1, whose helper stages through one fixed temporary

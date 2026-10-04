@@ -162,8 +162,8 @@ func TestFleetCombinedRetirementPostMutationFailure(t *testing.T) {
 			}
 			mutated := false
 			retire := func(c *Context, run string, dry bool) (bool, error) {
-				return fleetRetireClientWithRestore(c, run, dry, func(home string, entry map[string]any) error {
-					if err := fleetRestoreDocument(home, entry); err != nil {
+				return fleetRetireClientWithRestore(c, run, dry, func(home string, entry map[string]any, expected []byte) error {
+					if err := fleetRestoreDocumentExpected(home, entry, expected, true); err != nil {
 						return err
 					}
 					mutated = true

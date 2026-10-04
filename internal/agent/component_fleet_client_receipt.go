@@ -224,11 +224,17 @@ func fleetCommitClientReceipt(c *Context, receipt *fleetClientReceipt) error {
 }
 
 func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
-	return fleetRetireClientWithRestore(c, runID, dryRun, fleetRestoreDocument)
+	return fleetRetireClientWithRestore(c, runID, dryRun, func(home string, entry map[string]any, expected []byte) error {
+		return fleetRestoreDocumentExpected(home, entry, expected, true)
+	})
 }
 
 // restore is the filesystem boundary, also used for post-mutation fault tests.
-func fleetRetireClientWithRestore(c *Context, runID string, dryRun bool, restore func(string, map[string]any) error) (effected bool, failure error) {
+// Expected live bytes are trusted runtime input, separate from retained data.
+func fleetRetireClientWithRestore(c *Context, runID string, dryRun bool, restore func(string, map[string]any, []byte) error) (effected bool, failure error) {
+	if err := fleetValidateReusedRetention(c, runID); err != nil {
+		return false, err
+	}
 	current, err := fleetReadPrivateBounded(c, fleet.ClientDestination, fleetCoordinatorMaxBytes)
 	if err != nil {
 		return false, err
@@ -296,9 +302,9 @@ func fleetRetireClientWithRestore(c *Context, runID string, dryRun bool, restore
 		// The prior document may predate the current schema. Restore exact
 		// retained bytes through the existing recovery path, not forward validation.
 		entry := map[string]any{"destination": fleet.ClientDestination,
-			"existed": receipt.PriorExists, "encoding": "base64/v1", "content": base64.StdEncoding.EncodeToString(receipt.Prior), "expected": current}
+			"existed": receipt.PriorExists, "encoding": "base64/v1", "content": base64.StdEncoding.EncodeToString(receipt.Prior)}
 		armed = true
-		if err := restore(c.Home, entry); err != nil {
+		if err := restore(c.Home, entry, current); err != nil {
 			return false, err
 		}
 		if err := fsatomic.SyncDirectory(filepath.Dir(planned.target)); err != nil {
@@ -321,6 +327,11 @@ func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[str
 }
 
 func fleetRetireOwnedProjectionsWithClient(c *Context, runID string, dryRun bool, retireClient func(*Context, string, bool) (bool, error)) (map[string]any, error) {
+	for _, retainedRun := range []string{runID, runID + "-policy", runID + "-client"} {
+		if err := fleetValidateReusedRetention(c, retainedRun); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := fleetRetirePolicy(c, runID+"-policy", true); err != nil {
 		return nil, err
 	}
