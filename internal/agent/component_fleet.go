@@ -117,6 +117,11 @@ func fleetProjection(
 	}
 	var reload any
 	if !dryRun {
+		// A retry must validate its entire original record before any effect,
+		// including ownership adoption when every live document already matches.
+		if err := fleetValidateReusedRetention(c, runID); err != nil {
+			return nil, err
+		}
 		if changed {
 			if err := fleetWriteProjection(c, runID, documents); err != nil {
 				return nil, err
