@@ -56,7 +56,7 @@ const (
 )
 
 // ComponentFields is the closed required top-level field set. observed and
-// clients are optional; observed is written by capture and clients is authored.
+// clients and route_policy are optional authored keys; observed is written by capture.
 var ComponentFields = []string{
 	"kind", "schema_version", "coordinator", "profiles", "hosts", "projects",
 }
@@ -251,6 +251,7 @@ type Document struct {
 	Clients     map[string]Client
 	Projects    map[string]Project
 	observed    map[string]any
+	routePolicy []byte
 }
 
 // HostNames, ClientNames, ProfileNames and ProjectNames are sorted, so that
@@ -287,7 +288,7 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, failure.Value(
 			"unsupported steward-fleet-configuration schema_version")
 	}
-	if missing, unknown := checkKeys(component, ComponentFields, []string{"observed", "clients"}); unknown != "" {
+	if missing, unknown := checkKeys(component, ComponentFields, []string{"observed", "clients", "route_policy"}); unknown != "" {
 		return nil, failure.Value(
 			"steward fleet configuration carries an unknown top-level field %s; %s",
 			strconv.Quote(unknown), referencesOnly)
@@ -312,6 +313,9 @@ func Parse(component map[string]any) (*Document, error) {
 		return nil, err
 	}
 	if err := document.parseObserved(component); err != nil {
+		return nil, err
+	}
+	if err := document.parseRoutePolicy(component); err != nil {
 		return nil, err
 	}
 	return document, nil
