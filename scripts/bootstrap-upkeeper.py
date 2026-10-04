@@ -506,15 +506,28 @@ def copy_artifact(source, target, obj):
         try:
             with os.fdopen(out, "wb", closefd=False) as stream:
                 total = 0
+                copied = hashlib.sha256()
                 while chunk := os.read(fd, 65536):
                     total += len(chunk)
+                    copied.update(chunk)
                     require(total <= obj["artifact_size"], "input grew while copying")
                     stream.write(chunk)
                     boundary("copy-chunk")
                 stream.flush()
                 os.fsync(out)
                 boundary("binary-file-fsync")
-            require(snapshot(initial) == snapshot(os.fstat(fd))
+            # Timestamp granularity can hide a same-size in-place rewrite.
+            # Rebind the source bytes before any staged binary is executed.
+            os.lseek(fd, 0, os.SEEK_SET)
+            current = hashlib.sha256()
+            observed = 0
+            while chunk := os.read(fd, 65536):
+                observed += len(chunk)
+                require(observed <= obj["artifact_size"], "source changed while copying")
+                current.update(chunk)
+            require(observed == obj["artifact_size"]
+                    and current.hexdigest() == copied.hexdigest()
+                    and snapshot(initial) == snapshot(os.fstat(fd))
                     and snapshot(initial) == snapshot(source.lstat()),
                     "source changed while copying")
         finally:

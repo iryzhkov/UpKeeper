@@ -187,7 +187,12 @@ def test_hash_size_static_and_platform_refusals(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["inplace", "replace", "symlink"])
-def test_input_changes_during_copy_fail_before_execution(setup, monkeypatch, change):
+@pytest.mark.parametrize("stable_times", [False, True])
+def test_input_changes_during_copy_fail_before_execution(setup, monkeypatch, change, stable_times):
+    if stable_times:
+        monkeypatch.setattr(
+            bootstrap, "snapshot", lambda info: (info.st_dev, info.st_ino, info.st_size)
+        )
     artifact = setup[1]
     fired = False
 
