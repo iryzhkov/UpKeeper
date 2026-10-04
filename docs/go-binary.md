@@ -9,6 +9,10 @@ reference implementation and the rollback path. Nothing in the fleet runs the
 Go binary until an operator installs it and switches a unit, and both of those
 steps are reversible with one command.
 
+For an explicitly invoked local-only standalone installer, see
+[standalone-bootstrap.md](standalone-bootstrap.md). Debian 13/Arch amd64
+compatibility remains provisional until actual distro execution is qualified.
+
 ## Why a binary
 
 The deployed program needed a Python runtime on every host, and the supported
