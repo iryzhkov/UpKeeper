@@ -361,7 +361,26 @@ func readlinkat(root int, name string) (string, error) {
 func (x *filesystem) tree(root int, expected map[string]uint32) (map[string][]byte, error) {
 	return x.treeMode(root, expected, false)
 }
+
+// treeFile is internal inventory derived from validated metadata, never a grant.
+type treeFile struct {
+	mode    uint32
+	limit   int64
+	payload bool
+}
+
 func (x *filesystem) treeMode(root int, expected map[string]uint32, source bool) (map[string][]byte, error) {
+	files := map[string]treeFile{}
+	for path, mode := range expected {
+		files[path] = treeFile{mode, fileLimit, true}
+		if source && path == "owner.json" || !source && path == "receipt.json" {
+			files[path] = treeFile{mode, metadataLimit, source}
+		}
+	}
+	return x.treeFiles(root, files, source)
+}
+
+func (x *filesystem) treeFiles(root int, expected map[string]treeFile, source bool) (map[string][]byte, error) {
 	data := map[string][]byte{}
 	observed := map[string]syscall.Stat_t{}
 	seenDirs := map[string]bool{}
@@ -422,25 +441,25 @@ func (x *filesystem) treeMode(root int, expected map[string]uint32, source bool)
 				}
 			} else {
 				syscall.Close(h)
-				mode, ok := expected[p]
+				file, ok := expected[p]
 				if !ok {
 					return errors.New("extra file")
 				}
-				limit := int64(fileLimit)
-				if mode == 0600 {
-					limit = metadataLimit
+				limit := file.limit
+				if file.payload && aggregateLimit-total < limit {
+					limit = aggregateLimit - total
 				}
-				b, fs, e := x.read(root, p, limit, mode)
+				b, fs, e := x.read(root, p, limit, file.mode)
 				if e != nil {
 					return e
 				}
-				if mode != 0600 {
+				if file.payload {
 					total += int64(len(b))
 					if total > aggregateLimit {
 						return errors.New("aggregate limit")
 					}
 				}
-				if mode == 0644 && (!utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0) {
+				if file.mode == 0644 && (!utf8.Valid(b) || bytes.IndexByte(b, 0) >= 0) {
 					return errors.New("payload is not generated text")
 				}
 				data[p] = b
@@ -469,11 +488,8 @@ func (x *filesystem) treeMode(root int, expected map[string]uint32, source bool)
 		return nil, errors.New("tree closure")
 	}
 	for _, p := range sortedKeys(expected) {
-		limit := int64(fileLimit)
-		if expected[p] == 0600 {
-			limit = metadataLimit
-		}
-		b, now, e := x.read(root, p, limit, expected[p])
+		file := expected[p]
+		b, now, e := x.read(root, p, file.limit, file.mode)
 		if e != nil {
 			return nil, e
 		}

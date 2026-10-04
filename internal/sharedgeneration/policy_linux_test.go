@@ -13,31 +13,11 @@ import (
 // Synthetic generation only: exercises versioned inert storage and physical
 // closure. It makes no claim about owning parser/catalog or generator parity.
 func installSyntheticV2(t *testing.T, s *Store) Inspection {
+	return installSyntheticV2Payload(t, s, nil)
+}
+func installSyntheticV2Payload(t *testing.T, s *Store, mutate func(*Receipt, map[string][]byte)) Inspection {
 	t.Helper()
-	r := receiptFixture()
-	payload := map[string][]byte{}
-	for n := range r.Files {
-		f := &r.Files[n]
-		b := []byte(f.Path + "\n")
-		if f.Kind == "policy-input" {
-			var e error
-			b, e = canonjson.MarshalFile(map[string]any{})
-			if e != nil {
-				t.Fatal(e)
-			}
-		}
-		f.SHA256 = digest(b)
-		payload[f.Path] = b
-		if f.Kind == "skill" {
-			r.SourceSHA256["config/claude/"+f.Path] = f.SHA256
-		}
-		if f.Kind == "policy-input" {
-			r.Policy.CanonicalPolicySHA256 = f.SHA256
-		}
-	}
-	if e := validateReceipt(r); e != nil {
-		t.Fatal(e)
-	}
+	r, payload := syntheticV2Payload(t, mutate)
 	rb, e := canonjson.MarshalFile(r)
 	if e != nil {
 		t.Fatal(e)
@@ -60,6 +40,47 @@ func installSyntheticV2(t *testing.T, s *Store) Inspection {
 		t.Fatal(e)
 	}
 	return Inspection{id, &r, "trusted-generated-source"}
+}
+func syntheticV2Payload(t *testing.T, mutate func(*Receipt, map[string][]byte)) (Receipt, map[string][]byte) {
+	t.Helper()
+	r := receiptFixture()
+	payload := map[string][]byte{}
+	for n := range r.Files {
+		f := &r.Files[n]
+		b := []byte(f.Path + "\n")
+		if f.Kind == "policy-input" {
+			var e error
+			b, e = canonjson.MarshalFile(map[string]any{})
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
+		f.SHA256 = digest(b)
+		payload[f.Path] = b
+		if f.Kind == "skill" {
+			r.SourceSHA256["config/claude/"+f.Path] = f.SHA256
+		}
+		if f.Kind == "policy-input" {
+			r.Policy.CanonicalPolicySHA256 = f.SHA256
+		}
+	}
+	if mutate != nil {
+		mutate(&r, payload)
+	}
+	for n := range r.Files {
+		f := &r.Files[n]
+		f.SHA256 = digest(payload[f.Path])
+		if f.Kind == "skill" {
+			r.SourceSHA256["config/claude/"+f.Path] = f.SHA256
+		}
+		if f.Kind == "policy-input" {
+			r.Policy.CanonicalPolicySHA256 = f.SHA256
+		}
+	}
+	if e := validateReceipt(r); e != nil {
+		t.Fatal(e)
+	}
+	return r, payload
 }
 func TestMixedV1V2InspectSelectRollbackImmutable(t *testing.T) {
 	repo, commit := fixture(t, "mixed")

@@ -300,11 +300,17 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 	if digest(b) != id {
 		return Inspection{}, errors.New("generation id")
 	}
-	expected := map[string]uint32{"receipt.json": 0600}
+	// validateReceipt above binds every kind, path, destination and mode to the
+	// version's closed inventory. Select limits only from that validated kind.
+	expected := map[string]treeFile{"receipt.json": {0600, metadataLimit, false}}
 	for _, f := range r.Files {
-		expected[f.Path] = uint32(f.Mode)
+		limit := int64(fileLimit)
+		if f.Kind == "policy-input" {
+			limit = policyLimit
+		}
+		expected[f.Path] = treeFile{uint32(f.Mode), limit, true}
 	}
-	data, e := t.x.tree(fd, expected)
+	data, e := t.x.treeFiles(fd, expected, false)
 	if e != nil {
 		return Inspection{}, e
 	}
@@ -631,6 +637,19 @@ func (s *Store) stage(repository, commit string, options *author.SharedPolicyOpt
 	if e = physicalBind(repository, repo); e != nil {
 		return Inspection{}, e
 	}
+	return t.stageGeneration(r, payload, func() error {
+		// Independently observe the still-open source after copying.
+		again, other, e := observePreparation(t.x, p)
+		if e != nil || !reflect.DeepEqual(r, again) || !reflect.DeepEqual(payload, other) {
+			return errors.New("prepared input changed")
+		}
+		return nil
+	})
+}
+
+// stageGeneration is internal: its production input comes only from observed
+// preparation. Tests use it for synthetic canonical payload boundary coverage.
+func (t *transaction) stageGeneration(r Receipt, payload map[string][]byte, recheck func() error) (Inspection, error) {
 	rb, e := canonjson.MarshalFile(r)
 	if e != nil {
 		return Inspection{}, e
@@ -707,10 +726,8 @@ func (s *Store) stage(repository, commit string, options *author.SharedPolicyOpt
 	if _, e = t.generation(stage, id); e != nil {
 		return fail(e)
 	}
-	// Independently observe the still-open prepared source again after copying.
-	again, other, e := observePreparation(t.x, p)
-	if e != nil || !reflect.DeepEqual(r, again) || !reflect.DeepEqual(payload, other) {
-		return fail(errors.New("prepared input changed"))
+	if e = recheck(); e != nil {
+		return fail(e)
 	}
 	if e = t.bind(); e != nil {
 		return fail(e)

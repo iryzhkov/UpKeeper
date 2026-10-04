@@ -71,18 +71,47 @@ func acquireSharedRepository(path string) (func() error, func(), error) {
 	}
 	return verify, func() { syscall.Close(held) }, nil
 }
+func acquireSharedSnapshotDirectory(path string) (func() error, func(), error) {
+	held, err := sharedHeld(path, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	var before syscall.Stat_t
+	if err := syscall.Fstat(held, &before); err != nil {
+		syscall.Close(held)
+		return nil, nil, err
+	}
+	verify := func() error {
+		current, err := sharedHeld(path, true)
+		if err != nil {
+			return err
+		}
+		defer syscall.Close(current)
+		var now syscall.Stat_t
+		if syscall.Fstat(current, &now) != nil || !sharedSame(before, now) {
+			return errors.New("shared snapshot directory changed")
+		}
+		return nil
+	}
+	return verify, func() { syscall.Close(held) }, nil
+}
 func sharedSame(a, b syscall.Stat_t) bool {
 	return a.Dev == b.Dev && a.Ino == b.Ino && a.Mode == b.Mode && a.Uid == b.Uid && a.Nlink == b.Nlink && a.Size == b.Size && a.Mtim == b.Mtim && a.Ctim == b.Ctim
 }
 
 func acquireSharedManifest(path string) ([]byte, func() error, func(), error) {
+	return acquireSharedFile(path, sharedManifestLimit, nil)
+}
+
+// The callback is a package-private deterministic read-race test seam.
+func acquireSharedFile(path string, limit int64, afterCapture func()) ([]byte, func() error, func(), error) {
 	held, err := sharedHeld(path, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	fail := func(err error) ([]byte, func() error, func(), error) { syscall.Close(held); return nil, nil, nil, err }
 	var before syscall.Stat_t
-	if syscall.Fstat(held, &before) != nil || before.Nlink != 1 || before.Size <= 0 || before.Size > sharedManifestLimit ||
+	if syscall.Fstat(held, &before) != nil || before.Nlink != 1 || before.Size <= 0 || before.Size > limit ||
 		before.Mode&07777 != before.Mode&0777 || before.Mode&0022 != 0 || before.Uid != uint32(os.Getuid()) && before.Uid != 0 {
 		return fail(errors.New("shared manifest ownership, links, mode or size"))
 	}
@@ -108,12 +137,15 @@ func acquireSharedManifest(path string) ([]byte, func() error, func(), error) {
 		if syscall.Fstat(fd, &opened) != nil || !sharedSame(before, opened) {
 			return nil, errors.New("shared manifest descriptor binding")
 		}
-		raw, err := io.ReadAll(io.LimitReader(file, sharedManifestLimit+1))
+		raw, err := io.ReadAll(io.LimitReader(file, limit+1))
 		var after syscall.Stat_t
-		if err != nil || syscall.Fstat(fd, &after) != nil || !sharedSame(before, after) || int64(len(raw)) != before.Size || len(raw) > sharedManifestLimit {
+		if err != nil || syscall.Fstat(fd, &after) != nil || !sharedSame(before, after) || int64(len(raw)) != before.Size || int64(len(raw)) > limit {
 			return nil, errors.New("shared manifest changed during read")
 		}
 		return raw, nil
+	}
+	if afterCapture != nil {
+		afterCapture()
 	}
 	raw, err := read()
 	if err != nil {

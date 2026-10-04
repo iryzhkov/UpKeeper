@@ -103,7 +103,12 @@ func prepareShared(repository, commit string, input *sharedPolicyInput) (_ *Shar
 	if err != nil || !ownerInfo.Mode().IsRegular() || ownerInfo.Size() <= 0 || ownerInfo.Size() > 256<<10 {
 		return nil, errors.New("shared owner type or bound")
 	}
-	ownerBytes, err := os.ReadFile(ownerPath)
+	var ownerBytes []byte
+	if input != nil {
+		ownerBytes, _, err = sharedRead(ownerPath, 256<<10)
+	} else {
+		ownerBytes, err = os.ReadFile(ownerPath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +168,10 @@ func prepareShared(repository, commit string, input *sharedPolicyInput) (_ *Shar
 		}
 		actual = append(actual, relative)
 		if owner.SchemaVersion == 2 {
+			i := sort.SearchStrings(owner.SourceFiles, relative)
+			if i == len(owner.SourceFiles) || owner.SourceFiles[i] != relative {
+				return errors.New("shared source unexpected path")
+			}
 			info, e := regularOutput(source, relative)
 			if e != nil {
 				return e
@@ -179,7 +188,12 @@ func prepareShared(repository, commit string, input *sharedPolicyInput) (_ *Shar
 				return errors.New("shared source aggregate")
 			}
 		}
-		content, e := os.ReadFile(path)
+		var content []byte
+		if owner.SchemaVersion == 2 {
+			content, _, e = sharedRead(path, sharedFileLimit)
+		} else {
+			content, e = os.ReadFile(path)
+		}
 		if e != nil {
 			return e
 		}

@@ -273,7 +273,7 @@ func prepareSharedPolicy(p *SharedPreparation, runner procx.Runner, source, home
 	if err := validateSharedSource(p, source); err != nil {
 		return nil, err
 	}
-	before, err := treeState(source)
+	before, err := sharedSourceState(source)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func prepareSharedPolicy(p *SharedPreparation, runner procx.Runner, source, home
 	if !reflect.DeepEqual(actual, want) {
 		return nil, errors.New("shared policy unexpected generated output")
 	}
-	after, err := treeState(source)
+	after, err := sharedSourceState(source)
 	if err != nil {
 		return nil, err
 	}
@@ -366,8 +366,8 @@ func validateSharedSource(p *SharedPreparation, source string) error {
 		if total > 64<<20 {
 			return errors.New("shared source aggregate")
 		}
-		content, err := os.ReadFile(filepath.Join(source, path))
-		if err != nil || digestOf(content) != hash {
+		content, captured, err := sharedRead(filepath.Join(source, path), limit)
+		if err != nil || captured.Mode().Perm() != mode || digestOf(content) != hash {
 			return errors.New("shared source binding")
 		}
 	}

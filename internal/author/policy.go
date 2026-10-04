@@ -134,7 +134,20 @@ func derivePolicyRoot(runner procx.Runner, scratch, checkout, home, temporary st
 	if err != nil {
 		return agentenv.DerivedSources{}, err
 	}
-	sourceState, err := treeState(checkout)
+	snapshotSource := treeState
+	snapshotOutput := treeState
+	reserve := int64(0)
+	if shared {
+		snapshotSource = sharedSourceState
+		reserve, err = sharedPayloadReserve(checkout, policy)
+		if err != nil {
+			return agentenv.DerivedSources{}, err
+		}
+		snapshotOutput = func(root string) (map[string]treeEntry, error) {
+			return sharedTreeState(root, sharedOutputLimits(), reserve)
+		}
+	}
+	sourceState, err := snapshotSource(checkout)
 	if err != nil {
 		return agentenv.DerivedSources{}, err
 	}
@@ -144,11 +157,16 @@ func derivePolicyRoot(runner procx.Runner, scratch, checkout, home, temporary st
 			!os.SameFile(identity, info) || !identity.ModTime().Equal(info.ModTime()) {
 			return failure.Validation("omarchy-setup: reviewed policy changed during generation")
 		}
-		current, err := os.ReadFile(path)
+		var current []byte
+		if shared {
+			current, _, err = sharedRead(path, 1<<20)
+		} else {
+			current, err = os.ReadFile(path)
+		}
 		if err != nil || !bytes.Equal(policy, current) {
 			return failure.Validation("omarchy-setup: reviewed policy bytes changed during generation")
 		}
-		currentState, err := treeState(checkout)
+		currentState, err := snapshotSource(checkout)
 		if err != nil {
 			return err
 		}
@@ -177,6 +195,13 @@ func derivePolicyRoot(runner procx.Runner, scratch, checkout, home, temporary st
 	if err := run(command); err != nil {
 		return agentenv.DerivedSources{}, err
 	}
+	// Check the complete shared output inventory and budget before capture.
+	if shared {
+		if _, err := snapshotOutput(home); err != nil {
+			return agentenv.DerivedSources{}, err
+		}
+	}
+	total := reserve
 	instructions := map[string]agentenv.DerivedFile{}
 	for _, relative := range policyInstructions {
 		info, err := regularOutput(home, relative)
@@ -188,26 +213,53 @@ func derivePolicyRoot(runner procx.Runner, scratch, checkout, home, temporary st
 		default:
 			return agentenv.DerivedSources{}, failure.Validation("omarchy-setup: unsupported output mode for %s", relative)
 		}
-		content, err := os.ReadFile(filepath.Join(home, relative))
+		var content []byte
+		if shared {
+			limit := sharedFileLimit
+			if sharedAggregateLimit-total < limit {
+				limit = sharedAggregateLimit - total
+			}
+			content, info, err = sharedRead(filepath.Join(home, relative), limit)
+		} else {
+			content, err = os.ReadFile(filepath.Join(home, relative))
+		}
 		if err != nil {
 			return agentenv.DerivedSources{}, err
 		}
+		if shared && info.Mode().Perm() != 0600 && info.Mode().Perm() != 0644 &&
+			info.Mode().Perm() != 0700 && info.Mode().Perm() != 0755 {
+			return agentenv.DerivedSources{}, failure.Validation("shared output mode changed")
+		}
 		if len(content) == 0 || !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
 			return agentenv.DerivedSources{}, failure.Validation("omarchy-setup: invalid output %s", relative)
+		}
+		if shared {
+			total += int64(len(content))
+			if total > sharedAggregateLimit {
+				return agentenv.DerivedSources{}, failure.Validation("shared payload aggregate")
+			}
 		}
 		instructions[relative] = agentenv.DerivedFile{Content: content, Permissions: int64(info.Mode().Perm())}
 	}
 	// The pinned generator is the projection authority. Its check mode validates
 	// the same explicit policy and compares every expected instruction/native byte.
-	outputState, err := treeState(home)
+	outputState, err := snapshotOutput(home)
 	if err != nil {
 		return agentenv.DerivedSources{}, err
+	}
+	if shared {
+		for relative, file := range instructions {
+			entry := outputState[relative]
+			if entry.Digest != digestOf(file.Content) || int64(entry.Mode.Perm()) != file.Permissions {
+				return agentenv.DerivedSources{}, failure.Validation("shared captured output changed")
+			}
+		}
 	}
 	command.Argv = append(command.Argv, "--check")
 	if err := run(command); err != nil {
 		return agentenv.DerivedSources{}, err
 	}
-	currentState, err := treeState(home)
+	currentState, err := snapshotOutput(home)
 	if err != nil {
 		return agentenv.DerivedSources{}, err
 	}
