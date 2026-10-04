@@ -127,8 +127,16 @@ func Run(root string, options Options) (Result, error) {
 		return Result{}, failure.Validation(
 			"%s is not in its canonical encoding, so an edit could not preserve its other bytes", release.File)
 	}
-	if _, err := release.Validate(manifest); err != nil {
+	validated, err := release.Validate(manifest)
+	if err != nil {
 		return Result{}, err
+	}
+	var policy []byte
+	if document, present, err := validated.FleetIntent(); err != nil {
+		return Result{}, err
+	} else if present {
+		// Use the exact immutable rendering fleet convergence will install.
+		policy = document.RoutePolicyBytes()
 	}
 	components, _ := manifest["components"].(map[string]any)
 	setup, _ := components["omarchy-setup"].(map[string]any)
@@ -170,7 +178,7 @@ func Run(root string, options Options) (Result, error) {
 	if err := extract(runner, repository, commit, checkout); err != nil {
 		return Result{}, err
 	}
-	sources, err := derive(runner, scratch, checkout)
+	sources, err := derive(runner, scratch, checkout, policy)
 	if err != nil {
 		return Result{}, err
 	}
@@ -489,7 +497,7 @@ func writeExtracted(target string, reader io.Reader, mode os.FileMode) error {
 // collects what it and the checkout install. The scratch home is the only
 // home the generator sees, so nothing of this host's agent environment can
 // leak into the release.
-func derive(runner procx.Runner, scratch, checkout string) (agentenv.DerivedSources, error) {
+func derive(runner procx.Runner, scratch, checkout string, policy []byte) (agentenv.DerivedSources, error) {
 	home := filepath.Join(scratch, "home")
 	temporary := filepath.Join(scratch, "tmp")
 	for _, directory := range []string{home, temporary} {
@@ -501,6 +509,9 @@ func derive(runner procx.Runner, scratch, checkout string) (agentenv.DerivedSour
 	if info, err := os.Lstat(generator); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o100 == 0 {
 		return agentenv.DerivedSources{}, failure.Validation(
 			"omarchy-setup: the pinned commit has no executable %s", Generator)
+	}
+	if policy != nil {
+		return derivePolicy(runner, scratch, checkout, home, temporary, policy)
 	}
 	generated := runner(procx.Command{
 		Argv: []string{generator, "--root", checkout},
