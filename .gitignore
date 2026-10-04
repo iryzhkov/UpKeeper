@@ -11,4 +11,4 @@ htmlcov/
 *.retry
 .ansible/
 *.egg-info/
-bin/
+/bin/

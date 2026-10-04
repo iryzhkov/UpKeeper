@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "owner": "upkeeper",
+  "state": "candidate-inert",
+  "source_repository": "github.com/iryzhkov/UpKeeper",
+  "legacy_source_repository": "github.com/iryzhkov/omarchy-setup",
+  "legacy_source_commit": "c6f58c421053690cff9ef1de04bc544cbb1fe720",
+  "generator": "config/bin/agents-instructions-gen",
+  "source_files": [
+    "config/bin/agents-instructions-gen",
+    "config/claude/CLAUDE.md",
+    "config/claude/skills/huyang/SKILL.md",
+    "config/claude/skills/implementation-session/SKILL.md",
+    "config/claude/skills/implementation-session/references/prompt-template.md",
+    "config/claude/skills/ov-memory-curation/SKILL.md",
+    "config/claude/skills/ov-memory/SKILL.md",
+    "config/claude/skills/publish-agent-tooling/SKILL.md",
+    "config/claude/skills/t3-campaign/SKILL.md",
+    "config/claude/skills/t3-campaign/references/executor-briefs.md",
+    "config/claude/skills/t3-task/SKILL.md",
+    "config/claude/skills/t3-wait/SKILL.md"
+  ],
+  "instruction_files": [
+    ".claude/omarchy-setup/CLAUDE.md",
+    ".codex/AGENTS.md",
+    ".config/agents/AGENTS.md",
+    ".config/agents/huyang.md",
+    ".config/agents/jocasta.md",
+    ".config/agents/ov-memory.md",
+    ".config/agents/t3-campaign-executor-briefs.md",
+    ".config/agents/t3-steward.md"
+  ],
+  "skill_roots": [
+    ".agents/skills",
+    ".claude/skills"
+  ],
+  "future_merges": [
+    ".claude/CLAUDE.md:omarchy-setup import fence",
+    ".config/opencode/opencode.json:instructions"
+  ],
+  "retired_reference": ".config/agents/agent99.md"
+}
