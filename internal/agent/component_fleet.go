@@ -32,12 +32,15 @@ var fleetAdminReferencePattern = regexp.MustCompile(
 // fleetDocument is one file this component owns on the host. A document with no
 // payload is one this host must not have: it is removed rather than written.
 type fleetDocument struct {
-	destination string
-	target      string
-	payload     []byte
-	remove      bool
-	before      []byte
-	changed     bool
+	destination    string
+	target         string
+	payload        []byte
+	remove         bool
+	before         []byte
+	changed        bool
+	validatePolicy func(string) error
+	restorePolicy  bool
+	policyReceipt  *fleetClientReceipt
 }
 
 // fleetProjection decides what this host's fleet intent means for it, and writes
@@ -99,6 +102,13 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
+	policy, err := fleetPlanPolicy(c, document.RoutePolicyBytes())
+	if err != nil {
+		return nil, err
+	}
+	if policy != nil {
+		documents = append(documents, policy)
+	}
 	changed := false
 	for _, planned := range documents {
 		changed = changed || planned.changed
@@ -112,6 +122,14 @@ func fleetProjection(
 			if coordinator && fleetCatalogChanged(documents) {
 				reload, err = fleetReloadCoordinator(c, runID)
 				if err != nil {
+					if policy != nil && policy.changed {
+						if _, restoreErr := fleetRestoreRetainedDocument(c.Home, runID, fleet.RoutePolicyDestination); restoreErr != nil {
+							return nil, Failf("rollback failed: policy after reload failure: %v; %v", restoreErr, err)
+						}
+						if restoreErr := fleetReconcilePolicyReceipt(c); restoreErr != nil {
+							return nil, Failf("rollback failed: policy receipt: %v; %v", restoreErr, err)
+						}
+					}
 					return nil, err
 				}
 			}
@@ -127,10 +145,18 @@ func fleetProjection(
 					return nil, err
 				}
 			}
+			if policy != nil {
+				if err := fleetPreparePolicyReceipt(c, documents); err != nil {
+					return nil, err
+				}
+				if err := fleetCommitPolicyReceipt(c, documents); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if clientDeclared && !workerDeclared {
-		return fleetClientResult(document.Clients[host], client, changed), nil
+		return fleetPolicyResult(fleetClientResult(document.Clients[host], client, changed), policy), nil
 	}
 	if !workerDeclared {
 		state := "converged"
@@ -146,7 +172,7 @@ func fleetProjection(
 		if reload != nil {
 			result["coordinator_reload"] = reload
 		}
-		return result, nil
+		return fleetPolicyResult(result, policy), nil
 	}
 	result, err := fleetResult(document, host, worker, client, changed)
 	if err != nil {
@@ -155,7 +181,7 @@ func fleetProjection(
 	if reload != nil {
 		result["coordinator_reload"] = reload
 	}
-	return result, nil
+	return fleetPolicyResult(result, policy), nil
 }
 
 // stewardCoordinatorUnit is the unit that runs the coordinator on its host. It
@@ -620,6 +646,9 @@ func fleetResolveSecretReference(
 // Both documents are retained even when only one changes, so that restoring a
 // run puts the whole of what it found back rather than half of it.
 func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) error {
+	if err := fleetPreparePolicyReceipt(c, documents); err != nil {
+		return err
+	}
 	receipt, err := fleetPrepareClientReceipt(c, documents)
 	if err != nil {
 		return err
@@ -628,7 +657,12 @@ func fleetWriteProjection(c *Context, runID string, documents []*fleetDocument) 
 		return err
 	}
 	if receipt != nil {
-		return fleetCommitClientReceipt(c, receipt)
+		if err := fleetCommitClientReceipt(c, receipt); err != nil {
+			return fleetProjectionCommitFailure(c, runID, documents, err)
+		}
+	}
+	if err := fleetCommitPolicyReceipt(c, documents); err != nil {
+		return fleetProjectionCommitFailure(c, runID, documents, err)
 	}
 	return nil
 }
@@ -689,6 +723,11 @@ func fleetActivate(planned *fleetDocument) error {
 	defer func() { _ = os.Remove(staged) }()
 	if err := fleetValidateStaged(staged, planned); err != nil {
 		return err
+	}
+	if planned.destination == fleet.RoutePolicyDestination {
+		if err := os.Chmod(staged, 0o644); err != nil {
+			return err
+		}
 	}
 	if err := os.Rename(staged, planned.target); err != nil {
 		return err
@@ -763,6 +802,7 @@ var fleetOwnedDestinations = map[string]bool{
 	fleet.WorkerDestination:      true,
 	fleet.ClientDestination:      true,
 	fleet.CoordinatorDestination: true,
+	fleet.RoutePolicyDestination: true,
 }
 
 // FleetRestorePrior puts back the documents a run replaced.
@@ -784,6 +824,7 @@ func FleetRestorePrior(home, runID string) error {
 	if !ok || len(documents) == 0 {
 		return errors.New("retained fleet record names no documents")
 	}
+	policyRestored := false
 	for _, item := range documents {
 		entry, isObject := item.(map[string]any)
 		if !isObject {
@@ -792,6 +833,10 @@ func FleetRestorePrior(home, runID string) error {
 		if err := fleetRestoreDocument(home, entry); err != nil {
 			return err
 		}
+		policyRestored = policyRestored || entry["destination"] == fleet.RoutePolicyDestination
+	}
+	if policyRestored {
+		return fleetReconcilePolicyReceipt(&Context{Home: home})
 	}
 	return nil
 }
@@ -866,6 +911,11 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 		return err
 	}
 	defer func() { _ = os.Remove(staged) }()
+	if destination == fleet.RoutePolicyDestination {
+		if err := os.Chmod(staged, 0o644); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(staged, target); err != nil {
 		return err
 	}
@@ -916,6 +966,15 @@ func fleetValidateStaged(staged string, planned *fleetDocument) error {
 	}
 	if !bytes.Equal(written, planned.payload) {
 		return errors.New("staged fleet projection does not match what was rendered")
+	}
+	if planned.destination == fleet.RoutePolicyDestination {
+		if planned.restorePolicy {
+			return nil
+		}
+		if planned.validatePolicy == nil {
+			return errors.New("policy staging requires configured-catalog validation")
+		}
+		return planned.validatePolicy(staged)
 	}
 	entry, err := canonjson.DecodeObject(written)
 	if err != nil {

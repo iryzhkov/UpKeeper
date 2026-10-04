@@ -272,6 +272,9 @@ func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
 }
 
 func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[string]any, error) {
+	if _, err := fleetRetirePolicy(c, runID+"-policy", true); err != nil {
+		return nil, err
+	}
 	// Validate every retirement before any effect. A malformed coordinator
 	// document must not cause a partial client restoration.
 	if _, err := fleetRetireClient(c, runID+"-client", true); err != nil {
@@ -280,12 +283,38 @@ func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[str
 	if _, err := fleetRetireCoordinator(c, runID, true); err != nil {
 		return nil, err
 	}
+	policy, err := fleetPlanPolicy(c, nil)
+	if err != nil {
+		return nil, err
+	}
+	if policy != nil && !dryRun {
+		// Retire policy first so any later failure can restore its last-good bytes.
+		if err := fleetWriteProjection(c, runID+"-policy", []*fleetDocument{policy}); err != nil {
+			return nil, err
+		}
+		changed, err := fleetRetireClient(c, runID+"-client", false)
+		if err != nil {
+			return nil, fleetRetirementPolicyFailure(c, runID, false, err)
+		}
+		result, err := fleetRetireCoordinator(c, runID, false)
+		if err != nil {
+			return nil, fleetRetirementPolicyFailure(c, runID, changed, err)
+		}
+		if changed || policy.changed {
+			result["state"] = "updated"
+		}
+		return result, nil
+	}
 	changed, err := fleetRetireClient(c, runID+"-client", dryRun)
 	if err != nil {
 		return nil, err
 	}
 	result, err := fleetRetireCoordinator(c, runID, dryRun)
-	if err == nil && changed {
+	if err != nil {
+		return nil, err
+	}
+	policyChanged, err := fleetRetirePolicy(c, runID+"-policy", dryRun)
+	if err == nil && (changed || policyChanged) {
 		result["state"] = "updated"
 	}
 	return result, err
