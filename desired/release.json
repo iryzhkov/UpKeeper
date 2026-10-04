@@ -2306,14 +2306,14 @@
     },
     "t3": {
       "compatibility": {
-        "max": "0.0.38",
+        "max": "0.0.45",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.105"
+        "steward_version": "0.11.0-rc.106"
       },
       "kind": "npm-package",
       "package": "t3",
       "service": "t3code.service",
-      "version": "0.0.38"
+      "version": "0.0.45"
     },
     "t3-steward": {
       "installer": "upkeeper",
@@ -2322,7 +2322,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.105"
+      "version": "0.11.0-rc.106"
     },
     "worker-configuration": {
       "hosts": {
