@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -250,7 +251,7 @@ func fleetProjectionCommitFailure(c *Context, runID string, documents []*fleetDo
 	if !ownsPolicy {
 		return cause
 	} // Preserve the legacy client-only failure path.
-	if err := FleetRestorePrior(c.Home, runID); err != nil {
+	if err := fleetRestoreEffects(c, documents); err != nil {
 		return Failf("rollback failed: ownership commit failed (%v); retained restoration failed (%v)", cause, err)
 	}
 	if err := fleetReconcileClientAfterPolicyRollback(c); err != nil {
@@ -275,17 +276,42 @@ func fleetReconcileClientAfterPolicyRollback(c *Context) error {
 	return fleetSaveClientReceipt(c, r)
 }
 
+func fleetRestoreRetiredProjection(c *Context, runID string, policy bool) error {
+	destination := fleet.ClientDestination
+	receipt, err := fleetReadClientReceipt(c)
+	if policy {
+		destination = fleet.RoutePolicyDestination
+		receipt, err = fleetReadPolicyReceipt(c)
+	}
+	if err != nil {
+		return err
+	}
+	if receipt == nil {
+		return errors.New("retired projection has no receipt")
+	}
+	if _, err := fleetRestoreRetainedExpected(c.Home, runID, destination, receipt.Prior, true); err != nil {
+		return err
+	}
+	if policy {
+		return fleetReconcilePolicyReceipt(c)
+	}
+	return fleetReconcileClientAfterPolicyRollback(c)
+}
+
 func fleetRetirementPolicyFailure(c *Context, runID string, clientChanged bool, cause error) error {
-	if err := FleetRestorePrior(c.Home, runID+"-policy"); err != nil {
-		return Failf("rollback failed: retirement (%v); policy restoration (%v)", cause, err)
+	var failures []error
+	if err := fleetRestoreRetiredProjection(c, runID+"-policy", true); err != nil {
+		failures = append(failures, err)
 	}
 	if clientChanged {
-		if err := FleetRestorePrior(c.Home, runID+"-client"); err != nil {
-			return Failf("rollback failed: retirement (%v); client restoration (%v)", cause, err)
+		if err := fleetRestoreRetiredProjection(c, runID+"-client", false); err != nil {
+			failures = append(failures, err)
+		} else if err := fleetReconcileClientAfterPolicyRollback(c); err != nil {
+			failures = append(failures, err)
 		}
-		if err := fleetReconcileClientAfterPolicyRollback(c); err != nil {
-			return Failf("rollback failed: client receipt after retirement: %v", err)
-		}
+	}
+	if len(failures) > 0 || strings.Contains(cause.Error(), "rollback failed:") {
+		return Failf("rollback failed: retirement (%v); recovery (%v); affected projections may be in a mixed state", cause, errors.Join(failures...))
 	}
 	return RolledBackf("retirement failed (%v); restored prior policy and client", cause)
 }

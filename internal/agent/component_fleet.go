@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -38,6 +39,7 @@ type fleetDocument struct {
 	remove         bool
 	before         []byte
 	changed        bool
+	effected       bool
 	validatePolicy func(string) error
 	restorePolicy  bool
 	policyReceipt  *fleetClientReceipt
@@ -123,7 +125,7 @@ func fleetProjection(
 				reload, err = fleetReloadCoordinator(c, runID)
 				if err != nil {
 					if policy != nil && policy.changed {
-						if _, restoreErr := fleetRestoreRetainedDocument(c.Home, runID, fleet.RoutePolicyDestination); restoreErr != nil {
+						if restoreErr := fleetRestoreEffects(c, []*fleetDocument{policy}); restoreErr != nil {
 							return nil, Failf("rollback failed: policy after reload failure: %v; %v", restoreErr, err)
 						}
 						if restoreErr := fleetReconcilePolicyReceipt(c); restoreErr != nil {
@@ -672,6 +674,9 @@ func fleetWriteDocuments(c *Context, runID string, documents []*fleetDocument) e
 		return err
 	}
 	for _, planned := range documents {
+		planned.effected = false
+	}
+	for _, planned := range documents {
 		if !planned.changed {
 			continue
 		}
@@ -685,7 +690,7 @@ func fleetWriteDocuments(c *Context, runID string, documents []*fleetDocument) e
 		// rename. All of them are put back, and all of them report as a
 		// rollback rather than as a bare error, because "failed" and "failed
 		// and half applied" are different things to wake up to.
-		if restoreErr := FleetRestorePrior(c.Home, runID); restoreErr != nil {
+		if restoreErr := fleetRestoreEffects(c, documents); restoreErr != nil {
 			// Not a rollback: the machine is not back in the state the run
 			// found it in. The "rollback failed" prefix is what the agent
 			// classifies as rollback-failed, which is the loudest outcome a
@@ -710,34 +715,102 @@ func fleetWriteDocuments(c *Context, runID string, documents []*fleetDocument) e
 // one: repairing is the caller's job, because a repair has to put back every
 // document this run touched and not only this one.
 func fleetActivate(planned *fleetDocument) error {
+	home := strings.TrimSuffix(planned.target, planned.destination)
+	if home == planned.target {
+		return errors.New("projection target does not match destination")
+	}
+	if err := fleetOwnedPathSafe(home, planned.target); err != nil {
+		return err
+	}
+	initialDirectory, err := fleetOpenParent(home, planned.target)
+	if errors.Is(err, os.ErrNotExist) && !planned.remove {
+		if err = os.MkdirAll(filepath.Dir(planned.target), 0755); err != nil {
+			return err
+		}
+		initialDirectory, err = fleetOpenParent(home, planned.target)
+	}
+	if err != nil {
+		return err
+	}
+	defer initialDirectory.Close()
+	initialInfo, err := initialDirectory.Stat()
+	if err != nil {
+		return err
+	}
+	var staged string
+	if !planned.remove {
+		var err error
+		staged, err = fleetStage(planned.target, planned.payload)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = syscall.Unlinkat(int(initialDirectory.Fd()), filepath.Base(staged)) }()
+		if !planned.restorePolicy {
+			if err := fleetValidateStaged(staged, planned); err != nil {
+				return err
+			}
+		}
+		// External validation is a trust boundary. Check staging again as well.
+		written, err := fleetReadAt(initialDirectory, filepath.Base(staged))
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(written, planned.payload) {
+			return errors.New("validator changed staged projection")
+		}
+		if planned.destination == fleet.RoutePolicyDestination {
+			fd, err := syscall.Openat(int(initialDirectory.Fd()), filepath.Base(staged), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+			if err != nil {
+				return err
+			}
+			handle := os.NewFile(uintptr(fd), staged)
+			err = handle.Chmod(0644)
+			handle.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	// Pin every ancestor with O_NOFOLLOW after the external validator returns.
+	directory, err := fleetOpenParent(home, planned.target)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	finalInfo, err := directory.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(initialInfo, finalInfo) {
+		return errors.New("projection directory changed during validation")
+	}
+	current, err := fleetReadAt(directory, filepath.Base(planned.target))
+	if err != nil {
+		return err
+	}
+	if !fleetSameBytes(current, planned.before) {
+		return errors.New("projection changed during validation")
+	}
 	if planned.remove {
-		if err := os.Remove(planned.target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+		err = syscall.Unlinkat(int(directory.Fd()), filepath.Base(planned.target))
+		if errors.Is(err, fs.ErrNotExist) {
+			err = nil
 		}
-		return fsatomic.SyncDirectory(filepath.Dir(planned.target))
+	} else {
+		err = syscall.Renameat(int(directory.Fd()), filepath.Base(staged), int(directory.Fd()), filepath.Base(planned.target))
 	}
-	staged, err := fleetStage(planned.target, planned.payload)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(staged) }()
-	if err := fleetValidateStaged(staged, planned); err != nil {
+	planned.effected = true
+	if err := directory.Sync(); err != nil {
 		return err
 	}
-	if planned.destination == fleet.RoutePolicyDestination {
-		if err := os.Chmod(staged, 0o644); err != nil {
-			return err
-		}
-	}
-	if err := os.Rename(staged, planned.target); err != nil {
-		return err
-	}
-	_ = fsatomic.SyncDirectory(filepath.Dir(planned.target))
-	written, err := os.ReadFile(planned.target)
+	written, err := fleetReadAt(directory, filepath.Base(planned.target))
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(written, planned.payload) {
+	if !fleetSameBytes(written, planned.payload) {
 		return errors.New("the activated document is not the one that was validated")
 	}
 	return nil
@@ -781,7 +854,8 @@ func fleetRetainPrior(c *Context, runID string, documents []*fleetDocument) erro
 			"content":     nil,
 		}
 		if planned.before != nil {
-			entry["content"] = string(planned.before)
+			entry["encoding"] = "base64/v1"
+			entry["content"] = base64.StdEncoding.EncodeToString(planned.before)
 		}
 		retained = append(retained, entry)
 	}
@@ -854,6 +928,10 @@ func FleetRestorePrior(home, runID string) error {
 // document has an ownership receipt whose active hash is committed before this
 // point and would no longer describe a reverted file.
 func fleetRestoreRetainedDocument(home, runID, destination string) (bool, error) {
+	return fleetRestoreRetainedExpected(home, runID, destination, nil, false)
+}
+
+func fleetRestoreRetainedExpected(home, runID, destination string, expected []byte, guarded bool) (bool, error) {
 	record, err := os.ReadFile(filepath.Join(home, fleet.StateDirectory, runID, "prior.json"))
 	if err != nil {
 		return false, err
@@ -875,6 +953,9 @@ func fleetRestoreRetainedDocument(home, runID, destination string) (bool, error)
 			continue
 		}
 		existed, _ := entry["existed"].(bool)
+		if guarded {
+			entry["expected"] = expected
+		}
 		return existed, fleetRestoreDocument(home, entry)
 	}
 	return false, errors.New("retained fleet record does not name " + destination)
@@ -886,19 +967,38 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 		return errors.New("retained fleet record names an unexpected destination")
 	}
 	target := filepath.Join(home, destination)
-	if err := workerPathIsInHome(home, target); err != nil {
+	if err := fleetOwnedPathSafe(home, target); err != nil {
 		return err
 	}
 	existed, _ := entry["existed"].(bool)
-	if !existed {
-		if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+	if expected, guarded := entry["expected"].([]byte); guarded {
+		var payload []byte
+		var err error
+		if existed {
+			payload, err = fleetRetainedBytes(entry)
+			if err != nil {
+				return err
+			}
 		}
+		return fleetActivate(&fleetDocument{destination: destination, target: target, before: expected, payload: payload, remove: !existed, restorePolicy: true})
+	}
+	directory, err := fleetOpenParent(home, target)
+	if errors.Is(err, os.ErrNotExist) && !existed {
 		return nil
 	}
-	content, ok := entry["content"].(string)
-	if !ok {
-		return errors.New("retained fleet record has no content to restore")
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	if !existed {
+		if err := syscall.Unlinkat(int(directory.Fd()), filepath.Base(target)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return directory.Sync()
+	}
+	content, err := fleetRetainedBytes(entry)
+	if err != nil {
+		return err
 	}
 	// The same staging discipline as the forward path, and for a reason the
 	// forward path does not have: worker-bootstrap.json is also written by
@@ -906,7 +1006,7 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 	// name created with O_EXCL. A crash that leaves that name behind would
 	// block both v1 convergence and this restore until somebody removed it by
 	// hand. A unique temporary name cannot be blocked by a corpse.
-	staged, err := fleetStage(target, []byte(content))
+	staged, err := fleetStage(target, content)
 	if err != nil {
 		return err
 	}
@@ -916,10 +1016,10 @@ func fleetRestoreDocument(home string, entry map[string]any) error {
 			return err
 		}
 	}
-	if err := os.Rename(staged, target); err != nil {
+	if err := syscall.Renameat(int(directory.Fd()), filepath.Base(staged), int(directory.Fd()), filepath.Base(target)); err != nil {
 		return err
 	}
-	return fsatomic.SyncDirectory(filepath.Dir(target))
+	return directory.Sync()
 }
 
 // fleetStage writes the candidate document beside its destination, so that the

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -223,6 +224,11 @@ func fleetCommitClientReceipt(c *Context, receipt *fleetClientReceipt) error {
 }
 
 func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
+	return fleetRetireClientWithRestore(c, runID, dryRun, fleetRestoreDocument)
+}
+
+// restore is the filesystem boundary, also used for post-mutation fault tests.
+func fleetRetireClientWithRestore(c *Context, runID string, dryRun bool, restore func(string, map[string]any) error) (effected bool, failure error) {
 	current, err := fleetReadPrivateBounded(c, fleet.ClientDestination, fleetCoordinatorMaxBytes)
 	if err != nil {
 		return false, err
@@ -240,10 +246,47 @@ func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
 	if !fleetReceiptMatches(receipt, current) {
 		return false, errors.New("client differs from ownership receipt; preserve it for manual recovery")
 	}
+	originalBytes := current
 	changed := fleetContentHash(current) != fleetContentHash(receipt.Prior)
 	if dryRun {
 		return changed, nil
 	}
+	original := *receipt
+	// A filesystem restore or receipt write may succeed before returning an error.
+	// Keep the pre-retirement ownership state until every completion check passes.
+	armed := false
+	defer func() {
+		if failure == nil || !armed {
+			return
+		}
+		var recovery error
+		if changed {
+			directory, err := fleetOpenParent(c.Home, c.Path(fleet.ClientDestination))
+			var current []byte
+			if err == nil {
+				current, err = fleetReadAt(directory, filepath.Base(c.Path(fleet.ClientDestination)))
+				directory.Close()
+				if err == nil && !fleetSameBytes(current, receipt.Prior) && !fleetSameBytes(current, originalBytes) {
+					err = errors.New("client drifted during retirement; preserved")
+				}
+			}
+			recovery = err
+			if recovery == nil {
+				rollback := &fleetDocument{destination: fleet.ClientDestination, target: c.Path(fleet.ClientDestination), before: current, payload: originalBytes, remove: originalBytes == nil, restorePolicy: true}
+				recovery = fleetActivate(rollback)
+			}
+		}
+		if recovery == nil {
+			recovery = fleetSaveClientReceipt(c, &original)
+		}
+		if recovery != nil {
+			failure = Failf("rollback failed: client retirement (%v); restoration (%v)", failure, recovery)
+			effected = true
+		} else {
+			failure = RolledBackf("client retirement failed (%v); exact bytes and ownership restored", failure)
+			effected = false
+		}
+	}()
 	if changed {
 		planned := &fleetDocument{destination: fleet.ClientDestination, target: c.Path(fleet.ClientDestination),
 			payload: receipt.Prior, before: current, remove: !receipt.PriorExists, changed: true}
@@ -253,8 +296,9 @@ func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
 		// The prior document may predate the current schema. Restore exact
 		// retained bytes through the existing recovery path, not forward validation.
 		entry := map[string]any{"destination": fleet.ClientDestination,
-			"existed": receipt.PriorExists, "content": string(receipt.Prior)}
-		if err := fleetRestoreDocument(c.Home, entry); err != nil {
+			"existed": receipt.PriorExists, "encoding": "base64/v1", "content": base64.StdEncoding.EncodeToString(receipt.Prior), "expected": current}
+		armed = true
+		if err := restore(c.Home, entry); err != nil {
 			return false, err
 		}
 		if err := fsatomic.SyncDirectory(filepath.Dir(planned.target)); err != nil {
@@ -265,6 +309,7 @@ func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
 			return false, errors.New("restored client does not match retained prior bytes")
 		}
 	}
+	armed = true
 	receipt.Active = fleetContentHash(receipt.Prior)
 	receipt.Pending = nil
 	receipt.Restored = true
@@ -272,12 +317,16 @@ func fleetRetireClient(c *Context, runID string, dryRun bool) (bool, error) {
 }
 
 func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[string]any, error) {
+	return fleetRetireOwnedProjectionsWithClient(c, runID, dryRun, fleetRetireClient)
+}
+
+func fleetRetireOwnedProjectionsWithClient(c *Context, runID string, dryRun bool, retireClient func(*Context, string, bool) (bool, error)) (map[string]any, error) {
 	if _, err := fleetRetirePolicy(c, runID+"-policy", true); err != nil {
 		return nil, err
 	}
 	// Validate every retirement before any effect. A malformed coordinator
 	// document must not cause a partial client restoration.
-	if _, err := fleetRetireClient(c, runID+"-client", true); err != nil {
+	if _, err := retireClient(c, runID+"-client", true); err != nil {
 		return nil, err
 	}
 	if _, err := fleetRetireCoordinator(c, runID, true); err != nil {
@@ -292,8 +341,10 @@ func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[str
 		if err := fleetWriteProjection(c, runID+"-policy", []*fleetDocument{policy}); err != nil {
 			return nil, err
 		}
-		changed, err := fleetRetireClient(c, runID+"-client", false)
+		changed, err := retireClient(c, runID+"-client", false)
 		if err != nil {
+			// Client retirement already attempted transactional recovery. Replaying
+			// its retained record here could overwrite the drift it refused.
 			return nil, fleetRetirementPolicyFailure(c, runID, false, err)
 		}
 		result, err := fleetRetireCoordinator(c, runID, false)
@@ -305,7 +356,7 @@ func fleetRetireOwnedProjections(c *Context, runID string, dryRun bool) (map[str
 		}
 		return result, nil
 	}
-	changed, err := fleetRetireClient(c, runID+"-client", dryRun)
+	changed, err := retireClient(c, runID+"-client", dryRun)
 	if err != nil {
 		return nil, err
 	}
