@@ -455,7 +455,7 @@ def test_actual_probe_limits_and_process_group_cleanup(tmp_path, mode):
         "wrong": "print('wrong')", "nonzero": "raise SystemExit(2)",
         "descendant": (
             "import os,time; pid=os.fork(); "
-            f"open({str(pid_file)!r},'w').write(str(pid)); time.sleep(60)"
+            f"pid and open({str(pid_file)!r},'w').write(str(pid)); time.sleep(60)"
         ),
     }[mode]
     program.write_text(f"#!{sys.executable}\n{body}\n")
