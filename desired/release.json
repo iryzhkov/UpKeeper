@@ -1730,7 +1730,7 @@
             "path": "README.md",
             "repository": "github.com/iryzhkov/UpKeeper",
             "repository_revision": "e0aff5754aa2daa284182d96fe9013e274a1fdb6",
-            "sha256": "4291314171904e0a22d73a3b5c215a67d805d7312ff8faae3341511802429b74"
+            "sha256": "2e27d70e6155912adf0fec78be528ea5f4c16101f3af840c46897a3e54fa734c"
           }
         ],
         "recovery_sources": [
@@ -2308,7 +2308,7 @@
       "compatibility": {
         "max": "0.0.45",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.106"
+        "steward_version": "0.11.0-rc.107"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -2322,7 +2322,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.106"
+      "version": "0.11.0-rc.107"
     },
     "worker-configuration": {
       "hosts": {
