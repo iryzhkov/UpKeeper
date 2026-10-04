@@ -1,4 +1,15 @@
-# Foundation self-adoption v1
+# Foundation self-adoption v1 (historical)
+
+This is the historical F04 specification implemented by the F03 Python saga
+library in package 0.1.0, last supported at source commit
+`40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460`. Python package 0.2.0 removes that
+implementation, including the adoption helper; the protocol below is retained
+as historical design evidence, not a currently callable API. Existing published
+artifacts and installed hosts are unaffected by this source retirement.
+
+The Go pull path does not implement this saga protocol. Future durable
+infrastructure operations still require independently accepted journal, fence,
+observation, reconciliation and recovery contracts before use.
 
 F04 extends the UpKeeper MVP with a frozen, revision-fenced identity for adopting
 t3-steward and UpKeeper itself. UpKeeper remains a deployment mutation engine;
