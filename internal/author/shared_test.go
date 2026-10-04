@@ -1,8 +1,10 @@
 package author_test
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,8 +66,8 @@ func TestSharedDeterministicScratchAndRefresh(t *testing.T) {
 	// Even the standalone generator's archive bytes are stable.
 	generator := filepath.Join("..", "..", author.SharedDirectory, author.Generator)
 	sourceRoot := filepath.Join("..", "..", author.SharedDirectory)
-	export := func() []byte {
-		cmd := exec.Command("bash", generator, "--scratch-only", "--root", sourceRoot)
+	export := func(mask string) []byte {
+		cmd := exec.Command("bash", "-c", `umask "$1"; exec bash "$2" --scratch-only --root "$3"`, "export", mask, generator, sourceRoot)
 		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
 		out, err := cmd.Output()
 		if err != nil {
@@ -73,8 +75,28 @@ func TestSharedDeterministicScratchAndRefresh(t *testing.T) {
 		}
 		return out
 	}
-	if !bytes.Equal(export(), export()) {
-		t.Fatal("generator archive is nondeterministic")
+	archive := export("022")
+	for _, mask := range []string{"022", "077", "002"} {
+		if !bytes.Equal(archive, export(mask)) {
+			t.Fatalf("generator archive depends on caller umask %s", mask)
+		}
+	}
+	reader := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := int64(0644)
+		if header.Typeflag == tar.TypeDir {
+			want = 0755
+		}
+		if header.Mode != want {
+			t.Fatalf("export mode for %s: %o, want %o", header.Name, header.Mode, want)
+		}
 	}
 	// Working tree poison cannot enter derivation of the same immutable input.
 	write(t, filepath.Join(f.root, author.SharedDirectory, "config/claude/CLAUDE.md"), "poison", 0644)
@@ -152,6 +174,47 @@ func TestSharedDeterministicScratchAndRefresh(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("managed retirement missing")
+	}
+}
+
+func TestSharedIgnoresGitReplacementObjects(t *testing.T) {
+	for _, kind := range []string{"blob", "commit"} {
+		t.Run(kind, func(t *testing.T) {
+			f, commit := sharedFixture(t)
+			t.Setenv("GIT_NO_REPLACE_OBJECTS", "")
+			if err := os.Unsetenv("GIT_NO_REPLACE_OBJECTS"); err != nil {
+				t.Fatal(err)
+			}
+			before, err := author.PrepareShared(f.root, commit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer before.Close()
+			path := author.SharedDirectory + "/config/claude/CLAUDE.md"
+			original := gitIn(t, f.root, "rev-parse", commit+":"+path)
+			poison := "# Global agent instructions\nreplacement poison\n"
+			write(t, filepath.Join(f.root, path), poison, 0644)
+			replacement := f.commit(t, f.root, "replacement source")
+			if kind == "blob" {
+				replaced := gitIn(t, f.root, "rev-parse", replacement+":"+path)
+				gitIn(t, f.root, "replace", original, replaced)
+			} else {
+				gitIn(t, f.root, "replace", commit, replacement)
+			}
+			// Establish that ordinary Git reads really are contaminated.
+			if got := gitIn(t, f.root, "show", commit+":"+path); got != strings.TrimSpace(poison) {
+				t.Fatalf("replacement fixture did not change source: %s", got)
+			}
+			after, err := author.PrepareShared(f.root, commit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer after.Close()
+			if after.Commit != commit || !reflect.DeepEqual(before.SourceSHA256, after.SourceSHA256) ||
+				!reflect.DeepEqual(before.OutputSHA256, after.OutputSHA256) {
+				t.Fatal("replacement objects changed pinned preparation")
+			}
+		})
 	}
 }
 

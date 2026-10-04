@@ -57,7 +57,14 @@ func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) 
 	if _, err = safety.ValidateGitCommit(commit); err != nil {
 		return nil, err
 	}
-	runner := procx.Run
+	// A pinned object must not be reinterpreted by local replacement refs.
+	// Scope this runner to scratch preparation; legacy author behavior is unchanged.
+	runner := func(command procx.Command) procx.Result {
+		if len(command.Argv) > 0 && command.Argv[0] == "git" {
+			command.Argv = append([]string{"git", "--no-replace-objects"}, command.Argv[1:]...)
+		}
+		return procx.Run(command)
+	}
 	origin, err := git(runner, repository, 30*time.Second, "remote", "get-url", "--push", "origin")
 	if err != nil {
 		return nil, err
