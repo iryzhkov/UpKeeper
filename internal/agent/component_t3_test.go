@@ -61,6 +61,9 @@ func t3TestPrepare(t *testing.T, host t3TestHost) (*Context, *adapterTestRunner)
 		case last == "version":
 			return procx.Result{Stdout: stewardTestReport}
 		case adapterTestMatches(command.Argv, "node", "-e"):
+			if strings.Contains(command.Argv[2], "t3PackageLayout") {
+				return procx.Result{Stdout: `{"kind":"legacy"}`}
+			}
 			if host.nativeStartupFailure {
 				return procx.Result{Code: 1, Stderr: "Cannot find module node-pty"}
 			}
