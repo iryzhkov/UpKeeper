@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "sources": [
+    {
+      "id": "synthetic",
+      "repository": "https://example.invalid/synthetic",
+      "revision_kind": "content-sha256",
+      "revision": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "payload",
+      "source_id": "synthetic",
+      "path": "payload.txt",
+      "sha256": "e656fe2d20e77415a49f86304955408bf5578b962b74edf58b06675228f338f3",
+      "mode": 420,
+      "required": true
+    }
+  ],
+  "tools": [
+    {
+      "id": "huyang",
+      "canonical_tool": "huyang",
+      "aliases": [
+        "repository-reader"
+      ],
+      "kind": "mcp-only",
+      "purpose": "Synthetic repository declaration",
+      "capabilities": [
+        "repository-operations"
+      ],
+      "primary_route": {
+        "kind": "mcp",
+        "name": "huyang"
+      },
+      "artifact_ids": [
+        "payload"
+      ],
+      "required": true,
+      "platforms": [
+        "linux-amd64",
+        "linux-arm64"
+      ]
+    },
+    {
+      "id": "cli-example",
+      "canonical_tool": "cli-example",
+      "aliases": [],
+      "kind": "cli",
+      "purpose": "Synthetic CLI declaration",
+      "capabilities": [
+        "arbitrary-declaration"
+      ],
+      "primary_route": {
+        "kind": "cli",
+        "name": "cli-example"
+      },
+      "artifact_ids": [
+        "payload"
+      ],
+      "required": true,
+      "platforms": [
+        "linux-amd64"
+      ]
+    },
+    {
+      "id": "external-example",
+      "canonical_tool": "external-example",
+      "aliases": [],
+      "kind": "third-party",
+      "purpose": "Synthetic external declaration",
+      "capabilities": [
+        "example"
+      ],
+      "primary_route": {
+        "kind": "external",
+        "name": "external-example"
+      },
+      "artifact_ids": [
+        "payload"
+      ],
+      "required": false,
+      "platforms": [
+        "linux-arm64"
+      ]
+    }
+  ]
+}

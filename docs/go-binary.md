@@ -13,6 +13,9 @@ For an explicitly invoked local-only standalone installer, see
 [standalone-bootstrap.md](standalone-bootstrap.md). Debian 13/Arch amd64
 compatibility remains provisional until actual distro execution is qualified.
 
+For operator-pinned, read-only candidate tool declarations and content verification,
+see [offline-tool-catalog.md](offline-tool-catalog.md).
+
 ## Why a binary
 
 The deployed program needed a Python runtime on every host, and the supported

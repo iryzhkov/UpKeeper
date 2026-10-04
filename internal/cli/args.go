@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/iryzhkov/UpKeeper/internal/toolcatalog"
 )
 
 // usageError is a malformed command line. It exits 2, like argparse did.
@@ -25,6 +27,7 @@ func usagef(format string, arguments ...any) *usageError {
 // arguments is the parsed command line.
 type arguments struct {
 	command string
+	catalog toolcatalog.Options
 	asJSON  bool
 
 	// doctor and status
@@ -100,7 +103,7 @@ type arguments struct {
 var Commands = []string{
 	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project", "provider",
 	"author", "self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
-	"hold", "version",
+	"hold", "version", "environment",
 }
 
 const agentCommand = "__agent"
@@ -127,6 +130,9 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 	}
 	parsed := &arguments{command: argv[0], probeTimeout: 20, pullTimeout: 1800}
 	rest := argv[1:]
+	if parsed.command == "environment" {
+		return parseEnvironment(parsed, rest)
+	}
 	if containsHelpFlag(rest) && isCommand(parsed.command) {
 		return nil, &helpRequest{command: parsed.command}
 	}

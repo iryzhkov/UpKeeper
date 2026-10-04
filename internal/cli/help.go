@@ -35,6 +35,7 @@ func containsHelpFlag(argv []string) bool {
 // help. The first five are the wording the Python parser used, kept so that
 // the text an operator has read before does not change under them.
 var commandSummaries = [][2]string{
+	{"environment", "inspect operator-pinned candidate tool content offline"},
 	{"doctor", "report whether each host can be managed at all"},
 	{"status", "report what each host is running now"},
 	{"push", "capture this machine as the release manifest, commit it and push the branch"},
@@ -59,6 +60,8 @@ const helpOption = "  -h, --help            show this help message and exit"
 // optional description, then the argument sections.
 func helpText(program, command string) string {
 	switch command {
+	case "environment", "environment-tools":
+		return environmentHelp(program, command)
 	case "":
 		return topHelp(program)
 	case "doctor", "status":

@@ -50,6 +50,9 @@ type Streams struct {
 // about it, and it cannot change either: spoolInvocation prints nothing and
 // returns nothing, and the exit code was decided before it ran. See spool.go.
 func MainSpooled(program string, argv []string, streams Streams) int {
+	if len(argv) > 0 && argv[0] == "environment" {
+		return Main(program, argv, streams)
+	}
 	started := time.Now()
 	code := Main(program, argv, streams)
 	spoolInvocation(argv, code, time.Since(started))
@@ -60,6 +63,12 @@ func Main(program string, argv []string, streams Streams) int {
 	program = filepath.Base(program)
 	parsed, err := parse(argv, release.ComponentOrder)
 	if requested, ok := err.(*helpRequest); ok {
+		if parsedEnv := len(argv) > 0 && argv[0] == "environment"; parsedEnv {
+			if _, e := fmt.Fprint(streams.Out, helpText(program, requested.command)); e != nil {
+				return 1
+			}
+			return 0
+		}
 		fmt.Fprint(streams.Out, helpText(program, requested.command))
 		return 0
 	}
@@ -93,6 +102,8 @@ func Main(program string, argv []string, streams Streams) int {
 
 func dispatch(parsed *arguments, streams Streams) (int, error) {
 	switch parsed.command {
+	case "environment":
+		return runEnvironment(parsed, streams)
 	case agentCommand:
 		return runAgent(streams)
 	case probeCommand:
