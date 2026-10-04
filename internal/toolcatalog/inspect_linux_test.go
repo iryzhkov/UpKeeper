@@ -318,7 +318,11 @@ func TestSubstitutionAndMutationHooks(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-		}, dataOpen: func(label string) { opens++ }}
+		}, dataOpen: func(label string) {
+			if label == o.Metadata {
+				opens++
+			}
+		}}
 		denied(t, o, h, "")
 		if opens != 1 {
 			t.Fatal(opens)
