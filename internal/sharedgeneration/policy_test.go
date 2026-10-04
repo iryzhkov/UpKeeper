@@ -16,8 +16,8 @@ func policyFixture() *author.SharedPolicy {
 		InputManifestSHA256: strings.Repeat("1", 64), InputContract: "canonical-release-manifest-v1",
 		CanonicalPolicySHA256: digest([]byte("{}\n")), PolicyFormat: "route-policy/v1-canonical-json",
 		Derivation: "author-derive-policy-v1", UpstreamRepository: "github.com/iryzhkov/omarchy-setup",
-		UpstreamCommit: "33cb805b5482d511071be7b344140e2ccb8c87da",
-		UpstreamTree:   "3439bd874573cb88bbad852c5b66771f2ab80eeb",
+		UpstreamCommit: "b32c0b6f48e12b7d74a60f8a010f84bab73d299f",
+		UpstreamTree:   "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52",
 		Interpretation: "steward-parser-and-pinned-generator", ConfiguredCatalogValidation: "completed-at-preparation",
 		CurrentAuthorization: "unknown", Readiness: "unassessed",
 	}

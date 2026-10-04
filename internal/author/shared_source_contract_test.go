@@ -14,10 +14,10 @@ func TestSharedCurrentSourceBlobClosure(t *testing.T) {
 	if repository == "" && commit == "" {
 		t.Skip("current immutable shared generator inputs not supplied")
 	}
-	if repository == "" || commit != "33cb805b5482d511071be7b344140e2ccb8c87da" {
+	if repository == "" || commit != "b32c0b6f48e12b7d74a60f8a010f84bab73d299f" {
 		t.Fatal("both exact current shared source pins required")
 	}
-	if gitIn(t, repository, "rev-parse", "HEAD") != commit || gitIn(t, repository, "rev-parse", "HEAD^{tree}") != "3439bd874573cb88bbad852c5b66771f2ab80eeb" {
+	if gitIn(t, repository, "rev-parse", "HEAD") != commit || gitIn(t, repository, "rev-parse", "HEAD^{tree}") != "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52" {
 		t.Fatal("current source identity")
 	}
 	files := []string{"config/bin/agents-instructions-gen", "config/bin/agents-role-project", "config/claude/CLAUDE.md", "config/claude/skills/huyang/SKILL.md", "config/claude/skills/implementation-session/SKILL.md", "config/claude/skills/implementation-session/references/prompt-template.md", "config/claude/skills/ov-memory-curation/SKILL.md", "config/claude/skills/ov-memory/SKILL.md", "config/claude/skills/publish-agent-tooling/SKILL.md", "config/claude/skills/t3-campaign/SKILL.md", "config/claude/skills/t3-campaign/references/executor-briefs.md", "config/claude/skills/t3-task/SKILL.md", "config/claude/skills/t3-wait/SKILL.md"}

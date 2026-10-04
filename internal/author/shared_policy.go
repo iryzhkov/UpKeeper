@@ -19,8 +19,8 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
-const sharedUpstreamCommit = "33cb805b5482d511071be7b344140e2ccb8c87da"
-const sharedUpstreamTree = "3439bd874573cb88bbad852c5b66771f2ab80eeb"
+const sharedUpstreamCommit = "b32c0b6f48e12b7d74a60f8a010f84bab73d299f"
+const sharedUpstreamTree = "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52"
 const sharedInputContract = "canonical-release-manifest-v1"
 const sharedManifestLimit = 16 << 20
 

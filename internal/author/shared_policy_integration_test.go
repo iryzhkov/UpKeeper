@@ -75,10 +75,10 @@ func TestSharedPinnedPolicyPreparationAndMixedStore(t *testing.T) {
 	if repository == "" && pin == "" {
 		t.Skip("current immutable shared generator fixture not supplied")
 	}
-	if repository == "" || pin != "33cb805b5482d511071be7b344140e2ccb8c87da" {
+	if repository == "" || pin != "b32c0b6f48e12b7d74a60f8a010f84bab73d299f" {
 		t.Fatal("current shared generator inputs required")
 	}
-	if gitIn(t, repository, "rev-parse", "HEAD") != pin || gitIn(t, repository, "rev-parse", "HEAD^{tree}") != "3439bd874573cb88bbad852c5b66771f2ab80eeb" {
+	if gitIn(t, repository, "rev-parse", "HEAD") != pin || gitIn(t, repository, "rev-parse", "HEAD^{tree}") != "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52" {
 		t.Fatal("current fixture identity")
 	}
 	authorCatalog(t)
@@ -93,6 +93,32 @@ func TestSharedPinnedPolicyPreparationAndMixedStore(t *testing.T) {
 	}
 	defer p.Close()
 	assertSharedRealOutputs(t, p, "gpt-6.1-sol", "medium", "opus", "medium")
+	if p.Policy.UpstreamCommit != pin || p.Policy.UpstreamTree != "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52" {
+		t.Fatal("new preparation must bind current provenance")
+	}
+	// Apply current upstream section-scoped assertions to actual policy-derived
+	// residents/reference in disposable HOME, including obsolete recipe refusals.
+	guidanceHome := t.TempDir()
+	for path, file := range p.Sources.Instructions {
+		write(t, filepath.Join(guidanceHome, path), string(file.Content), os.FileMode(file.Permissions))
+		t.Logf("derived %s mode=%04o sha256=%s", path, file.Permissions, agentenv.Digest(file.Content))
+	}
+	guidance := exec.Command("python3", "-c", `
+import pathlib,sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / "test"))
+from m15_guidance import assert_m15_guidance
+home = pathlib.Path(sys.argv[2])
+residents = [(home / p).read_text() for p in (
+    ".config/agents/AGENTS.md", ".codex/AGENTS.md", ".claude/omarchy-setup/CLAUDE.md")]
+assert_m15_guidance(residents, (home / ".config/agents/t3-steward.md").read_text())
+print("current b32 generated residents/reference: section-scoped M15 assertions passed")
+`, repository, guidanceHome)
+	guidance.Env = []string{"HOME=" + guidanceHome, "TMPDIR=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8", "PYTHONDONTWRITEBYTECODE=1"}
+	if raw, err := guidance.CombinedOutput(); err != nil {
+		t.Fatalf("current generated M15 guidance: %v %s", err, raw)
+	} else {
+		t.Log(string(raw))
+	}
 	// Compare exact current upstream output bytes/modes through its real parser.
 	upstreamHome, upstreamTmp := t.TempDir(), t.TempDir()
 	policyInput := filepath.Join(t.TempDir(), "policy.json")
@@ -188,7 +214,7 @@ func TestSharedPinnedPolicyChangedOrderAndRefusals(t *testing.T) {
 	}
 	assertSharedRealOutputs(t, p, "gpt-6-sol", "low", "sonnet", "high")
 	p.Close()
-	for _, kind := range []string{"missing-Claude", "missing-Codex", "excluded-Claude", "excluded-Codex", "missing-role", "bad-pin", "missing-catalog", "missing-validator"} {
+	for _, kind := range []string{"missing-Claude", "missing-Codex", "excluded-Claude", "excluded-Codex", "missing-role", "bad-pin", "missing-catalog", "missing-validator", "prior33-source"} {
 		t.Run(kind, func(t *testing.T) {
 			f, _, _ := currentSharedFixture(t)
 			policy := initialAuthorPolicy(t)
@@ -220,6 +246,16 @@ func TestSharedPinnedPolicyChangedOrderAndRefusals(t *testing.T) {
 			if kind == "missing-role" {
 				policy["roles"] = policy["roles"].([]any)[1:]
 			}
+			if kind == "prior33-source" {
+				path := filepath.Join(f.root, author.SharedDirectory, "owner.json")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prior := strings.ReplaceAll(string(raw), "b32c0b6f48e12b7d74a60f8a010f84bab73d299f", "33cb805b5482d511071be7b344140e2ccb8c87da")
+				prior = strings.ReplaceAll(prior, "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52", "3439bd874573cb88bbad852c5b66771f2ab80eeb")
+				write(t, path, prior, 0644)
+			}
 			addAuthorPolicy(t, f, policy)
 			commit := gitIn(t, f.root, "rev-parse", "HEAD")
 			o := sharedOptions(t, f, commit)
@@ -240,6 +276,8 @@ func TestSharedPinnedPolicyChangedOrderAndRefusals(t *testing.T) {
 			if p, err := author.PrepareSharedWithPolicy(o); err == nil {
 				p.Close()
 				t.Fatal("refusal accepted")
+			} else if kind == "prior33-source" && !strings.Contains(err.Error(), "unsupported shared owner identity") {
+				t.Fatal("prior source must refuse before derivation", err)
 			}
 			_, after := f.manifest(t)
 			if !bytes.Equal(before, after) {

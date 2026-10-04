@@ -1,8 +1,8 @@
 # Private canonical policy generations
 
 The shared source descriptor now names version 2, copied from Omarchy
-33cb805b5482d511071be7b344140e2ccb8c87da (comparison tree
-3439bd874573cb88bbad852c5b66771f2ab80eeb). It is candidate-inert.
+b32c0b6f48e12b7d74a60f8a010f84bab73d299f (comparison tree
+fc0e7ad2bad7a7df96030f71696125b5a7d5bd52). It is candidate-inert.
 No production caller or default author selection uses this preparation.
 
 Call author.PrepareSharedWithPolicy with explicit absolute physical repository
@@ -23,7 +23,9 @@ The helper is the exact upstream blob; its copied executable mode is 0755,
 where upstream Git recorded 0644. The generator adds only shared-root transport
 and shared-source attribution, retaining the candidate's agent99 option exclusion.
 CLAUDE retains the same exclusion. Current task/campaign/wait guidance preserves
-M15 public submission, retired Markdown/wrapper intake and operator boundaries.
+M15 public submission, permanently retired executable local/coordinator/file-forwarding
+Markdown intake, true-flag refusal/false compatibility parsing, authenticated
+marker-only cleanup without retry, and fenced operator boundaries.
 Other copied skills remain unchanged.
 
 Receipt v2 extends the eight v1 fields with a mandatory policy object.
@@ -51,11 +53,16 @@ or render policy again. Retained provenance records derivation only:
 current authorization is unknown and readiness unassessed. A completed
 preparation claim is never permission to activate. Existing immutable v1
 generations and old APIs remain supported; v2 without explicit policy refuses.
-Store identity, locking, durability, rollback and fault semantics remain.
+Offline v2 reading also retains the exact prior33 commit
+33cb805b5482d511071be7b344140e2ccb8c87da/tree
+3439bd874573cb88bbad852c5b66771f2ab80eeb pair. Mixed pairs and arbitrary
+provenance refuse. New preparation accepts only current b32; rollback never
+rewrites receipts or reestablishes grants. Store identity, locking, durability,
+rollback and fault semantics remain.
 
 Verification keeps two distinct generator pins. Original author regression
 uses Omarchy88d9b534a6648e2615037dc3a655e6a8d0e9bebc and its original tree.
-Shared parity uses current33 above. The exact consumer fixture is Steward
+Shared parity uses current b32 above. The exact consumer fixture is Steward
 d2327563e90e9b66adaf80c5a7a03746fce16763 built in a disposable checkout.
 Synthetic configured-catalog transport exercises that actual parser and
 validator; it establishes no operator authorization or live readiness.

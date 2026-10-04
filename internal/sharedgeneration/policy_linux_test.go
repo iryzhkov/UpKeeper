@@ -91,8 +91,25 @@ func TestMixedV1V2InspectSelectRollbackImmutable(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	prior := installSyntheticV2Payload(t, s, func(r *Receipt, _ map[string][]byte) {
+		r.Policy.UpstreamCommit = "33cb805b5482d511071be7b344140e2ccb8c87da"
+		r.Policy.UpstreamTree = "3439bd874573cb88bbad852c5b66771f2ab80eeb"
+	})
 	next := installSyntheticV2(t, s)
-	for _, id := range []string{next.GenerationID, old.GenerationID, next.GenerationID} {
+	if prior.GenerationID == next.GenerationID {
+		t.Fatal("provenance identities collapsed")
+	}
+	retained := map[string][]byte{}
+	for _, id := range []string{old.GenerationID, prior.GenerationID, next.GenerationID} {
+		b, err := os.ReadFile(filepath.Join(s.root, "generations", id, "receipt.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		retained[id] = b
+	}
+	// Reading and rollback require no consumer, current source or live catalog.
+	t.Setenv("PATH", t.TempDir())
+	for _, id := range []string{next.GenerationID, prior.GenerationID, old.GenerationID, prior.GenerationID, next.GenerationID} {
 		i, e := s.SelectPrior(id)
 		if e != nil {
 			t.Fatal(e)
@@ -122,7 +139,63 @@ func TestMixedV1V2InspectSelectRollbackImmutable(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("v1 rewritten")
 	}
+	for id, before := range retained {
+		after, err := os.ReadFile(filepath.Join(s.root, "generations", id, "receipt.json"))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("immutable receipt rewritten", id, err)
+		}
+	}
 }
+
+func TestV2MixedAndArbitraryProvenanceRefusesOfflineSelection(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"33cb805b5482d511071be7b344140e2ccb8c87da", "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52"},
+		{"b32c0b6f48e12b7d74a60f8a010f84bab73d299f", "3439bd874573cb88bbad852c5b66771f2ab80eeb"},
+		{"0000000000000000000000000000000000000000", "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52"},
+		{"b32c0b6f48e12b7d74a60f8a010f84bab73d299f", "0000000000000000000000000000000000000000"},
+	} {
+		t.Run(pair[0]+"/"+pair[1], func(t *testing.T) {
+			s := mustOpen(t)
+			good := installSyntheticV2(t, s)
+			if _, err := s.SelectPrior(good.GenerationID); err != nil {
+				t.Fatal(err)
+			}
+			bad := installSyntheticV2Payload(t, s, func(r *Receipt, payload map[string][]byte) {
+				// Distinct valid fixture before forging only provenance.
+				payload[r.Files[1].Path] = []byte("distinct fixture\n")
+			})
+			bad.Receipt.Policy.UpstreamCommit, bad.Receipt.Policy.UpstreamTree = pair[0], pair[1]
+			if err := validateReceipt(*bad.Receipt); err == nil {
+				t.Fatal("invalid provenance accepted")
+			}
+			raw, err := canonjson.MarshalFile(bad.Receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldRoot := filepath.Join(s.root, "generations", bad.GenerationID)
+			if err := os.WriteFile(filepath.Join(oldRoot, "receipt.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			id := digest(raw)
+			if err := os.Rename(oldRoot, filepath.Join(s.root, "generations", id)); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", t.TempDir())
+			if _, err := s.SelectPrior(id); err == nil {
+				t.Fatal("forged provenance selected")
+			}
+			// Corruption anywhere in retained evidence fences inspection.
+			if _, err := s.Inspect(); err == nil {
+				t.Fatal("corrupt retained provenance inspected")
+			}
+			target, err := os.Readlink(filepath.Join(s.root, "candidate-current"))
+			if err != nil || target != "generations/"+good.GenerationID {
+				t.Fatal("refusal changed selector", target, err)
+			}
+		})
+	}
+}
+
 func TestV2PolicyPhysicalClosureRefusals(t *testing.T) {
 	for _, kind := range []string{"mode", "symlink", "hardlink", "extra-input", "noncanonical"} {
 		t.Run(kind, func(t *testing.T) {

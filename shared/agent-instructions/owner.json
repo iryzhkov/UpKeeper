@@ -4,7 +4,7 @@
   "state": "candidate-inert",
   "source_repository": "github.com/iryzhkov/UpKeeper",
   "legacy_source_repository": "github.com/iryzhkov/omarchy-setup",
-  "legacy_source_commit": "33cb805b5482d511071be7b344140e2ccb8c87da",
+  "legacy_source_commit": "b32c0b6f48e12b7d74a60f8a010f84bab73d299f",
   "generator": "config/bin/agents-instructions-gen",
   "source_files": [
     "config/bin/agents-instructions-gen",
@@ -50,6 +50,6 @@
     ".config/opencode/opencode.json:instructions"
   ],
   "retired_reference": ".config/agents/agent99.md",
-  "legacy_source_tree": "3439bd874573cb88bbad852c5b66771f2ab80eeb",
+  "legacy_source_tree": "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52",
   "policy_input_contract": "canonical-release-manifest-v1"
 }
