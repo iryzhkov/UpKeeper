@@ -164,14 +164,18 @@ true wherever it was ever true.
 Two things are deliberately absent, and a reader comparing the two
 implementations will notice them.
 
-`src/dev_fleet/upkeeper.py` holds a second, richer record store: frozen intent,
-a hash-chained event journal, `expected_revision` fences and orphan recovery.
-No command in the CLI ever reached it — it belongs to the Ansible backend and
-the foundation observer — so it was not ported. The records the fleet actually
-writes are `src/dev_fleet/records.py`, which `internal/runstore` reproduces
-field for field; they are crash-safe by atomic rename and have no fence to
-preserve. If the Ansible backend is ever revived on the Go path, that store has
-to be ported with it.
+The historical F03 Python API held a richer record store: frozen intent, a
+hash-chained event journal, `expected_revision` fences and orphan recovery. No
+CLI command reached it. Python 0.2.0 removes dev_fleet.upkeeper, ansible_backend,
+foundation_observer and adoption, ending API support including unknown callers.
+Its last-supported source is 40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460 / package
+0.1.0; existing published artifacts and installed hosts are unchanged.
+
+The live fleet records remain `src/dev_fleet/records.py`, reproduced by
+`internal/runstore` field for field and crash-safe by atomic rename. That store
+does not provide the retired saga's journal, fences or reconciliation. Future S6
+durable operations require their own qualified executor/journal/fence and
+independent acceptance; this retirement does not port or waive those requirements.
 
 `self-pull` no longer re-executes itself after a refresh. The Python launcher
 *was* the checkout, so refreshing and re-executing guaranteed that the gated

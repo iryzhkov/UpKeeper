@@ -3,9 +3,11 @@
 An audited Ansible deployment system for developer tooling on `laptop`, `omarchy-pc`
 (current SSH alias `gaming-pc`), `normandy`, and `homelab`.
 
-UpKeeper owns fleet deployment through release capture and pull. The F03 saga library
-remains a separate mutation API with revision-fenced approval, durable effects and
-reconciliation. Neither interface is a workflow coordinator. Start with
+UpKeeper owns fleet deployment through release capture and pull. Python package 0.2.0
+retires the separate F03 saga API, including unknown external callers. Its last
+supported source is 40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460 (package 0.1.0);
+published artifacts and existing installed hosts are unchanged. UpKeeper is not a
+workflow coordinator. Start with
 [the system model](docs/architecture/system-model.md) and [CONTEXT.md](CONTEXT.md).
 
 Every host can publish a validated release. Each host independently fetches the

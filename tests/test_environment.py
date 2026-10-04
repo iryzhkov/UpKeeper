@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,13 +16,6 @@ from dev_fleet.environment import (
     environment_from_dict,
     environment_to_dict,
     project_recovery_inventory,
-)
-from dev_fleet.upkeeper import (
-    BackendSpec,
-    DeploymentSpec,
-    _canonical_json,
-    _spec_dict,
-    _spec_from_dict,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "agent-environment-v1.json"
@@ -119,29 +110,6 @@ def test_recovery_inventory_retains_owner_and_unavailable_sources() -> None:
         )
 
 
-def test_agent_environment_component_cannot_omit_its_contract() -> None:
-    with pytest.raises(ValueError, match="requires an environment contract"):
-        DeploymentSpec(
-            schema_version=1,
-            deployment_id="deployment-" + "b" * 32,
-            run_id="20260911T190000Z-f05f05f0",
-            controller="normandy",
-            component="agent-environment",
-            hosts=("normandy",),
-            desired_revision="b" * 40,
-            previous_revision="a" * 40,
-            authority_ref="authority-f05-canary",
-            policy_evaluation_ref="policy-f05-manual",
-            backend=BackendSpec(
-                kind="homelab-ansible-v1",
-                repository="ssh://git@git.ryzhkov.dev/igor/homelab-infra.git",
-                repository_revision="c" * 40,
-                inventory="inventory/agent-environment.yml",
-                playbook="playbooks/agent-environment.yml",
-            ),
-        )
-
-
 def test_spec_contains_references_not_secret_values() -> None:
     spec = environment_from_dict(load_raw())
     payload = environment_to_dict(spec)
@@ -150,60 +118,23 @@ def test_spec_contains_references_not_secret_values() -> None:
     assert isinstance(spec, AgentEnvironmentSpec)
 
 
-def test_environment_is_bound_into_upkeeper_plan_identity() -> None:
-    environment = environment_from_dict(load_raw())
-    spec = DeploymentSpec(
-        schema_version=1,
-        deployment_id="deployment-" + "b" * 32,
-        run_id="20260911T190000Z-f05f05f0",
-        controller="normandy",
-        component="agent-environment",
-        hosts=("normandy",),
-        desired_revision="b" * 40,
-        previous_revision="a" * 40,
-        authority_ref="authority-f05-canary",
-        policy_evaluation_ref="policy-f05-manual",
-        backend=BackendSpec(
-            kind="homelab-ansible-v1",
-            repository="ssh://git@git.ryzhkov.dev/igor/homelab-infra.git",
-            repository_revision="c" * 40,
-            inventory="inventory/agent-environment.yml",
-            playbook="playbooks/agent-environment.yml",
-        ),
-        environment=environment,
+def test_fixture_covers_every_frozen_worker_profile() -> None:
+    fixture = json.loads(
+        (FIXTURE.parent / "h03-environment-faults-v1.json").read_text(encoding="utf-8")
     )
-    payload = _spec_dict(spec)
-    assert payload["environment"]["host_profile"] == "normandy-codex-worker"
-    assert _spec_from_dict(payload) == spec
-
-    original_hash = hashlib.sha256(_canonical_json(payload)).hexdigest()
-    changed_environment = replace(environment, host_profile="normandy-codex-worker-v2")
-    changed_hash = hashlib.sha256(
-        _canonical_json(_spec_dict(replace(spec, environment=changed_environment)))
-    ).hexdigest()
-    assert original_hash != changed_hash
-
-
-def test_environment_payload_is_rejected_for_other_components() -> None:
     environment = environment_from_dict(load_raw())
-    with pytest.raises(ValueError, match="component agent-environment"):
-        DeploymentSpec(
-            schema_version=1,
-            deployment_id="deployment-" + "b" * 32,
-            run_id="20260911T190000Z-f05f05f0",
-            controller="normandy",
-            component="other",
-            hosts=("normandy",),
-            desired_revision="b" * 40,
-            previous_revision="a" * 40,
-            authority_ref="authority-f05-canary",
-            policy_evaluation_ref="policy-f05-manual",
-            backend=BackendSpec(
-                kind="homelab-ansible-v1",
-                repository="ssh://git@git.ryzhkov.dev/igor/homelab-infra.git",
-                repository_revision="c" * 40,
-                inventory="inventory/agent-environment.yml",
-                playbook="playbooks/agent-environment.yml",
-            ),
-            environment=environment,
-        )
+    assert fixture["schema_version"] == 1
+    assert fixture["profiles"] == [
+        {
+            "host_profile": environment.host_profile,
+            "worker_id": environment.worker_ids[0],
+            "host": "normandy",
+        }
+    ]
+    assert {item["fault_id"] for item in fixture["faults"]} == {
+        "partial-install",
+        "weakened-safety",
+        "bad-environment-revision",
+        "managed-drift",
+        "unexplained-drift",
+    }

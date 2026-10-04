@@ -1,4 +1,13 @@
-# UpKeeper mutation MVP
+# UpKeeper mutation MVP (historical F03 specification)
+
+This specification describes the API last supported at source
+40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460, Python package 0.1.0. New package
+0.2.0 installs omit dev_fleet.upkeeper, ansible_backend, foundation_observer and
+adoption; support ends including unknown external callers. Existing artifacts,
+installed hosts and persisted state are unchanged. The lifecycle below is historical,
+not an invocation guide for current production code. Future S6 durable operations
+still require a qualified executor/journal/fence and independent acceptance; Go pull
+and runstore do not acquire these semantics through this retirement.
 
 F03 adds the first bounded mutation seam to dev-fleet. It is a library API, not a
 second workflow coordinator: t3-steward owns task and attempt state, while an

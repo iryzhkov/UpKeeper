@@ -2,7 +2,8 @@
 
 This document describes the read-only discovery interface. Deployment now exists
 through UpKeeper; see [the current system model](architecture/system-model.md) for
-state ownership, push/pull transactions and the separate F03 saga path.
+state ownership, push/pull transactions and the historical F03 saga API, retired
+from new Python 0.2.0 installs.
 
 ## Boundary
 

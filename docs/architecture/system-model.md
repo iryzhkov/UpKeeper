@@ -2,7 +2,8 @@
 
 Citadel Track U0, 2026-09-12. The active Citadel replan controls stage order.
 [The push/pull guide](../upkeeper-push-pull.md) describes operator commands;
-[the F03 guide](../upkeeper-mvp.md) describes the separate saga API.
+[the F03 guide](../upkeeper-mvp.md) preserves the historical saga API specification,
+last supported at source 40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460 / Python 0.1.0.
 
 ## Purpose, scenarios and current state
 
@@ -62,7 +63,6 @@ See [laptop convergence](../laptop-self-convergence.md).
 | Conversations | T3 | UpKeeper defers restart; it does not create or settle conversations |
 | Huyang journals / worktrees | Huyang / Git | Recovery references only; environment rollback does not mutate these |
 | Pull locks / reports | Controller and target UpKeeper | Per-host locks, redacted records; uncertainty requires observation |
-| F03 intent / effects | Saga caller and journal | Revision-fenced hash chain; UNKNOWN retains locks until reconciliation |
 
 OS packages, desktop, toolchains, dotfiles, sshd and secret provisioning remain
 omarchy-setup concerns. agent99 remains independent. UpKeeper does not acquire
@@ -147,18 +147,21 @@ updater is deferred after timer disable; failed observation stops component effe
 does not prove instruction semantics or provider readiness. U0 does not close the
 hardening waiver or claim S5's multi-host soak.
 
-## Two mutation paths remain visible
+## Retired F03 API and durable-operation requirements
 
-release.py, push.py and pull.py are the live path. upkeeper.py, its Ansible adapter
-and rollout/environment qualification fixtures are the F03 saga path. The latter
-freezes approvals and revisions, writes PREPARED/STARTED effect records, retains
-UNKNOWN and reconciles before retry. Pull shares file contracts, lock/reporting
-primitives and validation concepts; it does not claim that saga journal or its
-external-effect reconciliation.
+release.py, push.py and pull.py remain the live Python path. Python package 0.2.0
+no longer ships dev_fleet.upkeeper, ansible_backend, foundation_observer or adoption.
+Support for this separately advertised API ends, including unknown external callers;
+published 0.1.0 artifacts, installed hosts and persisted state remain unchanged.
+The last-supported source is 40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460.
 
-F03 remains available for separately authorized homelab-infra work and is the
-reference for strengthening pull. A prior file snapshot or run log is not a
-durable reconciliation protocol. The replan explicitly accepts that distinction.
+The historical F03 engine froze approvals and revisions, wrote PREPARED/STARTED
+effect records, retained UNKNOWN and reconciled before retry. Pull retains useful
+environment, lock, redaction and validation primitives, but does not implement that
+journal or external-effect reconciliation. A prior snapshot or run log is not a
+durable reconciliation protocol. Future S6 operations still require a qualified
+durable executor, journal and fence with independent acceptance; API retirement
+neither supplies those semantics in Go nor drops that requirement.
 
 ## Invariants and evidence
 

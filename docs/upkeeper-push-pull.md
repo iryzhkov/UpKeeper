@@ -2,7 +2,9 @@
 
 UpKeeper captures a controller-observed release and converges named inventory hosts.
 Read [the system model](architecture/system-model.md) for ownership, failure semantics
-and the distinction from the F03 saga library.
+and the limits relative to the historical F03 saga API, retired from new Python
+0.2.0 installs (last-supported source 40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460,
+package 0.1.0).
 
 The [bootstrap and --self guide](self-bootstrap.md) describes the U2 local entry point.
 
@@ -238,8 +240,9 @@ not an automatic process-crash replay mechanism.
 
 Lost SSH responses/timeouts are reported and never automatically retried. Observe the
 host and its private prior record before taking another action. Pull does not claim
-the F03 PREPARED/STARTED/UNKNOWN journal semantics. Its component compensation is not
-atomic fleet rollback. Operator rollback reads immutable release intent without moving the controller checkout:
+the historical F03 PREPARED/STARTED/UNKNOWN journal semantics. Future durable
+operations still require a qualified executor/journal/fence with independent acceptance.
+Pull component compensation is not atomic fleet rollback. Operator rollback reads immutable release intent without moving the controller checkout:
 
 ```bash
 ./scripts/upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward --dry-run

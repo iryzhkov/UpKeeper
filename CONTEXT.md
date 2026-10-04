@@ -2,11 +2,14 @@
 
 UpKeeper is the fleet deployment authority. Git owns release history; Huyang owns
 repository reads and edits; the steward owns workflows and execution; T3 owns
-conversations. The local mainline carries discovery, the F03 saga library and the
-live push/pull deployment path. They are separate interfaces in one repository.
+conversations. The local mainline carries discovery and the live push/pull deployment
+path. Python package 0.2.0 retires the separately advertised F03 saga API, including
+unknown external callers. Last-supported source is
+40e29c6c4b0b1dcc258e42f4aeba6ecc023c2460 (package 0.1.0); published artifacts,
+installed hosts and persisted state remain unchanged.
 
 Read docs/architecture/system-model.md first for state, ownership, failure semantics
-and the relationship between both mutation paths. The Citadel replan at
+and the limits of pull relative to the historical F03 API. The Citadel replan at
 ../citadel/docs/reference/active-plan/replan-2026-09-12.md controls stage order.
 
 U0 adds the T3 pair, F05 agent environment and the S4 worker bootstrap distribution
