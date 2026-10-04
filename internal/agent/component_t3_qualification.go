@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -36,63 +37,20 @@ try {
 // The helper's 20s deadline and cleanup precede the runner's 35s outer bound.
 const t3ExecutableQualification = `// Qualified against T3 v0.0.45's token exchange and Effect JSON RPC contracts.
 // All logs and private credentials stay inside the helper; output is a fixed stage.
-const fs=require('node:fs'),p=require('node:path'),os=require('node:os'),net=require('node:net');
+const p=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process'),{randomBytes}=require('node:crypto');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let root,child,ws,monitor,exited=false,stage='isolated startup',closing=false;
-const tracked=new Map();
-function identity(pid) {
- try { return fs.readFileSync('/proc/'+pid+'/stat','utf8').split(') ')[1].split(' ')[19]; } catch {return null;}
-}
-function remember(pid) {const id=identity(pid);if(id)tracked.set(pid,id);}
-function scan(pid,seen=new Set()) {
- if(seen.has(pid))return;seen.add(pid);
- remember(pid);
- try {
-  for(const task of fs.readdirSync('/proc/'+pid+'/task')) {
-   for(const c of fs.readFileSync('/proc/'+pid+'/task/'+task+'/children','utf8').trim().split(/\s+/)) {
-    if(c&&Number(c)!==pid)scan(Number(c),seen);
-   }
-  }
- } catch {}
-}
-function kill(pid,signal) {
- const current=identity(pid);
- if(current!==null&&current!==tracked.get(pid))return;
- // A group can outlive its leader. Kill it even after the parent exits;
- // never signal a PID whose start time changed.
- try {process.kill(-pid,signal);} catch {}
- if(current!==null)try {process.kill(pid,signal);} catch {}
-}
+let root=process.argv[2],child,ws,exited=false,stage='isolated startup',closing=false;
 async function cleanup() {
  if(closing)return;closing=true;
- clearInterval(monitor);if(ws)ws.close();
- if(child?.pid)scan(child.pid);
- for(const pid of [...tracked.keys()].reverse())kill(pid,'SIGTERM');
- if(child?.pid)kill(child.pid,'SIGTERM');
- await sleep(300);
- for(const pid of [...tracked.keys()].reverse())kill(pid,'SIGKILL');
- if(child?.pid)kill(child.pid,'SIGKILL');
- if(child&&!exited)await Promise.race([new Promise(r=>child.once('exit',r)),sleep(1000)]);
- // Refuse if any remembered process can still execute. Zombies await init's reap.
- try {
-  for(const [pid,id] of tracked) {
-   if(identity(pid)===id) {
-    let stat;
-    try {stat=fs.readFileSync('/proc/'+pid+'/stat','utf8').split(') ')[1];}
-    catch(error) {if(error.code==='ENOENT')continue;throw error;}
-    if(!stat.startsWith('Z '))throw new Error('cleanup');
-   }
-  }
- } finally {if(root)fs.rmSync(root,{recursive:true,force:true});}
+ if(ws)ws.close();
+ // The supervisor kills and reaps the complete tree after this helper exits.
 }
 process.on('SIGTERM',()=>{if(!closing)cleanup().finally(()=>process.exit(1));});
 process.on('SIGINT',()=>{if(!closing)cleanup().finally(()=>process.exit(1));});
 (async()=>{
  let deadlineTimer;
  try {
-  root=fs.mkdtempSync(p.join(os.tmpdir(),'upkeeper-t3-qualification-'));
-  fs.chmodSync(root,0o700);
   const reserve=net.createServer();
   await new Promise((r,j)=>{reserve.once('error',j);reserve.listen(0,'127.0.0.1',r);});
   const port=reserve.address().port;
@@ -113,8 +71,6 @@ process.on('SIGINT',()=>{if(!closing)cleanup().finally(()=>process.exit(1));});
    t3Home:env.T3CODE_HOME,host:'127.0.0.1',desktopBootstrapToken:token,
    tailscaleServeEnabled:false,tailscaleServePort:443})+'\n');
   child.once('error',()=>{exited=true;});child.once('exit',()=>{exited=true;});
-  if(child.pid)scan(child.pid);
-  monitor=setInterval(()=>{if(child.pid)scan(child.pid);},25);
   const qualify=async()=>{
    const base='http://127.0.0.1:'+port;
    const form=new URLSearchParams({grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',
@@ -159,7 +115,6 @@ process.on('SIGINT',()=>{if(!closing)cleanup().finally(()=>process.exit(1));});
    stage='isolated PTY open';
    const opened=await rpc('terminal.open',{...session,cwd:root,cols:80,rows:24});
    if(opened.status!=='running'||!Number.isInteger(opened.pid)||opened.pid<=0)throw new Error('pty');
-   remember(opened.pid);
    // The marker is split in the input so terminal echo cannot satisfy the check.
    const marker=randomBytes(16).toString('hex');
    stage='isolated PTY output';
@@ -176,7 +131,7 @@ process.on('SIGINT',()=>{if(!closing)cleanup().finally(()=>process.exit(1));});
   await Promise.race([qualify(),new Promise((_,j)=>{deadlineTimer=setTimeout(()=>j(new Error('deadline')),20000);})]);
   clearTimeout(deadlineTimer);
   stage='cleanup';await cleanup();
-  console.log('isolated startup and PTY qualified; cleanup complete');
+  console.log('isolated startup and PTY qualified');
  } catch {
   clearTimeout(deadlineTimer);
   try{await cleanup();}catch{stage='cleanup';}
@@ -218,7 +173,11 @@ func t3QualifyInstalled(c *Context, node, t3, version string) error {
 		if !executableVersion.OK || (strings.TrimSpace(executableVersion.Output) != "t3 v"+version && strings.TrimSpace(executableVersion.Output) != "t3 "+version) {
 			return fail("platform executable version")
 		}
-		result := c.Run([]string{node, "-e", t3ExecutableQualification, pkg.Executable}, 35*time.Second, "")
+		supervisor, err := os.Executable()
+		if err != nil {
+			return fail("qualification supervisor")
+		}
+		result := c.Run([]string{supervisor, t3QualificationSupervisorArg, node, pkg.Executable}, 35*time.Second, "")
 		if !result.OK || result.Output != "isolated startup and PTY qualified; cleanup complete" {
 			reason := "isolated startup/PTY"
 			for _, stage := range []string{"isolated startup", "isolated PTY ticket", "isolated PTY websocket", "isolated PTY open", "isolated PTY output", "cleanup"} {

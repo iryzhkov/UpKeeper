@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -152,14 +151,77 @@ func t3TestStartupCleanup(t *testing.T, timeout bool) {
 	}
 	lines := strings.Fields(string(data))
 	pid, _ := strconv.Atoi(lines[0])
-	// An orphan may be awaiting init's reap; a zombie cannot execute or hold a PTY.
-	stat, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if syscall.Kill(pid, 0) == nil && !strings.Contains(string(stat), ") Z ") {
-		t.Fatalf("child %d survived qualification", pid)
+	if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); !os.IsNotExist(err) {
+		t.Fatalf("child %d was not fully reaped: %v", pid, err)
 	}
 	if _, err := os.Stat(lines[1]); !os.IsNotExist(err) {
 		t.Fatalf("private qualification HOME remains: %v", err)
 	}
+}
+
+// The outer subreaper is a cleanup harness: even a broken implementation cannot
+// leave the recorded detached sleeper running or unreaped. It also owns an
+// unrelated sentinel, whose survival demonstrates the supervisor's boundary.
+func TestT3ImmediateExitDetachedChild(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux subreaper")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node required")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	record, executable := filepath.Join(root, "child"), filepath.Join(root, "t3")
+	adapterTestWrite(t, executable, fmt.Sprintf("#!/bin/sh\n/usr/bin/setsid /bin/sleep 60 &\necho $! > %q\necho \"$HOME\" >> %q\nexit 1\n", record, record))
+	if err := os.Chmod(executable, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const harness = `import ctypes, os, pathlib, signal, subprocess, sys, time
+assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
+sentinel = subprocess.Popen(["/usr/bin/setsid", "/bin/sleep", "60"])
+try:
+    for trial in range(10):
+        result = subprocess.run(sys.argv[1:5], capture_output=True, text=True, timeout=32)
+        assert result.returncode == 1, result
+        assert result.stderr.strip() == "isolated startup qualification failed", result
+        pid, home = pathlib.Path(sys.argv[5]).read_text().split()
+        assert not pathlib.Path("/proc/" + pid).exists(), "detached child not reaped: " + pid
+        assert not pathlib.Path(home).exists(), "private HOME remains"
+        assert sentinel.poll() is None, "unrelated process was killed"
+    print("10 immediate-exit detached children fully reaped; unrelated sentinel survived; private HOME removed")
+finally:
+    # No other thread reaps these direct adopted children, so waitid(WNOWAIT)
+    # pins ownership before signalling. Repeat for descendants adopted on exit.
+    until = time.monotonic() + 5
+    while True:
+        try:
+            os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            break
+        assert time.monotonic() < until, "harness cleanup deadline"
+        for field in pathlib.Path("/proc/self/task/%d/children" % os.getpid()).read_text().split():
+            pid = int(field)
+            try:
+                os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                fd = os.pidfd_open(pid)
+                try:
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                finally:
+                    os.close(fd)
+                os.waitpid(pid, os.WNOHANG)
+            except (ChildProcessError, ProcessLookupError):
+                pass
+        time.sleep(0.01)
+`
+	result := procx.Run(procx.Command{Argv: []string{"/usr/bin/python3", "-I", "-c", harness, self, t3QualificationSupervisorArg, node, executable, record}, Timeout: 45 * time.Second, Env: os.Environ()})
+	if !result.OK() {
+		t.Fatalf("detached child harness: %+v", result)
+	}
+	t.Log(strings.TrimSpace(result.Stdout))
 }
 
 // Opt-in integration proof uses only a new private server, never the user unit.
