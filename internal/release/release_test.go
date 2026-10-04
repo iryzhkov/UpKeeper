@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/policytest"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
@@ -72,6 +73,7 @@ func TestCurrentPublishedManifestValidatesAndIsCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policytest.ManifestCatalog(t, document)
 	value, err := release.Validate(document)
 	if err != nil {
 		t.Fatalf("current published release: %v", err)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,78 @@ func RequireCLI(t *testing.T) {
 // offline, stale, and has no advertised models. Empty providers means an older
 // coordinator with no authoritative catalog. Only workers queries are accepted.
 func Catalog(t *testing.T, models []string) {
+	t.Helper()
+	providers := []any{}
+	if models != nil {
+		providers = append(providers, map[string]any{"instance": "codex", "models": models, "quotaPool": "exhausted"})
+	}
+	catalog(t, providers)
+}
+
+// ManifestCatalog isolates tests of the published manifest from operator state.
+// Authorization comes from configured profiles and host exceptions, never from
+// the policy being validated. The real CLI still parses and authorizes it.
+func ManifestCatalog(t *testing.T, document map[string]any) {
+	t.Helper()
+	components, _ := document["components"].(map[string]any)
+	fleet, _ := components["steward-fleet-configuration"].(map[string]any)
+	if _, present := fleet["route_policy"]; !present {
+		return
+	}
+	RequireCLI(t)
+	models := map[string]map[string]bool{}
+	collect := func(value any) {
+		configured, _ := value.(map[string]any)
+		for instance, raw := range configured {
+			entries, ok := raw.([]any)
+			if !ok {
+				t.Fatalf("configured models for %s are not an array", instance)
+			}
+			if models[instance] == nil {
+				models[instance] = map[string]bool{}
+			}
+			for _, entry := range entries {
+				model, ok := entry.(string)
+				if !ok {
+					t.Fatalf("configured model for %s is not a string", instance)
+				}
+				models[instance][model] = true
+			}
+		}
+	}
+	profiles, _ := fleet["profiles"].(map[string]any)
+	for _, raw := range profiles {
+		profile, _ := raw.(map[string]any)
+		collect(profile["models"])
+	}
+	hosts, _ := fleet["hosts"].(map[string]any)
+	for _, raw := range hosts {
+		host, _ := raw.(map[string]any)
+		exceptions, _ := host["exceptions"].(map[string]any)
+		collect(exceptions["models"])
+	}
+	instances := []string{}
+	for instance := range models {
+		instances = append(instances, instance)
+	}
+	sort.Strings(instances)
+	providers := []any{}
+	for _, instance := range instances {
+		allowed := []string{}
+		if models[instance]["*"] {
+			allowed = append(allowed, "*")
+		} else {
+			for model := range models[instance] {
+				allowed = append(allowed, model)
+			}
+			sort.Strings(allowed)
+		}
+		providers = append(providers, map[string]any{"instance": instance, "models": allowed, "quotaPool": "exhausted"})
+	}
+	catalog(t, providers)
+}
+
+func catalog(t *testing.T, providers []any) {
 	t.Helper()
 	// Unix socket paths are limited to 108 bytes; Go's per-test temp path can exceed it.
 	dir, err := os.MkdirTemp("", "upkeeper-policy-catalog-")
@@ -75,10 +148,6 @@ func Catalog(t *testing.T, models []string) {
 				if err := json.Unmarshal(body, &query); err != nil || query.Operation != "query" || query.Query.Kind != "workers" {
 					t.Errorf("unexpected fixture operation: %s (%v)", body, err)
 					return
-				}
-				providers := []any{}
-				if models != nil {
-					providers = append(providers, map[string]any{"instance": "codex", "models": models, "quotaPool": "exhausted"})
 				}
 				response := map[string]any{"version": "backlog.admin.local/v1", "response": map[string]any{
 					"version": "backlog.admin/v1", "kind": "workers", "workers": []any{map[string]any{

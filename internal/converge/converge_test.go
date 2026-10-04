@@ -12,6 +12,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/locks"
+	"github.com/iryzhkov/UpKeeper/internal/policytest"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 	"github.com/iryzhkov/UpKeeper/internal/runstore"
 )
@@ -31,6 +32,7 @@ func fleetRelease(t *testing.T) release.Release {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	policytest.ManifestCatalog(t, document)
 	value, err := release.Validate(document)
 	if err != nil {
 		t.Fatalf("validate: %v", err)
