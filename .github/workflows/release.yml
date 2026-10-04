@@ -29,6 +29,8 @@ jobs:
           # somebody who uses the same compiler.
           go-version: "1.24"
           check-latest: false
+      - name: Prepare pinned semantic policy test inputs
+        run: bash scripts/prepare-policy-test-inputs.sh
       - name: Gate
         run: |
           test -z "$(gofmt -l .)"
