@@ -24,6 +24,7 @@ func init() {
 
 var toolingProbe = probeTooling
 var toolingModels = rpcprobe.Models
+var toolingExchange = rpcprobe.Exchange
 
 func toolingIdentity(spec map[string]any) string {
 	b, _ := canonjson.Compact(spec)
@@ -54,6 +55,12 @@ func toolingObserve(c *Context, spec map[string]any) (map[string]any, error) {
 			drift = append(drift, "command binding differs: "+name)
 		}
 	}
+	_, retirement, err := toolingBacklogRetirement(c, base, t)
+	if err != nil {
+		drift = append(drift, "t3-backlog retirement: "+err.Error())
+	} else if retirement == "owned" {
+		drift = append(drift, "retired command binding remains: t3-backlog")
+	}
 	versions := map[string]any{}
 	for _, tool := range []string{"codex", "claude", "opencode", "node"} {
 		result := c.Run([]string{c.Path(".local/share/mise/shims", tool), "--version"}, 15*time.Second, c.Home)
@@ -69,7 +76,7 @@ func toolingObserve(c *Context, spec map[string]any) (map[string]any, error) {
 		drift = append(drift, "Codex catalog: "+err.Error())
 	}
 	sort.Strings(drift)
-	return map[string]any{"drift": drift, "versions": versions, "codex_models": models, "bundle": resolved, "desired_bundle": expected}, nil
+	return map[string]any{"drift": drift, "versions": versions, "codex_models": models, "bundle": resolved, "desired_bundle": expected, "t3_backlog_binding": retirement}, nil
 }
 
 func verifyToolFiles(c *Context, dir string, t *release.Tooling) error {
@@ -110,6 +117,47 @@ func toolingGeneratedFiles(t *release.Tooling) map[string]generatedToolFile {
 		files[name+"/run"] = generatedToolFile{[]byte("#!/bin/sh\nroot=$(dirname -- \"$(readlink -f -- \"$0\")\")\n" + body), 0755}
 	}
 	return files
+}
+
+const toolingBacklogSource = "homelab-cli/bin/t3-backlog"
+
+func toolingHasBacklog(t *release.Tooling) bool {
+	for _, f := range t.Files {
+		if f.Path == toolingBacklogSource {
+			return true
+		}
+	}
+	return false
+}
+
+// The source omission authorizes exactly one known binding, not general bin
+// ownership. Lstat/Readlink deliberately inspect the leaf without following it.
+func toolingBacklogRetirement(c *Context, base string, t *release.Tooling) (string, string, error) {
+	if toolingHasBacklog(t) {
+		return "", "desired", nil
+	}
+	bin, err := agentenv.TargetPath(c.Home, ".local/bin")
+	if err != nil {
+		return "", "", err
+	}
+	path := filepath.Join(bin, "t3-backlog")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return path, "absent", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", "", err
+		}
+		if target == filepath.Join(base, "current", toolingBacklogSource) {
+			return path, "owned", nil
+		}
+	}
+	return path, "preserved foreign binding", nil
 }
 
 func toolingLinks(t *release.Tooling, base string) map[string]string {
@@ -230,6 +278,9 @@ func stageTooling(c *Context, dir string, t *release.Tooling) error {
 func probeTooling(c *Context, dir string, t *release.Tooling) error {
 	// CLI help never invokes a service action or requires copying credentials.
 	for _, name := range []string{"ha", "toolfeedback", "feed", "pve", "unifi", "t3-backlog"} {
+		if name == "t3-backlog" && !toolingHasBacklog(t) {
+			continue
+		}
 		if _, err := c.Must([]string{filepath.Join(dir, "homelab-cli/bin", name), "--help"}, 15*time.Second, c.Home, name+" help"); err != nil {
 			return err
 		}
@@ -254,7 +305,7 @@ func probeTooling(c *Context, dir string, t *release.Tooling) error {
 		} else {
 			calls = append(calls, rpcprobe.Call{Method: "tools/call", Params: map[string]any{"name": "local_status", "arguments": map[string]any{}}})
 		}
-		results, err := rpcprobe.Exchange([]string{filepath.Join(dir, name, "run")}, env, c.Home, false, calls, 40*time.Second)
+		results, err := toolingExchange([]string{filepath.Join(dir, name, "run")}, env, c.Home, false, calls, 40*time.Second)
 		if err != nil {
 			return Failf("%s health check: %s", name, err)
 		}
@@ -318,6 +369,15 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 	for name, target := range toolingLinks(t, base) {
 		links[filepath.Join(bin, name)] = target
 	}
+	retiredPath, retirement, err := toolingBacklogRetirement(c, base, t)
+	if err != nil {
+		return err
+	}
+	// Empty target is a narrow retirement operation, covered by the same
+	// private snapshot and compensation scope as current and desired links.
+	if retirement == "owned" {
+		links[retiredPath] = ""
+	}
 	keys := make([]string, 0, len(links))
 	for path := range links {
 		keys = append(keys, path)
@@ -328,6 +388,10 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		s, err := snapshotLink(path)
 		if err != nil {
 			return err
+		}
+		if path == retiredPath && retirement == "owned" &&
+			(s.Mode&uint32(os.ModeSymlink) == 0 || s.Target != filepath.Join(base, "current", toolingBacklogSource)) {
+			return Failf("concurrent t3-backlog binding change; preserved %s", path)
 		}
 		prior = append(prior, s)
 	}
@@ -341,8 +405,14 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		for n := len(changed) - 1; n >= 0; n-- {
 			i := changed[n]
 			s := prior[i]
-			target, err := os.Readlink(s.Path)
-			if err != nil || target != links[s.Path] {
+			now, err := snapshotLink(s.Path)
+			expected := linkSnapshot{Path: s.Path}
+			if links[s.Path] != "" {
+				expected.Exists = true
+				expected.Mode = uint32(os.ModeSymlink | 0777)
+				expected.Target = links[s.Path]
+			}
+			if err != nil || !reflect.DeepEqual(now, expected) {
 				return Failf("rollback failed: concurrent change to %s; prior bindings at %s", s.Path, backup)
 			}
 			if s.Target != "" {
@@ -366,7 +436,12 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		if s.Target == links[s.Path] {
 			continue
 		}
-		if err := swapLink(s.Path, links[s.Path]); err != nil {
+		if links[s.Path] == "" {
+			err = os.Remove(s.Path)
+		} else {
+			err = swapLink(s.Path, links[s.Path])
+		}
+		if err != nil {
 			return restore(err)
 		}
 		changed = append(changed, i)
@@ -376,6 +451,12 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		return restore(err)
 	}
 	for path, target := range links {
+		if target == "" {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				return restore(errors.New("retired tool binding did not verify"))
+			}
+			continue
+		}
 		actual, err := os.Readlink(path)
 		if err != nil || actual != target {
 			return restore(errors.New("tool binding did not verify"))
