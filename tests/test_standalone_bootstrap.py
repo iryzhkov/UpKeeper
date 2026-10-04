@@ -187,7 +187,12 @@ def test_hash_size_static_and_platform_refusals(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["inplace", "replace", "symlink"])
-def test_input_changes_during_copy_fail_before_execution(setup, monkeypatch, change):
+@pytest.mark.parametrize("stable_times", [False, True])
+def test_input_changes_during_copy_fail_before_execution(setup, monkeypatch, change, stable_times):
+    if stable_times:
+        monkeypatch.setattr(
+            bootstrap, "snapshot", lambda info: (info.st_dev, info.st_ino, info.st_size)
+        )
     artifact = setup[1]
     fired = False
 
@@ -450,7 +455,7 @@ def test_actual_probe_limits_and_process_group_cleanup(tmp_path, mode):
         "wrong": "print('wrong')", "nonzero": "raise SystemExit(2)",
         "descendant": (
             "import os,time; pid=os.fork(); "
-            f"open({str(pid_file)!r},'w').write(str(pid)); time.sleep(60)"
+            f"pid and open({str(pid_file)!r},'w').write(str(pid)); time.sleep(60)"
         ),
     }[mode]
     program.write_text(f"#!{sys.executable}\n{body}\n")

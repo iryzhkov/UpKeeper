@@ -14,8 +14,11 @@ import (
 // and three copies of one schema is three chances to disagree about what is
 // authorized.
 func ValidateFleetConfiguration(component map[string]any) error {
-	_, err := fleet.Parse(component)
-	return err
+	document, err := fleet.Parse(component)
+	if err != nil {
+		return err
+	}
+	return document.ValidateRoutePolicy()
 }
 
 // FleetIntent returns the parsed fleet intent of a release, or nothing when the

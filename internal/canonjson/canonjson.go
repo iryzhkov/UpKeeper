@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -88,14 +89,69 @@ func Normalize(value any) (any, error) {
 func Decode(data []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	var generic any
-	if err := decoder.Decode(&generic); err != nil {
+	generic, err := decodeValue(decoder)
+	if err != nil {
 		return nil, err
 	}
-	if decoder.More() {
+	if _, err := decoder.Token(); err != io.EOF {
 		return nil, fmt.Errorf("trailing data after the JSON document")
 	}
 	return generic, nil
+}
+
+// decodeValue refuses duplicate object keys before a map can erase evidence of
+// them. This matters for reviewed policy bytes: Steward's strict YAML parser
+// cannot detect keys already discarded by the release JSON loader.
+func decodeValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return token, nil
+	}
+	switch delimiter {
+	case '{':
+		result := map[string]any{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("JSON object key is not a string")
+			}
+			if _, exists := result[key]; exists {
+				return nil, fmt.Errorf("duplicate JSON key %q", key)
+			}
+			value, err := decodeValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = value
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	case '[':
+		result := []any{}
+		for decoder.More() {
+			value, err := decodeValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	default:
+		return nil, fmt.Errorf("unexpected JSON delimiter")
+	}
 }
 
 // DecodeObject parses JSON and insists the document is an object.

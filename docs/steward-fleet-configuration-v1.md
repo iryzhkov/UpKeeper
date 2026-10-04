@@ -245,6 +245,97 @@ identical bytes" was true of the bytes and false of the tests: only the producin
 parsed them. A fixture that is not parsed by its consumer is a fixture that agrees with
 itself.
 
+
+
+## Optional route policy (M14 foundation)
+
+`route_policy` is an optional authored object under the fleet component. Its
+value is the complete closed `route-policy/v1` document, with `schema` and an
+ordered `roles` list. Each role has `name`, ordered `candidates`
+(`route`, required `effort`, `tier`) and optional `constraints`
+(`provider_families`, `exclude_provider_families`, `tiers`). The schema owner
+is t3-steward, contract commit
+`8f65b474132707290add6cfb145f40fabf83bed7`, `docs/route-policy.md`.
+UpKeeper runs the installed rc107-or-newer `policy show` parser instead of
+maintaining another policy schema. Null, paths, unknown fields/versions,
+duplicate names/routes/keys, missing effort, max effort, contradictory constraints
+and policies exceeding 1 MiB refuse. The release JSON loader rejects duplicate
+keys before conversion to maps can discard evidence of them.
+
+Every declared worker, client-only host and coordinator receives a standalone
+`~/.config/t3-steward/route-policy.yaml`, mode 0644. UpKeeper does not merge
+policy into steward's config or client JSON. Rendering is canonical JSON
+(a YAML subset), with sorted object keys, two-space indentation and a final
+newline; list order, exact route pins, effort, tiers and constraints are preserved.
+The raw rendered bytes' SHA-256 is the runtime provenance. The conventional YAML
+in `testdata/fleet/route-policy.yaml` is an inert consumer fixture; formatting it
+as fleet intent produces a different raw digest without changing its semantics.
+Neither the fixture nor this foundation activates the shared agent-instruction
+tree or changes its source-owner inventory or legacy commit.
+
+An absent key leaves legacy projection bytes unchanged. Without a policy
+ownership receipt, absence does not read, claim or delete an existing policy.
+Removing an owned key or retiring the component/host restores the original
+pre-ownership bytes, or removes the file if originally absent. A private
+`policy-ownership.json` receipt in the fleet state directory records original
+bytes and durable active/pending digests. A restored tombstone relinquishes
+ownership; subsequent operator edits remain unowned. Re-adoption starts a new
+ownership boundary. Unexpected drift, malformed receipts, symlinks and nonregular
+or oversized policy files refuse rather than overwriting operator work.
+
+Release validation/loading (including authored publication and preserved-intent
+capture validation) invokes `t3-steward policy validate --file PATH --json`
+on the rendered reviewed bytes before publication effects. Host projection
+preflights the same configured-catalog check before ownership, retention or live
+destination writes, and repeats validation on the exact staged bytes before
+rename. The CLI uses the invoking controller/host's configured coordinator
+transport and the agent's HOME/XDG environment. A first-time host needs a working
+read-only coordinator transport before policy installation. No worker readiness,
+quota headroom or advertised model list substitutes for configured authorization.
+Missing authority or transport fails with a bounded 30-second command and a
+configuration/upgrade remedy; it never becomes an indefinite wait.
+
+Schema parsing requires t3-steward rc107 or newer. Configured sole-wildcard
+model catalogs additionally require Steward commit
+`ced8e299561920ad1b46059f354316467f10f655` or a release containing that fix;
+rc107 does not support them in policy validation. The corrected shared worker
+routing authorization rule treats a sole `models: ["*"]` as authorization for
+any concrete model on that provider instance. Explicit lists authorize only
+named models; mixed lists and partial patterns grant no wildcard authority.
+Neither advertisements nor readiness establish configured authorization, and
+`*` itself is never a runnable candidate. Use the corrected consumer before
+validating wildcard catalogs; never install a refused candidate.
+
+New bytes are staged privately beside the destination, read back, checked,
+changed to mode 0644 and atomically renamed. Every touched document's previous
+bytes are retained in the run's `prior.json`. Validation, write, activation or
+receipt-commit failure restores retained projections, with explicit rollback
+failure reporting if restoration cannot finish. Manual `FleetRestorePrior`
+also reconciles policy ownership. If a simultaneous coordinator-catalog reload
+fails or remains unverified, the previous policy is restored and its receipt
+reconciled; existing catalog-reload uncertainty handling remains authoritative
+for the catalog. Policy-only changes require no service signal: rc107 reads
+policy on each CLI invocation. Projection reports include the policy destination,
+raw digest and retirement status.
+
+The semantic tests invoke the actual installed steward CLI while a test-only
+local socket returns configured authorizations for an offline, stale worker.
+These are isolated fixtures, with no enrollments, quota/config changes or model
+execution. Consumer tests fail when the CLI is missing. Verification must
+provision the corrected consumer described above and run the fixtures, including
+sole-wildcard authorization and concrete unauthorized candidate refusal.
+
+The following omarchy generator campaign should consume `policy show --file
+PATH --json` from the reviewed rendered file, retain its raw digest, preserve
+role/candidate order and constraints, and choose each provider's candidates
+without broadening pins or expanding specialty roles. The initial roles are
+plan, execute, review, critical-review, read and 3d. Execute/review use medium;
+plan uses high; critical-review/read/3d use medium. Explicit callers with a
+model shared between high and medium roles need an explicit effort; session
+calls remain explicit Codex medium. Premium/economy tier constraints do not
+grant review authority or replace provider-diversity requirements. Generated
+skills switch to roles only after coordinated publication and deployment.
+
 ## Implementation notes
 
 These record where the implementation is stricter than the contract, and where the contract
