@@ -419,19 +419,7 @@ func t3VerifyInstalledCLI(c *Context, version string) error {
 	if node == "" || t3 == "" {
 		return Failf("installed T3 CLI failed its native startup check; preserving the running service")
 	}
-	// --version does not instantiate T3's PTY layer. Resolve node-pty relative
-	// to the installed CLI entrypoint and load it under the exact Node selected
-	// by the agent PATH, so an ABI/build failure is found before service restart.
-	const loadNative = "const fs=require('node:fs'),m=require('node:module');" +
-		"m.createRequire(fs.realpathSync(process.argv[1]))('node-pty')"
-	native := c.Run([]string{node, "-e", loadNative, t3}, 30*time.Second, "")
-	probe := c.Run([]string{t3, "--version"}, 30*time.Second, "")
-	gotVersion := strings.TrimSpace(probe.Output)
-	if !native.OK || !probe.OK ||
-		(gotVersion != "t3 v"+version && gotVersion != "t3 "+version) {
-		return Failf("installed T3 CLI failed its native startup check; preserving the running service")
-	}
-	return nil
+	return t3QualifyInstalled(c, node, t3, version)
 }
 
 func t3Apply(
