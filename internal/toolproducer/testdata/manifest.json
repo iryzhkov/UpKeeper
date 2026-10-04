@@ -1,0 +1,96 @@
+{
+  "artifacts": [
+    {
+      "id": "fixture-cli-payload",
+      "mode": 420,
+      "path": "payloads/fixture-cli.txt",
+      "required": true,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "payloads/fixture-cli.txt",
+      "transform": "identity-v1"
+    },
+    {
+      "id": "fixture-mcp-payload",
+      "mode": 420,
+      "path": "payloads/fixture-mcp.txt",
+      "required": false,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "payloads/fixture-mcp.txt",
+      "transform": "identity-v1"
+    },
+    {
+      "id": "fixture-third-party-payload",
+      "mode": 420,
+      "path": "payloads/fixture-third-party.txt",
+      "required": false,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "payloads/fixture-third-party.txt",
+      "transform": "identity-v1"
+    },
+    {
+      "id": "huyang-payload",
+      "mode": 420,
+      "path": "payloads/huyang.txt",
+      "required": true,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "payloads/huyang.txt",
+      "transform": "identity-v1"
+    }
+  ],
+  "schema_version": 1,
+  "sources": [
+    {
+      "commit": "1111111111111111111111111111111111111111",
+      "files": [
+        {
+          "mode": 420,
+          "path": "descriptors/fixture-cli.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "descriptors/fixture-mcp.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "descriptors/fixture-third-party.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "descriptors/huyang.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "payloads/fixture-cli.txt",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "payloads/fixture-mcp.txt",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "payloads/fixture-third-party.txt",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "mode": 420,
+          "path": "payloads/huyang.txt",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "id": "synthetic",
+      "repository": "https://example.invalid/fixture",
+      "tree": "2222222222222222222222222222222222222222"
+    }
+  ],
+  "state": "candidate-inert"
+}

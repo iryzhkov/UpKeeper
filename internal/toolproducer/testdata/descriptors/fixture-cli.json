@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "tool": {
+    "aliases": [],
+    "artifact_ids": [
+      "fixture-cli-payload"
+    ],
+    "canonical_tool": "fixture-cli",
+    "capabilities": [
+      "fixture-inspect"
+    ],
+    "id": "fixture-cli",
+    "kind": "cli",
+    "platforms": [
+      "linux-amd64",
+      "linux-arm64"
+    ],
+    "primary_route": {
+      "kind": "cli",
+      "name": "fixture-cli"
+    },
+    "purpose": "Synthetic CLI inspection declaration.",
+    "required": true
+  }
+}

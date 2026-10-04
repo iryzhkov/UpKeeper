@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "tool": {
+    "aliases": [
+      "repo-fixture"
+    ],
+    "artifact_ids": [
+      "huyang-payload"
+    ],
+    "canonical_tool": "huyang",
+    "capabilities": [
+      "file-read",
+      "file-search",
+      "repository-operations",
+      "transactional-edit"
+    ],
+    "id": "huyang",
+    "kind": "mcp-only",
+    "platforms": [
+      "linux-amd64",
+      "linux-arm64"
+    ],
+    "primary_route": {
+      "kind": "mcp",
+      "name": "huyang"
+    },
+    "purpose": "Repository source operations declaration.",
+    "required": true
+  }
+}

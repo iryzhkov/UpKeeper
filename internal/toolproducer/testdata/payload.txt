@@ -1,0 +1,1 @@
+Synthetic offline declaration payload; no execution authority.

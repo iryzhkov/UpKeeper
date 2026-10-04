@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "tool": {
+    "aliases": [],
+    "artifact_ids": [
+      "fixture-third-party-payload"
+    ],
+    "canonical_tool": "fixture-third-party",
+    "capabilities": [
+      "fixture-reference"
+    ],
+    "id": "fixture-third-party",
+    "kind": "third-party",
+    "platforms": [
+      "linux-amd64",
+      "linux-arm64"
+    ],
+    "primary_route": {
+      "kind": "external",
+      "name": "fixture-third-party"
+    },
+    "purpose": "Synthetic third-party reference declaration.",
+    "required": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "tool": {
+    "aliases": [],
+    "artifact_ids": [
+      "fixture-mcp-payload"
+    ],
+    "canonical_tool": "fixture-mcp",
+    "capabilities": [
+      "fixture-metadata"
+    ],
+    "id": "fixture-mcp",
+    "kind": "mcp-only",
+    "platforms": [
+      "linux-amd64",
+      "linux-arm64"
+    ],
+    "primary_route": {
+      "kind": "mcp",
+      "name": "fixture-mcp"
+    },
+    "purpose": "Synthetic MCP metadata declaration.",
+    "required": false
+  }
+}

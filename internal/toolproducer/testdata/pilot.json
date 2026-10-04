@@ -1,0 +1,42 @@
+{
+  "artifact_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "descriptors": [
+    {
+      "id": "fixture-cli",
+      "path": "descriptors/fixture-cli.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "descriptors/fixture-cli.json"
+    },
+    {
+      "id": "fixture-mcp",
+      "path": "descriptors/fixture-mcp.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "descriptors/fixture-mcp.json"
+    },
+    {
+      "id": "fixture-third-party",
+      "path": "descriptors/fixture-third-party.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "descriptors/fixture-third-party.json"
+    },
+    {
+      "id": "huyang",
+      "path": "descriptors/huyang.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_id": "synthetic",
+      "source_path": "descriptors/huyang.json"
+    }
+  ],
+  "platform": "linux-amd64",
+  "schema_version": 1,
+  "state": "candidate-inert",
+  "tool_ids": [
+    "fixture-cli",
+    "fixture-mcp",
+    "fixture-third-party",
+    "huyang"
+  ]
+}
