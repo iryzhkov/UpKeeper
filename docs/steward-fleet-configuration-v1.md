@@ -295,12 +295,16 @@ quota headroom or advertised model list substitutes for configured authorization
 Missing authority or transport fails with a bounded 30-second command and a
 configuration/upgrade remedy; it never becomes an indefinite wait.
 
-The steward authority at rc107 requires exact configured model names. A
-configured `models: ["*"]` is not expanded from advertisements and does not
-authorize an exact policy candidate for this validator. Consequently an initial
-policy can pass schema parsing yet refuse live catalog validation. Resolve that
-prerequisite in separately reviewed coordinator/schema work; never weaken
-authorization or install a refused candidate.
+Schema parsing requires t3-steward rc107 or newer. Configured sole-wildcard
+model catalogs additionally require Steward commit
+`ced8e299561920ad1b46059f354316467f10f655` or a release containing that fix;
+rc107 does not support them in policy validation. The corrected shared worker
+routing authorization rule treats a sole `models: ["*"]` as authorization for
+any concrete model on that provider instance. Explicit lists authorize only
+named models; mixed lists and partial patterns grant no wildcard authority.
+Neither advertisements nor readiness establish configured authorization, and
+`*` itself is never a runnable candidate. Use the corrected consumer before
+validating wildcard catalogs; never install a refused candidate.
 
 New bytes are staged privately beside the destination, read back, checked,
 changed to mode 0644 and atomically renamed. Every touched document's previous
@@ -317,8 +321,9 @@ raw digest and retirement status.
 The semantic tests invoke the actual installed steward CLI while a test-only
 local socket returns configured authorizations for an offline, stale worker.
 These are isolated fixtures, with no enrollments, quota/config changes or model
-execution. Consumer tests explicitly skip when the CLI is missing; release
-verification must provision rc107-or-newer and inspect that they actually ran.
+execution. Consumer tests fail when the CLI is missing. Verification must
+provision the corrected consumer described above and run the fixtures, including
+sole-wildcard authorization and concrete unauthorized candidate refusal.
 
 The following omarchy generator campaign should consume `policy show --file
 PATH --json` from the reviewed rendered file, retain its raw digest, preserve

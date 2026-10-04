@@ -21,7 +21,7 @@ const Policy = `{"schema":"route-policy/v1","roles":[{"name":"execute","candidat
 func RequireCLI(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("t3-steward"); err != nil {
-		t.Skip("semantic consumer fixture requires installed t3-steward rc107 or newer")
+		t.Fatal("semantic consumer fixture requires t3-steward on PATH; configured wildcard catalogs require ced8e299561920ad1b46059f354316467f10f655 or a release containing that fix")
 	}
 }
 

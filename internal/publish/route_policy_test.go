@@ -45,7 +45,7 @@ func TestAuthoredPublicationRefusesInvalidPolicyBeforeEffects(t *testing.T) {
 	options.Authored = true
 	options.ExpectedHead = rootCommit
 	options.ExpectedReleaseSHA256 = strings.Repeat("0", 64) // catalog must refuse before digest fence
-	for _, models := range [][]string{nil, {"gpt-6-sol"}, {"*"}} {
+	for _, models := range [][]string{nil, {"gpt-6-sol"}, {"*", "gpt-6-sol"}, {"gpt-*"}} {
 		t.Run(strings.Join(models, ","), func(t *testing.T) {
 			policytest.Catalog(t, models)
 			f.calls = nil

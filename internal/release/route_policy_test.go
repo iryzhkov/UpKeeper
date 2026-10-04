@@ -24,7 +24,8 @@ func TestReleasePolicyValidationUsesConfiguredCatalog(t *testing.T) {
 	}{
 		{"offline authorized", []string{"gpt-6.1-sol"}, ""},
 		{"unauthorized", []string{"gpt-6-sol"}, "not catalog-authorized"},
-		{"wildcard is not an exact authorization", []string{"*"}, "not catalog-authorized"},
+		{"sole wildcard authorizes concrete candidate", []string{"*"}, ""},
+		{"mixed wildcard refuses unauthorized candidate", []string{"*", "gpt-6-sol"}, "not catalog-authorized"},
 		{"missing authority", nil, "configured route catalog unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

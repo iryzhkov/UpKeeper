@@ -126,7 +126,7 @@ func TestRoutePolicyAuthoritativeSchemaRefusals(t *testing.T) {
 	}
 	// A missing installed authority is a remedy-bearing refusal, never acceptance.
 	err := fleet.CheckRoutePolicy([]byte(policytest.Policy), func(procx.Command) procx.Result { return procx.Result{Code: -1, Err: os.ErrNotExist} }, false)
-	if err == nil || !strings.Contains(err.Error(), "rc107") {
+	if err == nil || !strings.Contains(err.Error(), "rc107") || !strings.Contains(err.Error(), "ced8e299561920ad1b46059f354316467f10f655") {
 		t.Fatal(err)
 	}
 }
@@ -212,12 +212,20 @@ func TestRoutePolicyConfiguredAuthorizationIgnoresReadiness(t *testing.T) {
 	if err := d.ValidateRoutePolicy(); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("sole wildcard authorizes exact candidate", func(t *testing.T) {
+		policytest.Catalog(t, []string{"*"})
+		if err := d.ValidateRoutePolicy(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	for _, tc := range []struct {
 		name   string
 		models []string
 		want   string
 	}{
 		{"unauthorized", []string{"gpt-6-sol"}, "not catalog-authorized"},
+		{"mixed wildcard", []string{"*", "gpt-6-sol"}, "not catalog-authorized"},
+		{"partial pattern", []string{"gpt-*"}, "not catalog-authorized"},
 		{"missing catalog", nil, "configured route catalog unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

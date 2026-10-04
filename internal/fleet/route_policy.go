@@ -91,7 +91,7 @@ func CheckRoutePolicyFile(path string, runner procx.Runner, catalog bool) error 
 	if len(detail) > 4000 {
 		detail = detail[len(detail)-4000:]
 	}
-	return failure.Value("route_policy %s refused (exit %d): %s; install t3-steward rc107 or newer and run t3-steward policy validate --file PATH against a coordinator reporting configured model authorizations", action, result.Code, detail)
+	return failure.Value("route_policy %s refused (exit %d): %s; use t3-steward rc107 or newer for schema parsing; configured sole-wildcard model catalogs require commit ced8e299561920ad1b46059f354316467f10f655 or a release containing that fix (rc107 lacks it); run t3-steward policy validate --file PATH against a coordinator reporting configured model authorizations", action, result.Code, detail)
 }
 
 // ValidateRoutePolicy checks catalog authorization at the publication boundary.
