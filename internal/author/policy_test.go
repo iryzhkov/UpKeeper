@@ -406,6 +406,7 @@ func TestAuthorPinnedPolicyGenerator(t *testing.T) {
 	setup := filepath.Join(t.TempDir(), "setup")
 	gitIn(t, filepath.Dir(setup), "clone", "--quiet", "--no-hardlinks", repository, setup)
 	subject.setup = setup
+	gitIn(t, setup, "checkout", "--quiet", "--detach", generatorPin)
 	gitIn(t, setup, "branch", "--force", "main", generatorPin)
 	gitIn(t, setup, "remote", "set-url", "origin", fixtureOrigin)
 	gitIn(t, setup, "config", "url."+setup+".insteadOf", fixtureOrigin)
