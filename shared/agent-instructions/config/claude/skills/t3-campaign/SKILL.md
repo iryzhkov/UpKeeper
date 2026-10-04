@@ -30,10 +30,29 @@ schedules. Quick same-provider subagents are allowed for reading and sub-work,
 but never in place of a declared task or review. Each declared task has its own
 admission, placement, verification, artifacts and retry boundary.
 
-Model roles are manual until a generated policy replaces them; the resident
-instructions own the assignments and effort limits. Use `t3-steward models`
-and `campaign check` to select real instance/model routes. Do not invent role
-flags or silently escalate effort after failure.
+The resident instructions own policy-backed roles after explicit deployment,
+and manual fallback assignments otherwise. Use `t3-steward models` and
+`campaign check` to verify real routes. Keep explicit provider/effort pins for
+operator or session restrictions; never silently escalate after failure.
+
+## Policy-backed roles (Phase A)
+
+After explicit policy-backed deployment, use `read`, `execute`, `review`,
+`critical-review` and `plan` for the required role. The native
+reader/executor/reviewer/critical-reviewer/planner definitions are for bounded
+same-provider work; they cannot replace a declared task or independent review.
+Steward retains exact catalog authorization and production review diversity.
+Family aliases in native Claude definitions are frontend projection only.
+
+For one task, `t3-steward task run --role execute --dry-run -- "Bounded outcome"`
+selects from the deployed policy. Before deployment, continue using an explicit
+advertised route. Operator/session restrictions take precedence: pin
+`--model "$ROUTE" --effort medium` when restricted to one provider and medium
+effort, and verify that the route belongs to that provider. Never silently
+raise effort or switch providers after failure. Review roles select one reviewer
+in Phase A; explicit independent/judge/swarm routes still express the production
+review contract. Nested review orchestration, quota failover and M16/M17
+compilation are not implemented by these generated files.
 
 ## Write the executor brief before the manifest
 
@@ -278,6 +297,11 @@ with `t3-steward schedules show <schedule> --json` and use its revision for
 Read commands are `schedules list`, `show` and `history`; revision-fenced controls
 are `schedules run`, `enable`, `disable` and `delay-next` (requires `--until`).
 Controls require `--reason`; use a stable `--command-id` when retrying.
+Schedule reads (`list`, `show`, `history`) are available to agents.
+Schedule mutations (`put`, `run`, `enable`, `disable`, `delay-next`) require
+explicit operator authority. An agreed workflow alone does not authorize enabling
+a recurring schedule. Keep disabled schedules disabled until the operator authorizes
+their recreation or enablement.
 See `t3-steward schedules --help full` for the complete syntax, including the
 required schedule id, `--name`, `--workflow`, `--cron`, `--timezone` and `--reason`
 on `put`.
@@ -285,14 +309,54 @@ Registration requires an upgraded coordinator and refuses supervision/gates;
 do not silently fall back to starting work. Schedules own timing, history and
 overlap prevention; never recreate them with local timers or repeated task starts.
 
+## Staged legacy intake retirement
+
+Submit new work through `task run` or `campaign submit`; use `schedules` for
+recurring timing. Legacy Markdown file intake and wrapper submission are obsolete
+entry points, not replacements for public submission. Do not write task files
+or recreate local wrapper/timer submission recipes.
+
+M15 phase 1 stages the local Markdown runner and coordinator Markdown intake
+disabled by default, retaining compatibility code, existing files and quarantine
+for a lead-owned observation and rollback window. These are separate intake
+gates; disabling the local runner alone does not prove coordinator intake is off.
+This guidance does not prove those gates are deployed. The rollout lead verifies
+the exact source, release and runtime state, owns rollback to the previous reviewed
+release, and authorizes any temporary compatibility opt-in. Do not enable intake
+or schedules as routine recovery.
+
+Final removal remains pending reviewed phase 1 deployment, an inventory showing
+no active legacy consumers, and observation evidence accepted by the lead.
+Preserve files and quarantine evidence until that decision; there is no automatic
+removal date. Public submission, persisted tasks, artifacts, worker planning,
+schedules and retained operator controls remain in scope for normal operation.
+Retiring file intake does not retire the `backlog` administration namespace.
+
 ## Operator-only administration
 
-Use campaign/task verbs for normal lifecycle work. The selected commands below
-retain low-level administration where those verbs are not replacements on rc.105.
-This is not a complete inventory: `t3-steward backlog --help full` and
-`t3-steward worker --help full` are the complete lists, including stopped
-coordinator backups, daemon/containment verbs and legacy compatibility helpers.
-Read-only diagnostics are available to agents; mutations require operator authority.
+Use campaign/task verbs for normal lifecycle work. Routine authorized cancellation
+uses `campaign cancel <run>[/<task>] --reason TEXT`, including a single task.
+The selected commands below retain low-level administration where public lifecycle
+verbs do not replace controls on an existing attempt. This is a selected inventory,
+not a complete command list.
+
+Consult the matching help family before administration:
+- `t3-steward backlog --help full`: persisted graph, attempt controls, receipts,
+  artifacts, quarantine and stopped-coordinator backups. Legacy compatibility helpers
+  may remain in help during retirement; they are not new submission guidance.
+- `t3-steward worker --help full`: enrollment, daemon and containment operations.
+- `t3-steward campaign --help full`: public lifecycle and recovery;
+  `t3-steward campaign supervision --help full`: structured supervision controls;
+  `t3-steward campaign recovery retry --help full`: fenced recovery syntax.
+- `t3-steward coordinator --help full`: answering identity and local reload.
+- `t3-steward install-service --help full`: local service installation.
+- `t3-steward schedules --help full`: definitions, history and schedule controls.
+
+Read-only diagnostics are available to agents; administrative mutations require
+operator authority. Supervision mutations require the authorized principal and
+record/activation scope; `reassess` is operator-only. Help is not authorization.
+Coordinator reload, service installation, enrollment, containment, backup restore,
+graph amendments and low-level attempt controls require operator authority.
 `t3-steward triage` prints recovery commands with ids, revisions and idempotency
 keys filled in. Inspect the reason and authority before executing a proposed control.
 
@@ -303,7 +367,7 @@ keys filled in. Inspect the reason and authority before executing a proposed con
 | `backlog commands`, `command show` | Read-only control receipts and their application. |
 | `backlog artifacts`, `artifact show`, `artifact get` | Inspect retained evidence or retrieve it locally. |
 | `backlog task add`, `task set`, `edge add`, `edge remove`, `run clone` | Amend or clone the persisted graph; require `--expected-revision N --request-id ID --reason TEXT`. |
-| `backlog start`, `resume`, `retry`, `skip`, `cancel` | Revision-fenced controls on an existing task, rather than creating a campaign rerun. |
+| `backlog start`, `resume`, `retry`, `skip` | Revision-fenced controls on an existing task, rather than creating a campaign rerun; routine cancellation uses `campaign cancel`. |
 | `backlog pause`, `delay`, `rewake` | Pause an attempt, defer eligibility, or wake waiting-external after its wait is no longer live. |
 | `backlog recover` | Resolve an assignment using coordinator/assignment epochs, attempt revision and evidence id/hash; consult full help for the exact fences. |
 | `backlog quarantine`, `quarantine release` | Read legacy intake refusals, or deliberately clear a marker after fixing its cause. |
@@ -330,6 +394,7 @@ t3-steward backlog quarantine release <key> --reason "Fixed the intake configura
 ```
 
 Quarantine applies to legacy file intake, not synchronous task/campaign submission.
+With intake disabled, clearing quarantine does not enable or restart intake.
 Changing the file's content releases its marker; after a configuration-only fix,
 release the intake key, not the namespaced record key. Release creates nothing:
 the next intake cycle retries, and can refuse again if the cause remains.

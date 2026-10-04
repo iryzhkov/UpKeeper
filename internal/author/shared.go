@@ -23,18 +23,20 @@ const SharedDirectory = "shared/agent-instructions"
 
 // SharedOwner describes candidate source ownership, never activation authorization.
 type SharedOwner struct {
-	SchemaVersion    int      `json:"schema_version"`
-	Owner            string   `json:"owner"`
-	State            string   `json:"state"`
-	SourceRepository string   `json:"source_repository"`
-	LegacyRepository string   `json:"legacy_source_repository"`
-	LegacyCommit     string   `json:"legacy_source_commit"`
-	Generator        string   `json:"generator"`
-	SourceFiles      []string `json:"source_files"`
-	InstructionFiles []string `json:"instruction_files"`
-	SkillRoots       []string `json:"skill_roots"`
-	FutureMerges     []string `json:"future_merges"`
-	RetiredReference string   `json:"retired_reference"`
+	SchemaVersion       int      `json:"schema_version"`
+	Owner               string   `json:"owner"`
+	State               string   `json:"state"`
+	SourceRepository    string   `json:"source_repository"`
+	LegacyRepository    string   `json:"legacy_source_repository"`
+	LegacyCommit        string   `json:"legacy_source_commit"`
+	Generator           string   `json:"generator"`
+	SourceFiles         []string `json:"source_files"`
+	InstructionFiles    []string `json:"instruction_files"`
+	SkillRoots          []string `json:"skill_roots"`
+	FutureMerges        []string `json:"future_merges"`
+	RetiredReference    string   `json:"retired_reference"`
+	PolicyInputContract string   `json:"policy_input_contract,omitempty"`
+	LegacyTree          string   `json:"legacy_source_tree,omitempty"`
 }
 
 // SharedPreparation has a private disposable source tree. Close removes it.
@@ -46,6 +48,8 @@ type SharedPreparation struct {
 	SourceSHA256 map[string]string       `json:"source_sha256"`
 	OutputSHA256 map[string]string       `json:"output_sha256"`
 	Sources      agentenv.DerivedSources `json:"-"`
+	Policy       *SharedPolicy           `json:"policy,omitempty"`
+	PolicyBytes  []byte                  `json:"-"`
 	scratch      string
 }
 
@@ -53,7 +57,11 @@ func (p *SharedPreparation) Close() error { return os.RemoveAll(p.scratch) }
 
 // PrepareShared reads only a full local Git object identity, never a branch,
 // installed home, network fetch or host capture. The default author path is unchanged.
-func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) {
+func PrepareShared(repository, commit string) (*SharedPreparation, error) {
+	return prepareShared(repository, commit, nil)
+}
+
+func prepareShared(repository, commit string, input *sharedPolicyInput) (_ *SharedPreparation, err error) {
 	if _, err = safety.ValidateGitCommit(commit); err != nil {
 		return nil, err
 	}
@@ -90,8 +98,16 @@ func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) 
 		return nil, err
 	}
 	source := filepath.Join(checkout, SharedDirectory)
-	ownerBytes, err := os.ReadFile(filepath.Join(source, "owner.json"))
+	ownerPath := filepath.Join(source, "owner.json")
+	ownerInfo, err := os.Lstat(ownerPath)
+	if err != nil || !ownerInfo.Mode().IsRegular() || ownerInfo.Size() <= 0 || ownerInfo.Size() > 256<<10 {
+		return nil, errors.New("shared owner type or bound")
+	}
+	ownerBytes, err := os.ReadFile(ownerPath)
 	if err != nil {
+		return nil, err
+	}
+	if err = ValidateSharedOwnerEncoding(ownerBytes); err != nil {
 		return nil, err
 	}
 	var owner SharedOwner
@@ -104,17 +120,29 @@ func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) 
 		return nil, errors.New("trailing owner descriptor data")
 	}
 	err = nil
-	if owner.SchemaVersion != 1 || owner.Owner != "upkeeper" || owner.State != "candidate-inert" ||
+	validVersion := owner.SchemaVersion == 1 && owner.LegacyCommit == "c6f58c421053690cff9ef1de04bc544cbb1fe720" && owner.PolicyInputContract == "" && owner.LegacyTree == "" ||
+		owner.SchemaVersion == 2 && owner.LegacyCommit == sharedUpstreamCommit && owner.PolicyInputContract == sharedInputContract && owner.LegacyTree == sharedUpstreamTree
+	if owner.SchemaVersion == 2 && input == nil {
+		return nil, errors.New("shared v2 source requires explicit policy options")
+	}
+	if input != nil && owner.SchemaVersion != 2 {
+		return nil, errors.New("shared policy preparation requires v2 source")
+	}
+	if !validVersion || owner.Owner != "upkeeper" || owner.State != "candidate-inert" ||
 		owner.SourceRepository != "github.com/iryzhkov/UpKeeper" || owner.Generator != Generator ||
-		owner.LegacyRepository != "github.com/iryzhkov/omarchy-setup" || owner.LegacyCommit != "c6f58c421053690cff9ef1de04bc544cbb1fe720" ||
+		owner.LegacyRepository != "github.com/iryzhkov/omarchy-setup" ||
 		!reflect.DeepEqual(owner.SkillRoots, []string{".agents/skills", ".claude/skills"}) ||
 		!reflect.DeepEqual(owner.FutureMerges, []string{".claude/CLAUDE.md:omarchy-setup import fence", ".config/opencode/opencode.json:instructions"}) ||
 		owner.RetiredReference != ".config/agents/agent99.md" {
 		return nil, errors.New("unsupported shared owner identity or activation state")
 	}
+	if owner.SchemaVersion == 2 && !reflect.DeepEqual(owner.SourceFiles, SharedSourcePaths()) {
+		return nil, errors.New("shared v2 source inventory")
+	}
 	p := &SharedPreparation{Repository: owner.SourceRepository, Commit: commit, Owner: owner,
 		SourceSHA256: map[string]string{"owner.json": digestOf(ownerBytes)}, OutputSHA256: map[string]string{}, scratch: scratch}
 	actual := []string{}
+	var sourceTotal int64
 	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -134,6 +162,23 @@ func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) 
 			return nil
 		}
 		actual = append(actual, relative)
+		if owner.SchemaVersion == 2 {
+			info, e := regularOutput(source, relative)
+			if e != nil {
+				return e
+			}
+			mode := os.FileMode(0644)
+			if relative == Generator || relative == "config/bin/agents-role-project" {
+				mode = 0755
+			}
+			if info.Size() <= 0 || info.Size() > 16<<20 || info.Mode().Perm() != mode {
+				return errors.New("shared source mode or bound")
+			}
+			sourceTotal += info.Size()
+			if sourceTotal > 64<<20 {
+				return errors.New("shared source aggregate")
+			}
+		}
 		content, e := os.ReadFile(path)
 		if e != nil {
 			return e
@@ -151,6 +196,9 @@ func PrepareShared(repository, commit string) (_ *SharedPreparation, err error) 
 	home := filepath.Join(scratch, "home")
 	if err = os.MkdirAll(home, 0700); err != nil {
 		return nil, err
+	}
+	if input != nil {
+		return prepareSharedPolicy(p, runner, source, home, input)
 	}
 	generated := runner(procx.Command{
 		Argv: []string{"bash", filepath.Join(source, Generator), "--scratch-only", "--root", source},

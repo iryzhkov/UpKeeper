@@ -1,13 +1,14 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "owner": "upkeeper",
   "state": "candidate-inert",
   "source_repository": "github.com/iryzhkov/UpKeeper",
   "legacy_source_repository": "github.com/iryzhkov/omarchy-setup",
-  "legacy_source_commit": "c6f58c421053690cff9ef1de04bc544cbb1fe720",
+  "legacy_source_commit": "33cb805b5482d511071be7b344140e2ccb8c87da",
   "generator": "config/bin/agents-instructions-gen",
   "source_files": [
     "config/bin/agents-instructions-gen",
+    "config/bin/agents-role-project",
     "config/claude/CLAUDE.md",
     "config/claude/skills/huyang/SKILL.md",
     "config/claude/skills/implementation-session/SKILL.md",
@@ -21,8 +22,18 @@
     "config/claude/skills/t3-wait/SKILL.md"
   ],
   "instruction_files": [
+    ".claude/agents/critical-reviewer.md",
+    ".claude/agents/executor.md",
+    ".claude/agents/planner.md",
+    ".claude/agents/reader.md",
+    ".claude/agents/reviewer.md",
     ".claude/omarchy-setup/CLAUDE.md",
     ".codex/AGENTS.md",
+    ".codex/critical-reviewer.config.toml",
+    ".codex/executor.config.toml",
+    ".codex/planner.config.toml",
+    ".codex/reader.config.toml",
+    ".codex/reviewer.config.toml",
     ".config/agents/AGENTS.md",
     ".config/agents/huyang.md",
     ".config/agents/jocasta.md",
@@ -38,5 +49,7 @@
     ".claude/CLAUDE.md:omarchy-setup import fence",
     ".config/opencode/opencode.json:instructions"
   ],
-  "retired_reference": ".config/agents/agent99.md"
+  "retired_reference": ".config/agents/agent99.md",
+  "legacy_source_tree": "3439bd874573cb88bbad852c5b66771f2ab80eeb",
+  "policy_input_contract": "canonical-release-manifest-v1"
 }

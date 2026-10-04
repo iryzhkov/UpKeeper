@@ -316,6 +316,11 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 		if digest(data[f.Path]) != f.SHA256 {
 			return Inspection{}, errors.New("payload hash")
 		}
+		if f.Kind == "policy-input" {
+			if e = validatePolicyBytes(data[f.Path]); e != nil {
+				return Inspection{}, e
+			}
+		}
 	}
 	again, e := relative(t.root, path, true)
 	if e != nil {
@@ -327,7 +332,11 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 	if e != nil || e2 != nil || !same(before, now) {
 		return Inspection{}, errors.New("generation binding")
 	}
-	return Inspection{id, &r, "trusted-generated-source"}, nil
+	label := "trusted-generated-source"
+	if r.SchemaVersion == 2 {
+		label += "; derivation-only"
+	}
+	return Inspection{id, &r, label}, nil
 }
 func (t *transaction) current() (string, error) {
 	target, e := readlinkat(t.root, "candidate-current")
@@ -580,6 +589,12 @@ func (s *Store) SelectPrior(id string) (Inspection, error) {
 	return t.selectID(id)
 }
 func (s *Store) Stage(repository, commit string) (Inspection, error) {
+	return s.stage(repository, commit, nil)
+}
+func (s *Store) StageWithPolicy(options author.SharedPolicyOptions) (Inspection, error) {
+	return s.stage(options.Repository, options.Commit, &options)
+}
+func (s *Store) stage(repository, commit string, options *author.SharedPolicyOptions) (Inspection, error) {
 	t, e := s.begin()
 	if e != nil {
 		return Inspection{}, e
@@ -596,7 +611,12 @@ func (s *Store) Stage(repository, commit string) (Inspection, error) {
 	if e = physicalBind(repository, repo); e != nil {
 		return Inspection{}, e
 	}
-	p, e := author.PrepareShared(repository, commit)
+	var p *author.SharedPreparation
+	if options == nil {
+		p, e = author.PrepareShared(repository, commit)
+	} else {
+		p, e = author.PrepareSharedWithPolicy(*options)
+	}
 	if e != nil {
 		return Inspection{}, e
 	}
@@ -661,8 +681,12 @@ func (s *Store) Stage(repository, commit string) (Inspection, error) {
 			return fail(e)
 		}
 	}
+	modes := map[string]uint32{}
+	for _, f := range r.Files {
+		modes[f.Path] = uint32(f.Mode)
+	}
 	for _, path := range sortedKeys(payload) {
-		if e = t.x.write(sd, path, payload[path], 0644); e != nil {
+		if e = t.x.write(sd, path, payload[path], modes[path]); e != nil {
 			return fail(e)
 		}
 	}

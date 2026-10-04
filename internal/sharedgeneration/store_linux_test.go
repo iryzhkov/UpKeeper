@@ -3,6 +3,7 @@
 package sharedgeneration
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -34,37 +35,42 @@ func command(t *testing.T, root string, args ...string) string {
 func fixture(t *testing.T, variant string) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	source := filepath.Join("..", "..", author.SharedDirectory)
-	e := filepath.WalkDir(source, func(path string, d os.DirEntry, e error) error {
-		if e != nil {
-			return e
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, e := filepath.Rel(source, path)
-		if e != nil {
-			return e
-		}
-		b, e := os.ReadFile(path)
-		if e != nil {
-			return e
-		}
-		st, e := d.Info()
-		if e != nil {
-			return e
-		}
-		out := filepath.Join(root, author.SharedDirectory, rel)
-		if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
-			return e
-		}
-		if rel == "config/claude/CLAUDE.md" {
-			b = append(b, []byte("\n"+variant+"\n")...)
-		}
-		return os.WriteFile(out, b, st.Mode().Perm())
-	})
+	// v1 regression fixtures come from the immutable original source object,
+	// never from the working v2 source descriptor.
+	c := exec.Command("git", "-C", "../..", "archive", "c2792c861a83b341d98492d70615a14b64e302e0", author.SharedDirectory)
+	archive, e := c.Output()
 	if e != nil {
 		t.Fatal(e)
+	}
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		if h.Typeflag == tar.TypeDir || h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		if h.Typeflag != tar.TypeReg || !validPath(h.Name) {
+			t.Fatal("invalid v1 fixture archive")
+		}
+		b, e := io.ReadAll(tr)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if h.Name == author.SharedDirectory+"/config/claude/CLAUDE.md" {
+			b = append(b, []byte("\n"+variant+"\n")...)
+		}
+		out := filepath.Join(root, h.Name)
+		if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(out, b, os.FileMode(h.Mode)); e != nil {
+			t.Fatal(e)
+		}
 	}
 	command(t, root, "init", "-q")
 	command(t, root, "config", "user.name", "fixture")

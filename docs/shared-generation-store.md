@@ -1,5 +1,10 @@
 # Candidate shared-generation store
 
+The v1 API and immutable generation contract below remain supported. V2 adds
+preparation-owned StageWithPolicy and a closed canonical policy payload with
+recorded instruction modes; see [shared-canonical-policy.md](shared-canonical-policy.md).
+Inspection and rollback establish derivation only, never current authorization.
+
 Frozen Go API: `Open(root string) (*Store, error)`, `(*Store).Stage(repository, commit string) (Inspection, error)`, `Inspect() (Inspection, error)`, `SelectPrior(id string) (Inspection, error)`, and `Recover() (Inspection, error)`. Open initializes only an explicitly supplied absolute physical empty 0700 directory owned by the caller, or reopens a complete validated store. Store retains root/lock inode identities; every operation reacquires the same persistent flock and revalidates. Stage owns PrepareShared and its lifetime. No caller preparation or authority flag is accepted.
 
 Receipt schema 1 has state candidate-inert, owner upkeeper, source_repository github.com/iryzhkov/UpKeeper, exact source_commit, owner_descriptor_sha256, source_sha256 (including owner.json), and sorted files with path, sha256, numeric mode 420, kind, logical_destination. Canonical bytes use canonjson.MarshalFile. Their SHA256 names generations/<id>; no ID is embedded in those bytes. Inspection reports the external ID, receipt and trusted-generated-source label. Empty selection has no ID. Store identity is a separate canonical schema_version/state/owner object, not an authority document.

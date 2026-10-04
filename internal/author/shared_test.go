@@ -19,31 +19,33 @@ import (
 func sharedFixture(t *testing.T) (*fixture, string) {
 	t.Helper()
 	f := newFixture(t)
-	source := filepath.Join("..", "..", author.SharedDirectory)
-	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		write(t, filepath.Join(f.root, author.SharedDirectory, relative), string(raw), info.Mode().Perm())
-		return nil
-	})
+	// V1 compatibility must use the actual immutable historical source, never
+	// the current v2 working tree.
+	command := exec.Command("git", "--no-replace-objects", "-C", "../..", "archive", "c2792c861a83b341d98492d70615a14b64e302e0", author.SharedDirectory)
+	archive, err := command.Output()
 	if err != nil {
 		t.Fatal(err)
+	}
+	reader := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag == tar.TypeDir || header.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg {
+			t.Fatal("unexpected historical source type")
+		}
+		raw, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(f.root, header.Name), string(raw), os.FileMode(header.Mode))
 	}
 	gitIn(t, f.root, "remote", "add", "origin", "https://github.com/iryzhkov/UpKeeper.git")
 	return f, f.commit(t, f.root, "shared source")
@@ -64,8 +66,8 @@ func TestSharedDeterministicScratchAndRefresh(t *testing.T) {
 	}
 	defer first.Close()
 	// Even the standalone generator's archive bytes are stable.
-	generator := filepath.Join("..", "..", author.SharedDirectory, author.Generator)
-	sourceRoot := filepath.Join("..", "..", author.SharedDirectory)
+	sourceRoot := filepath.Join(f.root, author.SharedDirectory)
+	generator := filepath.Join(sourceRoot, author.Generator)
 	export := func(mask string) []byte {
 		cmd := exec.Command("bash", "-c", `umask "$1"; exec bash "$2" --scratch-only --root "$3"`, "export", mask, generator, sourceRoot)
 		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
@@ -269,7 +271,7 @@ func TestSharedRefusesIdentityInventoryAndTransition(t *testing.T) {
 	// Direct invocation cannot install, even with a complete source tree.
 	cmd := exec.Command("bash", filepath.Join("..", "..", author.SharedDirectory, author.Generator), "--root", filepath.Join("..", "..", author.SharedDirectory))
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}
-	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "requires --scratch-only") {
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "requires --shared-root") {
 		t.Fatalf("direct writer not refused: %s", out)
 	}
 }

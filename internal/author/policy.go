@@ -117,6 +117,10 @@ func regularOutput(home, relative string) (os.FileInfo, error) {
 }
 
 func derivePolicy(runner procx.Runner, scratch, checkout, home, temporary string, policy []byte) (agentenv.DerivedSources, error) {
+	return derivePolicyRoot(runner, scratch, checkout, home, temporary, policy, false)
+}
+
+func derivePolicyRoot(runner procx.Runner, scratch, checkout, home, temporary string, policy []byte, shared bool) (agentenv.DerivedSources, error) {
 	// The policy is outside both protected source and output trees and is never
 	// discovered from HOME. Chmod explicitly defeats the caller's umask.
 	path := filepath.Join(scratch, "route-policy.yaml")
@@ -158,6 +162,9 @@ func derivePolicy(runner procx.Runner, scratch, checkout, home, temporary string
 		Dir:     checkout,
 		Env:     []string{"HOME=" + home, "TMPDIR=" + temporary, "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"},
 		Timeout: 120 * time.Second,
+	}
+	if shared {
+		command.Argv = append(command.Argv, "--shared-root")
 	}
 	run := func(command procx.Command) error {
 		result := runner(command)

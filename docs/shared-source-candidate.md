@@ -1,5 +1,10 @@
 # Shared instruction source candidate (S1a inert preparation)
 
+The preparation protocol below documents historical v1 Git objects. Current copied
+source is v2 and requires explicit canonical policy options; see
+[shared-canonical-policy.md](shared-canonical-policy.md). The existing CLI remains
+unchanged and refuses current v2 without policy; no production caller was added.
+
 UpKeeper's shared/agent-instructions is a pending source authority, copied from
 omarchy-setup c6f58c421053690cff9ef1de04bc544cbb1fe720 through Huyang.
 Every unrelated skill and guidance clause remains. Only candidate publishing scope

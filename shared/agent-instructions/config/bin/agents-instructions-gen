@@ -38,13 +38,16 @@ die() {
 
 usage() {
   cat <<'USAGE'
-Usage: agents-instructions-gen --scratch-only --root DIR [--check]
+Usage: agents-instructions-gen --shared-root --root DIR --policy FILE [--check]
 
-Export a tar stream of candidate references from UpKeeper shared source; never install. The checkout is the only
+Derive candidate instructions in private scratch HOME from explicit shared source. The checkout is the only
 source; nothing is ever read back out of $HOME.
 
-  --root DIR  Explicit shared source directory containing owner.json. Required;
-              there is no environment or installed-copy fallback.
+  --shared-root  Required private shared-source transport.
+  --root DIR  Explicit shared source directory containing owner.json. Required.
+  --policy FILE  Explicit reviewed route-policy/v1 input; parsed by t3-steward policy
+                 show --file FILE --json. Never discovered under HOME. Native roles
+                 require this option; without it legacy generation remains compatible.
   --check     Change nothing. Compare the installed copies against what this checkout
               says they should be, and report every path that differs and in which
               direction. Exit 0 when the host matches, 3 when it has diverged, 1 on an
@@ -56,8 +59,9 @@ USAGE
 
 root=''
 root_source=''
-mode=export
-scratch_only=0
+mode=install
+policy=''
+shared_root=0
 while (($#)); do
   case $1 in
   --root)
@@ -71,8 +75,22 @@ while (($#)); do
     root_source='--root'
     shift
     ;;
-  --scratch-only)
-    scratch_only=1
+  --policy)
+    if (($# < 2)); then
+      die "--policy needs a nonempty file"
+    fi
+    [[ -n $2 ]] || die "--policy needs a nonempty file"
+    [[ -z $policy ]] || die "--policy supplied twice"
+    policy=$2
+    shift 2
+    ;;
+  --policy=*)
+    [[ -z $policy && -n ${1#--policy=} ]] || die "--policy needs one nonempty file"
+    policy=${1#--policy=}
+    shift
+    ;;
+  --shared-root)
+    shared_root=1
     shift
     ;;
   --check)
@@ -87,8 +105,9 @@ while (($#)); do
   esac
 done
 
-((scratch_only)) || die "candidate generator requires --scratch-only; host installation is not implemented"
-[[ -n $root && -f $root/owner.json ]] || die "candidate export requires explicit shared source --root with owner.json"
+# Shared transport is private derivation only; no installed or inferred root.
+((shared_root)) || die "candidate generator requires --shared-root; host installation is not implemented"
+[[ -n $root && -f $root/owner.json && -n $policy ]] || die "candidate generation requires explicit shared source --root and --policy"
 
 # ------------------------------------------------------------------- root --
 # Three ways to name the checkout, tried in order, and no fourth. The failure names every
@@ -213,6 +232,13 @@ the work needs operator-level access, or it releases to the fleet. After handoff
 keep only the run id and Jocasta ledger reference in the session's working set;
 fetch detailed evidence when needed.
 
+Use `task run` for one independent outcome and `campaign submit` for an agreed
+workflow; recurring timing belongs to `schedules`. Routine authorized cancellation
+uses `campaign cancel <run>[/<task>] --reason TEXT`. Legacy Markdown file intake
+and wrapper submission are being retired in stages; do not create new consumers.
+Retained `backlog` diagnostics and fenced operator controls are separate from
+that intake. The `t3-campaign` skill documents their authority and rollback boundary.
+
 Model roles are assigned by hand until a generated policy replaces them:
 Opus 5.5 or Sol 6.1 at high effort for planning and execution; Fable 5.1 or Astra
 at medium effort for critical review, including plan review; Sonnet 5.5 or Luna 6
@@ -336,6 +362,48 @@ HDR
     "$claude_source" | grep -v '/.config/agents/jocasta.md' || true
 } >"$stage/jocasta.md"
 
+if [[ -n $policy ]]; then
+  python3 "$root/config/bin/agents-role-project" "$root" "$stage" "$policy" "$mode"
+  exit $?
+fi
+
+# Validate and stage both fence intervals before check or any installed write.
+# Keep the no-policy generator standalone, including its installed/copied entry point.
+python3 - "$stage" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+def validate(text):
+    intervals = []
+    for name in ("fleet", "jocasta"):
+        first, last = f"<!-- {name}:start -->", f"<!-- {name}:end -->"
+        if first in text or last in text:
+            if text.count(first) != 1 or text.count(last) != 1 or text.index(last) < text.index(first):
+                raise SystemExit("malformed instruction block")
+            intervals.append((text.index(first), text.index(last) + len(last)))
+    intervals.sort()
+    if len(intervals) == 2 and intervals[0][1] > intervals[1][0]:
+        raise SystemExit("overlapping instruction blocks")
+
+stage = Path(sys.argv[1])
+path = Path.home() / ".codex/AGENTS.md"
+text = path.read_text() if path.exists() else ""
+validate(text)
+start, end = "<!-- fleet:start -->", "<!-- fleet:end -->"
+legacy_start, legacy_end = "<!-- jocasta:start -->", "<!-- jocasta:end -->"
+if legacy_start in text:
+    text = (text[:text.index(legacy_start)].rstrip() + "\n"
+            + text[text.index(legacy_end) + len(legacy_end):].lstrip())
+block = start + "\n" + (stage / "AGENTS.md").read_text().strip() + "\n" + end
+if start in text:
+    text = text[:text.index(start)] + block + text[text.index(end) + len(end):]
+else:
+    text = (text.rstrip() + "\n\n" + block + "\n").lstrip()
+validate(text)
+(stage / "codex-merged").write_text(text)
+PY
+
 # ------------------------------------------------------------------ check --
 # A report, not a repair: --check writes nothing anywhere. It verifies the resident
 # instruction artifacts generated by this checkout. Skills are source-projected by
@@ -391,11 +459,10 @@ if [[ $mode == check ]]; then
   if ((diverged)); then
     cat <<EOF
 $program: this host has diverged from $root.
-This is inert candidate inspection; host activation is not implemented.
-Inspect candidate references with
-  $program --scratch-only --root "$root"
-Do not install the export or edit installed copies to force a match.
-A separately reviewed ownership cutover is required before host convergence.
+The repository is authoritative. Converge the host with
+  $root/run.sh   (or: $program --root $root)
+and never by editing an installed copy: the next convergence overwrites it, and an
+UpKeeper capture taken from this host would publish it to the whole fleet.
 EOF
     exit 3
   fi
@@ -403,5 +470,49 @@ EOF
   exit 0
 fi
 
-# Scratch export only. No installed file, import, preference or ownership marker is written.
-tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' -C "$stage" -cf - .
+# ---------------------------------------------------------------- install --
+out="$HOME/.config/agents"
+mkdir -p "$out"
+for generated in "$stage"/*.md; do
+  install -m 0644 "$generated" "$out/$(basename "$generated")"
+done
+
+# The managed pointer block is generated, while unrelated global instructions remain intact,
+# and OpenCode is pointed at the one shared file instead of the reference set.
+python3 - "$stage/codex-merged" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+home = Path.home()
+shared = home / ".config/agents/AGENTS.md"
+path = home / ".codex/AGENTS.md"
+text = Path(sys.argv[1]).read_text()
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(text)
+opencode = home / ".config/opencode/opencode.json"
+if opencode.exists():
+    config = json.loads(opencode.read_text())
+    instructions = config.setdefault("instructions", [])
+    if not isinstance(instructions, list):
+        raise SystemExit("OpenCode instructions must be a list")
+    # The reference files are read on demand, so only the shared pointer is loaded into
+    # every session. Entries from elsewhere are the user's own and are preserved.
+    managed = {str(home / ".config/agents" / name) for name in (
+        "AGENTS.md", "ov-memory.md", "huyang.md", "t3-steward.md",
+        "t3-campaign-executor-briefs.md", "jocasta.md", "agent99.md")}
+    kept = [entry for entry in instructions if str(entry) not in managed]
+    wanted = [str(shared)] + kept
+    if instructions != wanted:
+        config["instructions"] = wanted
+        mode = opencode.stat().st_mode & 0o777
+        temporary = opencode.with_suffix(".agents.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(config, handle, indent=2)
+            handle.write("\n")
+        temporary.replace(opencode)
+PY
+
+rm -f "$out/agent99.md"
+echo "wrote $out/AGENTS.md $out/ov-memory.md $out/huyang.md $out/t3-steward.md $out/jocasta.md (from $root)"

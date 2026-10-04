@@ -23,6 +23,16 @@ A plain CLI may use `task result <run> --wait` or
 For a decision from Igor inside a task, use `t3-steward ask`, not a shell check
 or native question tool; see `t3-task`. Outside a task use the session's question tool.
 
+Policy-backed roles do not change wait semantics or implement quota failover.
+After deployment, use the resident role policy for work resumed after a wait;
+operator/session provider and effort restrictions still require explicit pins.
+No nested review orchestration or M16/M17 compiler is implied.
+
+Waiting does not submit legacy files, enable intake, or authorize schedule mutations.
+For routine authorized work cancellation use `campaign cancel`; cancelling a wait
+only settles that wait. Retained `backlog rewake` recovery requires operator
+authority and is refused while the attempt still has a live wait.
+
 ## Choose the condition
 
 | Kind | Arguments | Outcome |
