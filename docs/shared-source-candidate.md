@@ -55,7 +55,13 @@ Independent nvim HEAD a8c430ac52f0502034f37d68f5b74594290cd624 already removed
 agent99. This is a BLOCKING complete-S1 preservation criterion for the editor owner,
 not a passed plugin test or permission to modify nvim/dependencies/theme bridge.
 
-Next S1 tasks: qualified standalone Debian13 amd64 bootstrap without Omarchy,
-Arch compatibility, offline truthful catalog, and the separately reviewed transactional
-activation implementation with the blocking tests above. No full S1, bootstrap, catalog
-or cutover completion is claimed here.
+The candidate-only transaction substrate is documented in
+[shared-generation-store.md](shared-generation-store.md). It stages pinned generated
+instructions and canonical skills into explicit private scratch stores; candidate-current
+and rollback select inert bytes only. Existing runtime writers and defaults remain unchanged.
+Its scratch lock supplies no destination fence or historical writer proof.
+
+Next S1 tasks retain qualified Debian13/Arch capability tests and the separately reviewed
+destination adapter and activation implementation with all blocking tests above. Candidate
+source and mixed-version review plus exact source CI remain required before publication.
+No full S1 or cutover completion is claimed here.
