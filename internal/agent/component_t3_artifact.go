@@ -144,7 +144,7 @@ func t3ServedArtifact(c *Context, spec map[string]any, r *release.T3Retained) bo
 			return false
 		}
 		args := strings.Split(strings.TrimRight(string(cmd), "\x00"), "\x00")
-		if len(args) < 2 || args[1] != "start" {
+		if len(args) < 2 || !t3SupportedServiceArgs(args[1:]) {
 			continue
 		}
 		if found != "" {
