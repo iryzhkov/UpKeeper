@@ -54,8 +54,11 @@ go-build:
 go-test:
 	go test ./...
 
+# The full race gate, run as three exhaustive groups so that no one race binary
+# carries the whole author package into the default ten-minute alarm. The script
+# derives the groups from the real inventory and refuses any gap or overlap.
 go-race:
-	go test -race ./...
+	python3 scripts/go-race-shards.py --group all
 
 go-vet:
 	go vet ./...

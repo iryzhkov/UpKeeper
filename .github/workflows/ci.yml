@@ -6,10 +6,41 @@ on:
   pull_request:
 
 jobs:
-  # The Go binary is the production path, so its gate runs first and on its
-  # own: a failure here is a release blocker, independent of the reference
-  # implementation's gate below.
+  # The race detector covers every package and every runnable test, divided into
+  # three exhaustive groups that the script derives and checks on each run, so
+  # that each group is its own race binary under the default ten-minute alarm.
+  # Every group must pass; fail-fast is off so one failure does not hide another.
+  go-race:
+    name: go-race (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [author-catalog, author-other, other-packages]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # V1 compatibility fixtures archive the immutable pre-v2 source commit.
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: "1.24"
+          check-latest: true
+      - name: Prepare pinned semantic policy test inputs
+        run: bash scripts/prepare-policy-test-inputs.sh
+      - name: Race detector
+        run: python3 scripts/go-race-shards.py --group "${{ matrix.group }}"
+
+  # The Go binary is the production path, so its gate runs on its own: a
+  # failure here is a release blocker, independent of the reference
+  # implementation's gate below. It cannot conclude success unless every race
+  # group did: it runs its own checks regardless, then fails on any race result
+  # other than success.
   go-gate:
+    needs: go-race
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -30,8 +61,6 @@ jobs:
         run: go vet ./...
       - name: Unit tests
         run: go test ./...
-      - name: Race detector
-        run: go test -race ./...
       - name: Cross-build both fleet architectures
         run: |
           make go-cross
@@ -40,6 +69,13 @@ jobs:
         run: |
           go build -o /tmp/upkeeper ./cmd/upkeeper
           /tmp/upkeeper version
+      - name: Every race detector group passed
+        if: ${{ always() }}
+        env:
+          RACE_RESULT: ${{ needs.go-race.result }}
+        run: |
+          echo "go-race result: $RACE_RESULT"
+          test "$RACE_RESULT" = success
 
   gate:
     runs-on: ubuntu-latest
