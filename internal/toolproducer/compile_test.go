@@ -195,6 +195,7 @@ func TestCompileUnsupportedTransformDiagnostic(t *testing.T) {
 				delete(artifact, "path")
 			case "null":
 				artifact["transform"] = nil
+				want = "schema"
 			case "wrong-type":
 				artifact["transform"] = 1
 			case "other-artifact":
