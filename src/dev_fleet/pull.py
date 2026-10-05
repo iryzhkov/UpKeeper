@@ -718,7 +718,24 @@ def apply_pinned_steward(spec, before, actions):
     return "updated"
 
 
+def refuse_controlled_t3(spec):
+    if "artifact" in spec or os.path.lexists(HOME / ".local/state/dev-fleet/t3-controlled"):
+        raise StepFailed("controlled T3 operations require the Go agent")
+    prefix = run(["npm", "prefix", "-g"], timeout=30)
+    path = Path(prefix["output"].strip())
+    if path.is_absolute():
+        package = path / "lib/node_modules/t3/package.json"
+        try:
+            metadata = json.loads(package.read_text())
+            if "upkeeperControlledBuild" in metadata:
+                raise StepFailed("controlled T3 operations require the Go agent")
+        except (ValueError, OSError):
+            if package.exists():
+                raise StepFailed("ambiguous installed T3 provenance") from None
+
+
 def observe_t3(spec):
+    refuse_controlled_t3(spec)
     package = run(["npm", "ls", "-g", "--depth=0", "--json", "t3"], timeout=30)
     try:
         installed = json.loads(package["output"])["dependencies"]["t3"]["version"] if package["ok"] else None
@@ -733,6 +750,7 @@ def observe_t3(spec):
 
 
 def apply_t3(spec, before, actions):
+    refuse_controlled_t3(spec)
     # Service seeding never overwrites an existing unit or its credentials/bind address.
     # Only start a seed after the installed package and steward have been verified.
     seeded = False
