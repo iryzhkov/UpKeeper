@@ -574,7 +574,14 @@ func acquireCatalogSnapshotHeld(ctx context.Context, o CatalogSnapshotOptions, s
 		afterReads()
 	}
 	// Recheck both physical closure and every held resource after all reads.
+	// Each call derives its Git bound from the context it is given, so a
+	// shorter caller deadline prevails and acquisition ctx is never retained.
+	// Git helpers may replace a cancelled command's error with an integrity
+	// error; catalogContextErr restores it after the command has been reaped.
 	verify := func(verifyCtx context.Context) error {
+		if e := verifyCtx.Err(); e != nil {
+			return e
+		}
 		if e := c.verifyDirectories(); e != nil {
 			return e
 		}
@@ -583,31 +590,43 @@ func acquireCatalogSnapshotHeld(ctx context.Context, o CatalogSnapshotOptions, s
 				return e
 			}
 		}
-		verifyCtx, cancel := context.WithTimeout(verifyCtx, 30*time.Second)
+		if e := verifyCtx.Err(); e != nil {
+			return e
+		}
+		gitCtx, cancel := context.WithTimeout(verifyCtx, 30*time.Second)
 		defer cancel()
-		if e := snapshotGitIdentity(verifyCtx, o); e != nil {
-			return e
+		if e := snapshotGitIdentity(gitCtx, o); e != nil {
+			return catalogContextErr(gitCtx, e)
 		}
-		if e := snapshotTreeObjects(verifyCtx, o, sources); e != nil {
-			return e
+		if e := snapshotTreeObjects(gitCtx, o, sources); e != nil {
+			return catalogContextErr(gitCtx, e)
 		}
-		if e := snapshotGitClosure(verifyCtx, o, sources); e != nil {
-			return e
+		if e := snapshotGitClosure(gitCtx, o, sources); e != nil {
+			return catalogContextErr(gitCtx, e)
 		}
 		for _, path := range snapshotPaths(sources) {
-			blob, e := snapshotBlob(verifyCtx, o, path, sources[path])
-			if e != nil || !bytes.Equal(blob, s.sources[path]) {
-				return errors.New("catalog selected Git bytes changed")
+			if e := gitCtx.Err(); e != nil {
+				return e
 			}
+			blob, e := snapshotBlob(gitCtx, o, path, sources[path])
+			if e != nil || !bytes.Equal(blob, s.sources[path]) {
+				return catalogContextErr(gitCtx, errors.New("catalog selected Git bytes changed"))
+			}
+		}
+		if e := verifyCtx.Err(); e != nil {
+			return e
 		}
 		for _, check := range c.checks {
 			if e := check(); e != nil {
 				return e
 			}
 		}
-		return c.verifyDirectories()
+		if e := c.verifyDirectories(); e != nil {
+			return e
+		}
+		return verifyCtx.Err()
 	}
-	s.verify = func() error { return verify(context.Background()) }
+	s.verify = verify
 	s.close = c.release
 	if err = ctx.Err(); err != nil {
 		return nil, err

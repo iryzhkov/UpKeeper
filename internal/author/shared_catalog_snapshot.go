@@ -35,7 +35,7 @@ type CatalogSnapshot struct {
 	inputs   map[string][]byte
 	commit   string
 	tree     string
-	verify   func() error
+	verify   func(context.Context) error
 	close    func() error
 	closed   bool
 	closeErr error
@@ -73,10 +73,16 @@ func (s *CatalogSnapshot) Identity() (commit, tree string) {
 func (s *CatalogSnapshot) Verify() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.verifyLocked(context.Background())
+}
+
+// verifyLocked requires s.mu. Each call receives its own context; no
+// acquisition context outlives AcquireCatalogSnapshot.
+func (s *CatalogSnapshot) verifyLocked(ctx context.Context) error {
 	if s.closed || s.verify == nil {
 		return errors.New("catalog snapshot closed or uninitialized")
 	}
-	return s.verify()
+	return s.verify(ctx)
 }
 
 // Close releases only owned descriptors; it never removes caller inputs.

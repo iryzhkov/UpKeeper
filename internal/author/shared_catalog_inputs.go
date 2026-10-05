@@ -2,6 +2,7 @@ package author
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -234,11 +235,20 @@ func InspectCatalogGuidanceSnapshot(s *CatalogSnapshot) (CatalogGuidanceAudit, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return inspectCatalogGuidanceLocked(context.Background(), s)
+}
+
+// inspectCatalogGuidanceLocked is the one semantic body behind both guidance
+// frontdoors. The caller holds s.mu; ctx is checked between bounded stages.
+func inspectCatalogGuidanceLocked(ctx context.Context, s *CatalogSnapshot) (CatalogGuidanceAudit, error) {
 	fail := func(err error) (CatalogGuidanceAudit, error) { return CatalogGuidanceAudit{}, err }
 	if s.closed || s.verify == nil || s.close == nil || !catalogPin(s.commit, 40) || !catalogPin(s.tree, 40) || len(s.sources) != 26 || len(s.inputs) != 13 {
 		return fail(errors.New("catalog guidance snapshot closed/uninitialized/incomplete"))
 	}
-	if err := s.verify(); err != nil {
+	if err := s.verify(ctx); err != nil {
+		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
 	for p := range snapshotSourceSpecs() {
@@ -254,6 +264,9 @@ func InspectCatalogGuidanceSnapshot(s *CatalogSnapshot) (CatalogGuidanceAudit, e
 		}
 	}
 	for p, k := range guidanceInputKinds() {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 		raw := s.inputs[p]
 		if err := ValidateCatalogGuidanceInputEncoding(k, raw); err != nil {
 			return fail(fmt.Errorf("%s: %w", p, err))
@@ -264,10 +277,19 @@ func InspectCatalogGuidanceSnapshot(s *CatalogSnapshot) (CatalogGuidanceAudit, e
 		}
 		values[p] = v
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 	if err := guidanceSnapshotRelationships(s.sources, s.inputs, values); err != nil {
 		return fail(err)
 	}
-	if err := s.verify(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := s.verify(ctx); err != nil {
+		return fail(err)
+	}
+	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
 	blockers := []string{"t3-steward: blocked-owner-handoff; catalog-absent"}

@@ -2,6 +2,7 @@ package author
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -461,16 +462,25 @@ func (a CatalogProducerAudit) ReceiptEncoding() []byte     { return bytes.Clone(
 // InspectCatalogProducerSnapshot holds custody across validation and both
 // independent physical rechecks, serializing with Close without nested locking.
 func InspectCatalogProducerSnapshot(s *CatalogSnapshot) (CatalogProducerAudit, error) {
-	zero := CatalogProducerAudit{}
 	if s == nil {
-		return zero, errors.New("catalog producer nil snapshot")
+		return CatalogProducerAudit{}, errors.New("catalog producer nil snapshot")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return inspectCatalogProducerLocked(context.Background(), s)
+}
+
+// inspectCatalogProducerLocked is the one semantic body behind both producer
+// frontdoors. The caller holds s.mu; ctx is checked between bounded stages.
+func inspectCatalogProducerLocked(ctx context.Context, s *CatalogSnapshot) (CatalogProducerAudit, error) {
+	zero := CatalogProducerAudit{}
 	if s.closed || s.verify == nil || s.close == nil || !catalogPin(s.commit, 40) || !catalogPin(s.tree, 40) || len(s.sources) != 26 || len(s.inputs) != 13 {
 		return zero, errors.New("catalog producer closed/uninitialized/incomplete snapshot")
 	}
-	if e := s.verify(); e != nil {
+	if e := s.verify(ctx); e != nil {
+		return zero, e
+	}
+	if e := ctx.Err(); e != nil {
 		return zero, e
 	}
 	for p := range snapshotSourceSpecs() {
@@ -486,6 +496,9 @@ func InspectCatalogProducerSnapshot(s *CatalogSnapshot) (CatalogProducerAudit, e
 	}
 	old := map[string]map[string]any{}
 	for p, k := range map[string]CatalogProducerDocumentKind{"tool-catalog": CatalogProducerCatalog, "tool-producer-input": CatalogProducerInput, "tool-producer-receipt": CatalogProducerReceipt} {
+		if e := ctx.Err(); e != nil {
+			return zero, e
+		}
 		raw := s.inputs["inputs/"+p+".json"]
 		if e := ValidateCatalogProducerDocumentEncoding(k, raw); e != nil {
 			return zero, fmt.Errorf("%s: %w", p, e)
@@ -496,11 +509,17 @@ func InspectCatalogProducerSnapshot(s *CatalogSnapshot) (CatalogProducerAudit, e
 		}
 		old[p] = v
 	}
+	if e := ctx.Err(); e != nil {
+		return zero, e
+	}
 	if e := producerSnapshotRelationships(s.sources, s.inputs, old); e != nil {
 		return zero, e
 	}
 	guidance := map[string]map[string]any{}
 	for p, k := range guidanceInputKinds() {
+		if e := ctx.Err(); e != nil {
+			return zero, e
+		}
 		raw := s.inputs[p]
 		if e := ValidateCatalogGuidanceInputEncoding(k, raw); e != nil {
 			return zero, e
@@ -511,10 +530,19 @@ func InspectCatalogProducerSnapshot(s *CatalogSnapshot) (CatalogProducerAudit, e
 		}
 		guidance[p] = v
 	}
+	if e := ctx.Err(); e != nil {
+		return zero, e
+	}
 	if e := guidanceSnapshotRelationships(s.sources, s.inputs, guidance); e != nil {
 		return zero, e
 	}
-	if e := s.verify(); e != nil {
+	if e := ctx.Err(); e != nil {
+		return zero, e
+	}
+	if e := s.verify(ctx); e != nil {
+		return zero, e
+	}
+	if e := ctx.Err(); e != nil {
 		return zero, e
 	}
 	blockers := []string{"t3-steward: blocked-owner-handoff; catalog-absent"}
