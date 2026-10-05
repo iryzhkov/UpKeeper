@@ -558,13 +558,13 @@
           "size_bytes": 9537
         },
         {
-          "content": "ewogICJtY3Bfc2VydmVycyI6IHsKICAgICJodXlhbmciOiB7CiAgICAgICJhcmdzIjogWwogICAgICAgICJtY3AiLAogICAgICAgICItc29ja2V0IiwKICAgICAgICAiL3J1bi91c2VyLzEwMDAvaHV5YW5nL2NvbnRyb2wuc29jayIsCiAgICAgICAgIi1wcm9maWxlIiwKICAgICAgICAiZnVsbCIKICAgICAgXSwKICAgICAgImNvbW1hbmQiOiAiL2hvbWUvaWdvci8ubG9jYWwvc2hhcmUvaHV5YW5nL2Jpbi9odXlhbmciCiAgICB9LAogICAgImxvY2FsLWZpbGUtbGxtIjogewogICAgICAiYXJncyI6IFtdLAogICAgICAiY29tbWFuZCI6ICIvaG9tZS9pZ29yLy5sb2NhbC9iaW4vbG9jYWwtZmlsZS1sbG0tbWNwIiwKICAgICAgImVudiI6IHsKICAgICAgICAiTE9DQUxfTExNX01PREVMIjogInF3ZW4zLWNvZGVyOjMwYiIsCiAgICAgICAgIkxPQ0FMX0xMTV9OVU1fQ1RYIjogIjY1NTM2IiwKICAgICAgICAiTE9DQUxfTExNX1VSTCI6ICJodHRwOi8vMTkyLjE2OC45MC4yMTI6MTE0MzQiCiAgICAgIH0KICAgIH0sCiAgICAib3YtbWVtb3J5IjogewogICAgICAiYXJncyI6IFtdLAogICAgICAiY29tbWFuZCI6ICIvaG9tZS9pZ29yLy5sb2NhbC9iaW4vb3YtbWVtb3J5LW1jcCIsCiAgICAgICJkZWZhdWx0X3Rvb2xzX2FwcHJvdmFsX21vZGUiOiAiYXBwcm92ZSIsCiAgICAgICJlbnYiOiB7CiAgICAgICAgIk9WX0FHRU5UIjogImNvZGV4LW5vcm1hbmR5IiwKICAgICAgICAiT1ZfQkFTRV9VUkwiOiAiaHR0cHM6Ly9vdi5yeXpoa292LmRldiIKICAgICAgfQogICAgfQogIH0sCiAgInNldHRpbmdzIjogewogICAgImZlYXR1cmVzIjogewogICAgICAiaG9va3MiOiB0cnVlCiAgICB9LAogICAgIm1vZGVsIjogbnVsbCwKICAgICJtb2RlbF9yZWFzb25pbmdfZWZmb3J0IjogbnVsbCwKICAgICJtb2RlbF9yZWFzb25pbmdfc3VtbWFyeSI6IG51bGwsCiAgICAibW9kZWxfdmVyYm9zaXR5IjogbnVsbCwKICAgICJwZXJzb25hbGl0eSI6IG51bGwsCiAgICAic2VydmljZV90aWVyIjogbnVsbCwKICAgICJ0dWkiOiBudWxsCiAgfQp9Cg==",
+          "content": "ewogICJtY3Bfc2VydmVycyI6IHsKICAgICJodXlhbmciOiB7CiAgICAgICJhcmdzIjogWwogICAgICAgICJtY3AiLAogICAgICAgICItcHJvZmlsZSIsCiAgICAgICAgImZ1bGwiCiAgICAgIF0sCiAgICAgICJjb21tYW5kIjogIi9ob21lL2lnb3IvLmxvY2FsL3NoYXJlL2h1eWFuZy9iaW4vaHV5YW5nIiwKICAgICAgImVudl92YXJzIjogWwogICAgICAgICJYREdfUlVOVElNRV9ESVIiLAogICAgICAgICJIVVlBTkdfU09DS0VUIgogICAgICBdCiAgICB9LAogICAgImxvY2FsLWZpbGUtbGxtIjogewogICAgICAiYXJncyI6IFtdLAogICAgICAiY29tbWFuZCI6ICIvaG9tZS9pZ29yLy5sb2NhbC9iaW4vbG9jYWwtZmlsZS1sbG0tbWNwIiwKICAgICAgImVudiI6IHsKICAgICAgICAiTE9DQUxfTExNX01PREVMIjogInF3ZW4zLWNvZGVyOjMwYiIsCiAgICAgICAgIkxPQ0FMX0xMTV9OVU1fQ1RYIjogIjY1NTM2IiwKICAgICAgICAiTE9DQUxfTExNX1VSTCI6ICJodHRwOi8vMTkyLjE2OC45MC4yMTI6MTE0MzQiCiAgICAgIH0KICAgIH0sCiAgICAib3YtbWVtb3J5IjogewogICAgICAiYXJncyI6IFtdLAogICAgICAiY29tbWFuZCI6ICIvaG9tZS9pZ29yLy5sb2NhbC9iaW4vb3YtbWVtb3J5LW1jcCIsCiAgICAgICJkZWZhdWx0X3Rvb2xzX2FwcHJvdmFsX21vZGUiOiAiYXBwcm92ZSIsCiAgICAgICJlbnYiOiB7CiAgICAgICAgIk9WX0FHRU5UIjogImNvZGV4LW5vcm1hbmR5IiwKICAgICAgICAiT1ZfQkFTRV9VUkwiOiAiaHR0cHM6Ly9vdi5yeXpoa292LmRldiIKICAgICAgfQogICAgfQogIH0sCiAgInNldHRpbmdzIjogewogICAgImZlYXR1cmVzIjogewogICAgICAiaG9va3MiOiB0cnVlCiAgICB9LAogICAgIm1vZGVsIjogbnVsbCwKICAgICJtb2RlbF9yZWFzb25pbmdfZWZmb3J0IjogbnVsbCwKICAgICJtb2RlbF9yZWFzb25pbmdfc3VtbWFyeSI6IG51bGwsCiAgICAibW9kZWxfdmVyYm9zaXR5IjogbnVsbCwKICAgICJwZXJzb25hbGl0eSI6IG51bGwsCiAgICAic2VydmljZV90aWVyIjogbnVsbCwKICAgICJ0dWkiOiBudWxsCiAgfQp9Cg==",
           "kind": "mcp-client",
           "mode": "codex-settings",
           "path": ".codex/config.toml",
           "permissions": 384,
-          "sha256": "1c7afc5486e09b71986e167111605238fe90ee617ffceb1b7ae24bc9022c2743",
-          "size_bytes": 1033
+          "sha256": "a71a6d73a021755f2763c249c276f660ec616b936b091b0603db5c0851fd90a1",
+          "size_bytes": 1048
         },
         {
           "content": "IyBHZW5lcmF0ZWQgYnkgYWdlbnRzLWluc3RydWN0aW9ucy1nZW47IHBvbGljeSBTSEEyNTY6IGViNDAwN2JhYWYwNTkyZGM3YzEwM2M3NTk3OTNjMTMxM2I4YTZkNjY1MDY2OGNmNzMzZWQ5Y2JlNzYzM2U4YWEKIyBPcmRlcmVkIHBvbGljeTogeyJuYW1lIjoiY3JpdGljYWwtcmV2aWV3IiwiY2FuZGlkYXRlcyI6W3sicm91dGUiOiJjbGF1ZGVBZ2VudC9jbGF1ZGUtZmFibGUtNS0xIiwiZWZmb3J0IjoibWVkaXVtIiwidGllciI6InByZW1pdW0ifSx7InJvdXRlIjoiY29kZXgvZ3B0LTYtYXN0cmEiLCJlZmZvcnQiOiJtZWRpdW0iLCJ0aWVyIjoicHJlbWl1bSJ9XSwiY29uc3RyYWludHMiOnsidGllcnMiOlsicHJlbWl1bSJdfX0KbW9kZWwgPSAiZ3B0LTYtYXN0cmEiCm1vZGVsX3JlYXNvbmluZ19lZmZvcnQgPSAibWVkaXVtIgo=",
@@ -1377,8 +1377,8 @@
             "asset_id": "asset-000061",
             "kind": "mcp-client",
             "provenance": "github.com/iryzhkov/UpKeeper",
-            "sha256": "1c7afc5486e09b71986e167111605238fe90ee617ffceb1b7ae24bc9022c2743",
-            "size_bytes": 1033,
+            "sha256": "a71a6d73a021755f2763c249c276f660ec616b936b091b0603db5c0851fd90a1",
+            "size_bytes": 1048,
             "source_revision": "66f09bdc1aaedd0573ffb63c82414abcc0dc98a8",
             "staged_path": "/home/igor/.local/state/dev-fleet/environments/capture/asset-000061"
           },
