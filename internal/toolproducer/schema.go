@@ -306,6 +306,46 @@ func validateShape(v any, s map[string]any) bool {
 	}
 	return true
 }
+
+// unsupportedTransformOnly classifies a refusal; it never decodes or accepts
+// normalized input. The unchanged schema must validate every other field.
+func unsupportedTransformOnly(v any, shape map[string]any) bool {
+	object, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	artifacts, ok := object["artifacts"].([]any)
+	if !ok {
+		return false
+	}
+	normalized := make(map[string]any, len(object))
+	for key, value := range object {
+		normalized[key] = value
+	}
+	copies := make([]any, len(artifacts))
+	changed := false
+	for i, value := range artifacts {
+		artifact, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		transform, ok := artifact["transform"].(string)
+		if !ok {
+			return false
+		}
+		copy := make(map[string]any, len(artifact))
+		for key, value := range artifact {
+			copy[key] = value
+		}
+		if transform != "identity-v1" {
+			copy["transform"] = "identity-v1"
+			changed = true
+		}
+		copies[i] = copy
+	}
+	normalized["artifacts"] = copies
+	return changed && validateShape(normalized, shape)
+}
 func decode(raw []byte, name string, out any) error {
 	if len(raw) < 1 || len(raw) > metadataLimit || !utf8.Valid(raw) {
 		return refuse("schema-size")
@@ -324,7 +364,13 @@ func decode(raw []byte, name string, out any) error {
 		return refuse("schema-canonical")
 	}
 	var schemas map[string]map[string]any
-	if json.Unmarshal([]byte(wireSchemas), &schemas) != nil || !validateShape(v, schemas[name]) {
+	if json.Unmarshal([]byte(wireSchemas), &schemas) != nil {
+		return refuse("schema-shape")
+	}
+	if !validateShape(v, schemas[name]) {
+		if name == "artifact_manifest_v1" && unsupportedTransformOnly(v, schemas[name]) {
+			return refuse("mapping-transform-unsupported")
+		}
 		return refuse("schema-shape")
 	}
 	if json.Unmarshal(raw, out) != nil {

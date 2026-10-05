@@ -165,6 +165,66 @@ func failure(t *testing.T, in Inputs) {
 		t.Fatalf("usable failure: %+v %v", r, e)
 	}
 }
+func failureDiagnostic(t *testing.T, in Inputs, diagnostic string) {
+	t.Helper()
+	r, e := Compile(in)
+	if e == nil || e.Error() != "toolproducer-refused: "+diagnostic || len(r.CatalogBytes) != 0 || len(r.ReceiptBytes) != 0 || r.CatalogSHA256 != "" || r.ReceiptSHA256 != "" {
+		t.Fatalf("diagnostic/empty Result: %+v %v; want %s", r, e, diagnostic)
+	}
+}
+
+func TestCompileUnsupportedTransformDiagnostic(t *testing.T) {
+	for _, tc := range []string{"unsupported", "empty-string", "unknown", "missing", "null", "wrong-type", "other-artifact", "source-shape", "artifact-container", "canonical", "pin"} {
+		t.Run(tc, func(t *testing.T) {
+			f := newFixture(t, nil)
+			var document map[string]any
+			must(t, json.Unmarshal(canonical(t, f.m), &document))
+			artifacts := document["artifacts"].([]any)
+			artifact := artifacts[0].(map[string]any)
+			artifact["transform"] = "template-v1"
+			want := "schema-shape"
+			switch tc {
+			case "unsupported":
+				want = "mapping-transform-unsupported"
+			case "empty-string":
+				artifact["transform"] = ""
+				want = "mapping-transform-unsupported"
+			case "unknown":
+				artifact["extra"] = true
+			case "missing":
+				delete(artifact, "path")
+			case "null":
+				artifact["transform"] = nil
+			case "wrong-type":
+				artifact["transform"] = 1
+			case "other-artifact":
+				delete(artifacts[1].(map[string]any), "transform")
+			case "source-shape":
+				delete(document["sources"].([]any)[0].(map[string]any), "tree")
+			case "artifact-container":
+				document["artifacts"] = map[string]any{"transform": "template-v1"}
+			case "canonical":
+				want = "schema-canonical"
+			case "pin":
+				want = "manifest-pin"
+			}
+			raw := canonical(t, document)
+			if tc == "canonical" {
+				raw = append([]byte(" "), raw...)
+			}
+			write(t, f.in.ManifestPath, raw, 420)
+			f.in.ExpectedManifestSHA256 = digest(raw)
+			f.input.ManifestSHA256 = digest(raw)
+			input := canonical(t, f.input)
+			write(t, f.in.InputPath, input, 420)
+			f.in.ExpectedInputSHA256 = digest(input)
+			if tc == "pin" {
+				f.in.ExpectedManifestSHA256 = strings.Repeat("a", 64)
+			}
+			failureDiagnostic(t, f.in, want)
+		})
+	}
+}
 func TestCompileDeterministic(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		failure(t, Inputs{})
@@ -284,7 +344,11 @@ func TestCompileIdentityMapping(t *testing.T) {
 				write(t, filepath.Join(f.source, "payload.txt"), []byte("dirty\n"), 420)
 			}
 			f.refresh(t)
-			failure(t, f.in)
+			if tc == "transform" {
+				failureDiagnostic(t, f.in, "mapping-transform-unsupported")
+			} else {
+				failure(t, f.in)
+			}
 		})
 	}
 }
