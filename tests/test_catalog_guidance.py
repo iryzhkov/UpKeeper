@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import zlib
@@ -621,6 +622,113 @@ def test_public_required_profile_refusal(helper, snapshot, tmp_path, availabilit
                     "--output-root", output)
     assert result.returncode == 8 and result.stdout == b""
     assert result.stderr == b"required-interface-unavailable\n" and not list(output.iterdir())
+
+
+
+@pytest.mark.parametrize("depth", ["root", "nested"])
+@pytest.mark.parametrize("change", ["add", "remove", "replace", "directory-replace", "directory-remove", "transient"])
+def test_stored_refuses_namespace_change_after_real_inventory(
+    helper, snapshot, tmp_path, monkeypatch, capfdbinary, depth, change,
+):
+    root = tmp_path / "retained"
+    receipt = retained_fixture(helper, snapshot, root)
+    receipt_bytes = (root / "receipt.json").read_bytes()
+    assert helper._stored(root, "text", "huyang") == snapshot["final-instructions/.config/agents/huyang.md"]
+    directory = root if depth == "root" else root / ".config/agents"
+    target = root / "receipt.json" if depth == "root" else directory / "huyang.md"
+    original_inventory = helper._inventory
+
+    def scheduled_inventory(held, path):
+        result = original_inventory(held, path)
+        # Schedule a real mutation after the real closed enumeration succeeds.
+        if change in ("add", "transient"):
+            extra = directory / "race-extra"
+            extra.write_bytes(b"unlisted")
+            extra.chmod(0o600)
+            if change == "transient":
+                extra.unlink()
+        elif change == "remove":
+            target.unlink()
+        elif change == "replace":
+            replacement = tmp_path / "replacement"
+            replacement.write_bytes(target.read_bytes())
+            replacement.chmod(stat.S_IMODE(target.stat().st_mode))
+            replacement.replace(target)
+        else:
+            directory.rename(tmp_path / "old-directory")
+            if change == "directory-replace":
+                shutil.copytree(tmp_path / "old-directory", directory)
+        return result
+
+    monkeypatch.setattr(helper, "_inventory", scheduled_inventory)
+    assert helper.main(["--stored-generation", str(root), "--format", "text", "--tool", "huyang"]) == 4
+    captured = capfdbinary.readouterr()
+    assert captured.out == b"" and captured.err == b"input-refused\n"
+    # No reclosed receipt or policy change is needed to make the race refuse.
+    if (root / "receipt.json").exists():
+        assert (root / "receipt.json").read_bytes() == receipt_bytes
+    assert len(receipt["files"]) == 48
+
+
+def test_closed_namespace_ignores_unrelated_shared_ancestor_activity(
+    helper, snapshot, tmp_path, monkeypatch,
+):
+    root = tmp_path / "retained"
+    retained_fixture(helper, snapshot, root)
+    original_inventory = helper._inventory
+
+    def scheduled_inventory(held, path):
+        result = original_inventory(held, path)
+        # A sibling is outside the sealed generation; path bindings stay valid.
+        scratch = tmp_path / "own-scratch"
+        scratch.mkdir(mode=0o700)
+        (scratch / "unrelated").write_bytes(b"outside")
+        return result
+
+    monkeypatch.setattr(helper, "_inventory", scheduled_inventory)
+    assert helper._stored(root, "text", "huyang") == snapshot["final-instructions/.config/agents/huyang.md"]
+
+
+@pytest.mark.parametrize("prior_success", [False, True])
+@pytest.mark.parametrize("failure", ["first", "later", "metadata-first", "metadata-later", "mode"])
+def test_failed_walk_closes_every_real_descriptor(
+    helper, tmp_path, monkeypatch, prior_success, failure,
+):
+    path = tmp_path / "input"
+    path.write_bytes(b"abc")
+    path.chmod(0o600)
+    before = len(os.listdir("/proc/self/fd"))
+    held = helper.Held()
+    if prior_success:
+        assert held.read(path, mode=0o600) == b"abc"
+    retained = len(os.listdir("/proc/self/fd"))
+    handles = list(held.handles)
+    real_fstat = os.fstat
+    for _ in range(10):
+        calls = 0
+
+        def scheduled_fstat(fd):
+            nonlocal calls
+            info = real_fstat(fd)
+            calls += 1
+            if failure.startswith("metadata") and calls == (1 if failure == "metadata-first" else 3):
+                raise OSError("scheduled failure after real descriptor acquisition")
+            return info
+
+        with monkeypatch.context() as patch:
+            patch.setattr(helper.os, "fstat", scheduled_fstat)
+            missing = Path("/") / ("missing-first-" + tmp_path.name) / "input"
+            target = missing if failure == "first" else tmp_path / "missing/input" if failure == "later" else path
+            with pytest.raises((helper.Refused, OSError)):
+                held.open(target, mode=0o644 if failure == "mode" else 0o600)
+        assert len(os.listdir("/proc/self/fd")) == retained
+        assert held.handles == handles
+        held.check()
+    if prior_success:
+        assert held.read(path, mode=0o600) == b"abc"
+    held.close()
+    held.close()
+    assert len(os.listdir("/proc/self/fd")) == before
 
 
 def test_unapproved_runtime_refused_without_implicit_launch(helper, snapshot, tmp_path):

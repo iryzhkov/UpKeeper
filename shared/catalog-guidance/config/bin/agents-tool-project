@@ -199,12 +199,16 @@ class Held:
 
     def __init__(self):
         self.handles = []
+        self.descriptors = []
+        self.directories = {}
 
     def open(self, absolute, directory=False, mode=None, limit=262144, runtime=False):
         path = Path(absolute)
         require(path.is_absolute() and str(path) == str(absolute) and str(path) != "/")
         safe(str(path)[1:])
         fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        acquired = [fd]
+        handles = []
         try:
             for index, component in enumerate(path.parts[1:]):
                 last = index == len(path.parts) - 2
@@ -212,8 +216,9 @@ class Held:
                 if not last or directory:
                     flags |= os.O_DIRECTORY
                 child = os.open(component, flags, dir_fd=fd)
+                acquired.append(child)
                 info = os.fstat(child)
-                self.handles.append((child, fd, component, identity(info)))
+                handles.append((child, fd, component, identity(info)))
                 if not last or directory:
                     require(stat.S_ISDIR(info.st_mode))
                 else:
@@ -233,10 +238,12 @@ class Held:
             info = os.fstat(fd)
             if mode is not None:
                 require(stat.S_IMODE(info.st_mode) == mode and info.st_uid == os.getuid())
+            self.descriptors.extend(acquired)
+            self.handles.extend(handles)
             return fd
         except BaseException:
-            if not self.handles:
-                os.close(fd)
+            for descriptor in reversed(acquired):
+                os.close(descriptor)
             raise
 
     def read(self, path, mode=None, limit=262144, runtime=False):
@@ -251,17 +258,38 @@ class Held:
         self.check()
         return bytes(raw)
 
+    def namespace(self, fd):
+        """Snapshot only a closed generation directory, never shared ancestors."""
+        def changed(info):
+            return identity(info) + (info.st_mtime_ns, info.st_ctime_ns, info.st_nlink, info.st_size)
+
+        original = changed(os.fstat(fd))
+        entries = tuple(
+            (name, identity(os.stat(name, dir_fd=fd, follow_symlinks=False)))
+            for name in sorted(os.listdir(fd))
+        )
+        require(changed(os.fstat(fd)) == original)
+        return original, entries
+
+    def seal(self, fd):
+        original, entries = self.namespace(fd)
+        self.directories[fd] = (original, entries)
+        return entries
+
     def check(self):
         for fd, parent, name, original in self.handles:
             require(identity(os.fstat(fd)) == original)
             require(identity(os.stat(name, dir_fd=parent, follow_symlinks=False)) == original)
 
+        for fd, original in self.directories.items():
+            require(self.namespace(fd) == original)
+
     def close(self):
-        descriptors = {fd for fd, _, _, _ in self.handles}
-        descriptors.update(parent for _, parent, _, _ in self.handles)
-        for fd in descriptors:
+        for fd in reversed(self.descriptors):
             os.close(fd)
+        self.descriptors.clear()
         self.handles.clear()
+        self.directories.clear()
 
     def __enter__(self):
         return self
@@ -891,10 +919,11 @@ def _inventory(held, root):
     root_fd = held.open(root, directory=True, mode=0o700)
 
     def walk(fd, prefix):
-        for name in sorted(os.listdir(fd)):
+        for name, original in held.seal(fd):
             relative = prefix + name
             safe(relative)
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            require(identity(info) == original)
             if stat.S_ISDIR(info.st_mode):
                 child = held.open(Path(root) / relative, directory=True, mode=0o700)
                 directories.add(relative)
