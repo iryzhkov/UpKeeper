@@ -1,0 +1,33 @@
+{
+  "catalog_sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+  "policy_sha256": "eb4007baaf0592dc7c103c759793c1313b8a6d6650668cf733ed9cbe7633e8aa",
+  "producer_receipt_sha256": "74c8dba65aa9c1de49dba4ded25569a15b060c6a897f8f091df3dbab02bfc51f",
+  "records": [
+    {
+      "path": "guidance/fixture-cli.json",
+      "sha256": "42c026616fbaa9111ca91fdcb229ef11aacd1d85294eb0de0f75e822936db202",
+      "tool_id": "fixture-cli"
+    },
+    {
+      "path": "guidance/fixture-mcp.json",
+      "sha256": "c77844249d667114540692312878cb9704e17767884953aaffd0d31461958674",
+      "tool_id": "fixture-mcp"
+    },
+    {
+      "path": "guidance/fixture-third-party.json",
+      "sha256": "b159186d27cfd929e772b6ecb464d8dd80ce4f6a01da95477606a4c7e65c1f01",
+      "tool_id": "fixture-third-party"
+    },
+    {
+      "path": "guidance/huyang.json",
+      "sha256": "b41eeba148797d10d45b7bc727513fbc9c062eae69db1487df5aa53c408c80be",
+      "tool_id": "huyang"
+    }
+  ],
+  "required_global_policy": {
+    "path": "guidance/required-global-policy.json",
+    "sha256": "fd02a30aacfbd1f6dda95f429d6e970385e6bd0ca7dce722e3d3da87acefc3f5"
+  },
+  "schema": "tool-guidance-manifest/v1",
+  "schema_version": 1
+}

@@ -1,0 +1,26 @@
+{
+  "capability_ids": [
+    "fixture-reference"
+  ],
+  "help": {
+    "kind": "catalog-record",
+    "path": "inputs/tool-catalog.json",
+    "sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "tool_id": "fixture-third-party"
+  },
+  "owner": {
+    "evidence_path": "inputs/tool-catalog.json",
+    "evidence_sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "kind": "catalog-fixture",
+    "owning_path": "shared/catalog-guidance/guidance/fixture-third-party.json",
+    "source_path": "internal/toolproducer/testdata/descriptors/fixture-third-party.json",
+    "source_sha256": "e0923229f54efe7396e9eb396c8f51179c56b94a9756b0316fb767411ae7950e",
+    "status": "hypothetical-new-owner-input-unapproved"
+  },
+  "purpose": "reference declaration",
+  "rules": [],
+  "schema": "tool-guidance/v1",
+  "schema_version": 1,
+  "tool_id": "fixture-third-party",
+  "workflow": []
+}

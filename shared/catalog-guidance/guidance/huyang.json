@@ -1,0 +1,38 @@
+{
+  "capability_ids": [
+    "file-read",
+    "file-search",
+    "repository-operations",
+    "transactional-edit"
+  ],
+  "help": {
+    "display_path": "~/.config/agents/huyang.md",
+    "kind": "pinned-reference",
+    "path": ".config/agents/huyang.md",
+    "sha256": "d325c443031af38500a36f89d964e0f6f240e5acc4f2dabe6e0b011f5dfce8e4"
+  },
+  "owner": {
+    "evidence_path": "baseline/.config/agents/AGENTS.md",
+    "evidence_sha256": "4a1f076064ad4ed6a86c66c52e5bdf670bdc077574d202696bbcb225fade81d9",
+    "kind": "imported-guidance-proposal",
+    "owning_path": "shared/catalog-guidance/guidance/huyang.json",
+    "source_path": "shared/agent-instructions/config/claude/skills/huyang/SKILL.md",
+    "source_sha256": "3997f4d7ada96b36e88252ff4fde2fcf9657c50ae9d09d5b3bc85d0f594b092f",
+    "status": "hypothetical-new-owner-input-unapproved"
+  },
+  "purpose": "repository IO via MCP",
+  "rules": [
+    {
+      "evidence_quote_sha256": "4208847d09477ead6a6bb93f532bda43c3beee5b2ae63abb8e790dc7247f94a9",
+      "id": "huyang.repository-boundary.v1",
+      "placement": "before-tool-choice",
+      "text": "Repository IO (`huyang`, huyang.md): first `workspace_open` root before any source operation/survey/scaffolding/creation; retain ID/revision. Use Huyang semantic reads/transactional edits in every permission mode; results bind revision. Fix/report stale/conflict/incomplete-evidence refusals, never bypass. Shell only Git, builds/tests/programs whose output matters within verification-policy limits, or cross-directory unknown-owner searches; once located use Huyang. No direct repository filesystem IO/refusal evasion."
+    }
+  ],
+  "schema": "tool-guidance/v1",
+  "schema_version": 1,
+  "tool_id": "huyang",
+  "workflow": [
+    "Read the exact pinned reference before repository work. Detailed tool matrix and examples remain on demand."
+  ]
+}

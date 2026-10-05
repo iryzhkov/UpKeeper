@@ -1,0 +1,71 @@
+{
+  "catalog_input_contract": "offline-tool-producer-receipt-v1",
+  "evidence_source_files": [
+    "internal/toolproducer/testdata/descriptors/fixture-cli.json",
+    "internal/toolproducer/testdata/descriptors/fixture-mcp.json",
+    "internal/toolproducer/testdata/descriptors/fixture-third-party.json"
+  ],
+  "future_merges": [
+    ".claude/CLAUDE.md:omarchy-setup import fence",
+    ".config/opencode/opencode.json:instructions"
+  ],
+  "import_commit": "b32c0b6f48e12b7d74a60f8a010f84bab73d299f",
+  "import_repository": "github.com/iryzhkov/omarchy-setup",
+  "import_source_files": [
+    "config/bin/agents-instructions-gen",
+    "config/bin/agents-role-project",
+    "config/claude/CLAUDE.md",
+    "config/claude/skills/huyang/SKILL.md",
+    "config/claude/skills/implementation-session/SKILL.md",
+    "config/claude/skills/implementation-session/references/prompt-template.md",
+    "config/claude/skills/ov-memory-curation/SKILL.md",
+    "config/claude/skills/ov-memory/SKILL.md",
+    "config/claude/skills/publish-agent-tooling/SKILL.md",
+    "config/claude/skills/t3-campaign/SKILL.md",
+    "config/claude/skills/t3-campaign/references/executor-briefs.md",
+    "config/claude/skills/t3-task/SKILL.md",
+    "config/claude/skills/t3-wait/SKILL.md"
+  ],
+  "import_tree": "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52",
+  "instruction_files": [
+    ".claude/agents/critical-reviewer.md",
+    ".claude/agents/executor.md",
+    ".claude/agents/planner.md",
+    ".claude/agents/reader.md",
+    ".claude/agents/reviewer.md",
+    ".claude/omarchy-setup/CLAUDE.md",
+    ".codex/AGENTS.md",
+    ".codex/critical-reviewer.config.toml",
+    ".codex/executor.config.toml",
+    ".codex/planner.config.toml",
+    ".codex/reader.config.toml",
+    ".codex/reviewer.config.toml",
+    ".config/agents/AGENTS.md",
+    ".config/agents/huyang.md",
+    ".config/agents/jocasta.md",
+    ".config/agents/operational-guidance.md",
+    ".config/agents/ov-memory.md",
+    ".config/agents/t3-campaign-executor-briefs.md",
+    ".config/agents/t3-steward.md"
+  ],
+  "overlay_source_files": [
+    "config/bin/agents-tool-project",
+    "templates/discovery.txt",
+    "guidance/manifest.json",
+    "guidance/required-global-policy.json",
+    "guidance/fixture-cli.json",
+    "guidance/fixture-mcp.json",
+    "guidance/fixture-third-party.json",
+    "guidance/huyang.json"
+  ],
+  "owner": "upkeeper",
+  "policy_input_contract": "canonical-release-manifest-v1",
+  "retired_reference": ".config/agents/agent99.md",
+  "schema_version": 5,
+  "skill_roots": [
+    ".agents/skills",
+    ".claude/skills"
+  ],
+  "source_repository": "github.com/iryzhkov/UpKeeper",
+  "state": "candidate-inert"
+}

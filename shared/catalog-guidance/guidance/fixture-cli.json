@@ -1,0 +1,26 @@
+{
+  "capability_ids": [
+    "fixture-inspect"
+  ],
+  "help": {
+    "kind": "catalog-record",
+    "path": "inputs/tool-catalog.json",
+    "sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "tool_id": "fixture-cli"
+  },
+  "owner": {
+    "evidence_path": "inputs/tool-catalog.json",
+    "evidence_sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "kind": "catalog-fixture",
+    "owning_path": "shared/catalog-guidance/guidance/fixture-cli.json",
+    "source_path": "internal/toolproducer/testdata/descriptors/fixture-cli.json",
+    "source_sha256": "a0e6c6a8f4f1643c8a039ff97c0ff7a854edaba182bf9cdbfd7c52f3d279d74e",
+    "status": "hypothetical-new-owner-input-unapproved"
+  },
+  "purpose": "inspection declaration",
+  "rules": [],
+  "schema": "tool-guidance/v1",
+  "schema_version": 1,
+  "tool_id": "fixture-cli",
+  "workflow": []
+}

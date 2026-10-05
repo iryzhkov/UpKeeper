@@ -1,0 +1,26 @@
+{
+  "capability_ids": [
+    "fixture-metadata"
+  ],
+  "help": {
+    "kind": "catalog-record",
+    "path": "inputs/tool-catalog.json",
+    "sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "tool_id": "fixture-mcp"
+  },
+  "owner": {
+    "evidence_path": "inputs/tool-catalog.json",
+    "evidence_sha256": "e52120624ef2db6914e88c903c2decdd061daf56d5ca5421a061cbb57eceb77a",
+    "kind": "catalog-fixture",
+    "owning_path": "shared/catalog-guidance/guidance/fixture-mcp.json",
+    "source_path": "internal/toolproducer/testdata/descriptors/fixture-mcp.json",
+    "source_sha256": "5d061d829dab6e36d6c1899e2d6f2780fb129ae25efc28fe688d59cc41a6ef5b",
+    "status": "hypothetical-new-owner-input-unapproved"
+  },
+  "purpose": "metadata declaration",
+  "rules": [],
+  "schema": "tool-guidance/v1",
+  "schema_version": 1,
+  "tool_id": "fixture-mcp",
+  "workflow": []
+}

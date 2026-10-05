@@ -1,0 +1,43 @@
+{
+  "bindings": {
+    "baseline_main_sha256": {
+      ".claude/omarchy-setup/CLAUDE.md": "1de7c144dd4a8b64ba2af7a067cb1d3417284d9e679e85d2f75eede955696951",
+      ".codex/AGENTS.md": "cf60fdccc1adf91141ac94fb2db08c62f235057c2a75eede12edd4210cf14142",
+      ".config/agents/AGENTS.md": "4a1f076064ad4ed6a86c66c52e5bdf670bdc077574d202696bbcb225fade81d9"
+    },
+    "guidance_manifest_sha256": "ae511a13e2cb9e8b9967824a54f2c88bcb1799a6aa83bc760821bf7f91186e9a",
+    "import_commit": "b32c0b6f48e12b7d74a60f8a010f84bab73d299f",
+    "import_repository": "github.com/iryzhkov/omarchy-setup",
+    "import_tree": "fc0e7ad2bad7a7df96030f71696125b5a7d5bd52",
+    "imported_owner_sha256": "ff883da15c4877df6973bf9cada9c5fa33531bd96e4116dbc170eb3e5075d65e",
+    "imported_source_sha256": {
+      "config/bin/agents-instructions-gen": "04f32b6a02ff9db34c54792d2de8b2b79fc014b7220ef70ffcbd6fc21bcdfaed",
+      "config/bin/agents-role-project": "325ec02f4974a9ce102fd131ba6953ae48f4d45c1a2353fa02681088f1d113fd",
+      "config/claude/CLAUDE.md": "59c21f214f8df452f1871375e061ba7d367a5a13e5dff7ece4f52260e2f61abd",
+      "config/claude/skills/huyang/SKILL.md": "3997f4d7ada96b36e88252ff4fde2fcf9657c50ae9d09d5b3bc85d0f594b092f",
+      "config/claude/skills/implementation-session/SKILL.md": "37e202ab9bd16de8fd7f776966079c71b6f554bcaa3eb152099507fad0f4a567",
+      "config/claude/skills/implementation-session/references/prompt-template.md": "4c46d852f6737f9c62b85b34275109c8f586b64fd60ae342a58047d35245f595",
+      "config/claude/skills/ov-memory-curation/SKILL.md": "c9ae9a8555c7533d2cf24a9aaa235a165da35cf3215b194902363de31e53e82f",
+      "config/claude/skills/ov-memory/SKILL.md": "e0f282759a22b73c35e45fac382d9121ea60782533411a58552ae4b0aec47453",
+      "config/claude/skills/publish-agent-tooling/SKILL.md": "65a8b78f7ce01bf9b61ea0b89db395659ee0fdadde3111d2eb528d7b1c6292cf",
+      "config/claude/skills/t3-campaign/SKILL.md": "420fdd7e51cc689a1eea80db6444c2e8233f1fc657a7bc2d99ec2fa8ea25181d",
+      "config/claude/skills/t3-campaign/references/executor-briefs.md": "fb15f77d12c3895a4047fde6a34ddeb838f02a84a37bac14c0cd45c1589174b8",
+      "config/claude/skills/t3-task/SKILL.md": "b3af2689fb0815f4bcdf052991a9db2d75b2a20f1c2736fc0cfc71254c59539b",
+      "config/claude/skills/t3-wait/SKILL.md": "4695ba110bc471feff890f0b4c0429be09ded9824c0c1d04b6fefe075765d955"
+    },
+    "model_block_sha256": {
+      "claude": "5178e9c6dea5f76c3022fb59d85fbadc928d503a3a8a630ffa49bee9177ce9cc",
+      "codex": "81e4e1d0b911c999c18748e410a52d245249e4fe07ac2b217acdc10e76ccc74c"
+    },
+    "operational_reference_sha256": "6c0d6ae65c7aebda0d4785115841e7cf2e65e3ddd2a71485b71cce0e488fa2d4",
+    "policy_sha256": "eb4007baaf0592dc7c103c759793c1313b8a6d6650668cf733ed9cbe7633e8aa",
+    "required_global_policy_sha256": "fd02a30aacfbd1f6dda95f429d6e970385e6bd0ca7dce722e3d3da87acefc3f5"
+  },
+  "schema_version": 4,
+  "texts": {
+    "claude": "{{GLOBAL_CLAUDE}}{{FRAGMENTS}}{{MODEL_CLAUDE}}\n\n{{DISCOVERY}}",
+    "codex": "<!-- fleet:start -->\n{{SHARED_MAIN}}<!-- fleet:end -->\n",
+    "discovery": "## Candidate tool discovery\n\n{{MENU_ROWS}}\nCatalog SHA256: {{CATALOG_SHA256}}\nProducer receipt SHA256: {{PRODUCER_RECEIPT_SHA256}}\n",
+    "shared": "{{GLOBAL_SHARED}}{{FRAGMENTS}}{{MODEL_CODEX}}\n\n{{DISCOVERY}}"
+  }
+}
