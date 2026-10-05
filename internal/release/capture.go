@@ -2,6 +2,7 @@ package release
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -385,7 +386,7 @@ func captureT3(runner procx.Runner, home string, steward map[string]any, previou
 	}
 	prefixResult := runner(procx.Command{Argv: []string{"npm", "prefix", "-g"}, Timeout: 30 * time.Second})
 	prefix := strings.TrimSpace(prefixResult.Stdout)
-	if !filepath.IsAbs(prefix) {
+	if prefixResult.Err != nil || prefixResult.Code != 0 || !filepath.IsAbs(prefix) {
 		prefix = ""
 	} else if p, e := filepath.EvalSymlinks(prefix); e == nil {
 		prefix = p
@@ -409,6 +410,22 @@ func captureT3(runner procx.Runner, home string, steward map[string]any, previou
 				if string(a) != string(b) {
 					return nil, failure.Capture("controlled T3 previous and retained pins conflict")
 				}
+			}
+			selected, e := exec.LookPath("t3")
+			if e != nil {
+				return nil, failure.Capture("selected controlled T3 launcher unavailable")
+			}
+			resolved, e := filepath.EvalSymlinks(selected)
+			if e == nil && filepath.Base(resolved) == "mise" {
+				which := runner(procx.Command{Argv: []string{resolved, "which", "t3"}, Timeout: 15 * time.Second})
+				selected = strings.TrimSpace(which.Stdout)
+				if which.Err != nil || which.Code != 0 || !filepath.IsAbs(selected) {
+					return nil, failure.Capture("selected mise T3 launcher unavailable")
+				}
+				resolved, e = filepath.EvalSymlinks(selected)
+			}
+			if e != nil || resolved != filepath.Join(prefix, "lib/node_modules/t3/bin/t3.js") {
+				return nil, failure.Capture("selected controlled T3 launcher differs")
 			}
 			artifact = retained.Spec["artifact"]
 		}

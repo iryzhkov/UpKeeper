@@ -45,7 +45,7 @@ func t3QualificationFixture(t *testing.T, modern bool) (*Context, string) {
 	if err := os.Symlink(filepath.Join(root, entry), filepath.Join(bin, "t3")); err != nil {
 		t.Fatal(err)
 	}
-	return &Context{Env: []string{"PATH=" + bin + ":/usr/bin:/bin"}, Runner: procx.Run}, root
+	return &Context{Env: []string{"PATH=" + bin + ":/usr/bin:/bin", "TMPDIR=" + os.TempDir()}, Runner: procx.Run}, root
 }
 
 func TestT3PackageQualificationRefusals(t *testing.T) {

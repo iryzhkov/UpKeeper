@@ -132,6 +132,25 @@ func DecodeT3Receipt(b []byte, s *T3Artifact, target, version string) (*T3Receip
 	if !hasExactKeys(m, "schema", "source_commit", "source_tree", "platform", "base_version", "repository", "archive", "archive_sha256", "files") {
 		return nil, errors.New("invalid T3 receipt fields")
 	}
+	raw, ok := m["files"].([]any)
+	if !ok || len(raw) == 0 || len(raw) > T3EntryLimit {
+		return nil, errors.New("invalid T3 receipt file count")
+	}
+	for _, file := range raw {
+		fm, ok := file.(map[string]any)
+		if !ok || !hasExactKeys(fm, "path", "sha256", "size", "mode") {
+			return nil, errors.New("invalid T3 receipt file")
+		}
+		for _, key := range []string{"size", "mode"} {
+			n, ok := fm[key].(json.Number)
+			if !ok {
+				return nil, errors.New("T3 receipt size/mode must be integers")
+			}
+			if _, e := n.Int64(); e != nil {
+				return nil, errors.New("T3 receipt size/mode must be integers")
+			}
+		}
+	}
 	var r T3Receipt
 	if e = t3Decode(b, &r); e != nil {
 		return nil, e
@@ -141,10 +160,6 @@ func DecodeT3Receipt(b []byte, s *T3Artifact, target, version string) (*T3Receip
 		r.Platform != target || r.BaseVersion != version || r.Repository != s.Repository || r.Archive != a.Asset || r.ArchiveSHA256 != a.SHA256 {
 		return nil, errors.New("T3 receipt identity differs")
 	}
-	raw, ok := m["files"].([]any)
-	if !ok || len(raw) == 0 || len(raw) > T3EntryLimit {
-		return nil, errors.New("invalid T3 receipt file count")
-	}
 	seen := map[string]bool{}
 	var total int64
 	for i, f := range r.Files {
@@ -153,7 +168,6 @@ func DecodeT3Receipt(b []byte, s *T3Artifact, target, version string) (*T3Receip
 			!sha256Pattern.MatchString(f.SHA256) || f.Size < 0 || f.Size > T3FileLimit || f.Mode < 0 || f.Mode > 0777 {
 			return nil, errors.New("invalid T3 receipt file")
 		}
-		// json decoding into int64 rejects fractional numbers, booleans and exponents.
 		seen[f.Path] = true
 		total += f.Size
 		if total > T3ExpandedLimit {

@@ -70,7 +70,7 @@ func TestSharedDeterministicScratchAndRefresh(t *testing.T) {
 	generator := filepath.Join(sourceRoot, author.Generator)
 	export := func(mask string) []byte {
 		cmd := exec.Command("bash", "-c", `umask "$1"; exec bash "$2" --scratch-only --root "$3"`, "export", mask, generator, sourceRoot)
-		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+		cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TMPDIR=" + os.TempDir()}
 		out, err := cmd.Output()
 		if err != nil {
 			t.Fatal(err)

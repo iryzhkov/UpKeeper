@@ -24,6 +24,15 @@ func t3ArtifactObservation(c *Context, spec, observed map[string]any) {
 	}
 	observed["artifact_installed"] = false
 	observed["artifact_served"] = false
+	if !desired && release.VerifyT3Upstream(c.Home, prefix, adapterSpecString(spec, "version")) == nil {
+		if e := t3ControlledSelected(c, prefix); e != nil {
+			observed["artifact_error"] = e.Error()
+			return
+		}
+		observed["artifact_installed"] = true
+		observed["artifact_served"] = t3UpstreamServed(c, spec, prefix)
+		return
+	}
 	retained, e := release.ReadT3Retained(c.Home)
 	if e != nil {
 		observed["artifact_error"] = e.Error()
@@ -188,7 +197,8 @@ type t3Transaction struct {
 	installedDigest, newLink, newStateDigest                                  string
 	packageMoved, packageActivated, linkActivated, stateMoved, stateActivated bool
 	fault                                                                     func(string) error // Deterministic filesystem transition injection in tests.
-	guard                                                                     func() error       // Fresh proof after hashing, immediately before mutation.
+	activationGuard                                                           func() error
+	guard                                                                     func() error // Fresh proof after hashing, immediately before mutation.
 }
 
 func t3Begin(c *Context, prefix string) (*t3Transaction, error) {
@@ -311,21 +321,13 @@ func (tx *t3Transaction) record(phase string) error {
 	if e != nil {
 		return e
 	}
-	f, e := os.OpenFile(filepath.Join(tx.dir, "transaction.json"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if e != nil {
-		return e
-	}
-	if _, e = f.Write(b); e == nil {
-		e = f.Sync()
-	}
-	ce := f.Close()
-	if e == nil {
-		e = ce
-	}
-	if e == nil && tx.fault != nil {
+	if e = tx.persistJournal(phase, b); e == nil && tx.fault != nil {
 		e = tx.fault(phase)
 	}
-	return e
+	if e != nil {
+		return &t3JournalError{e}
+	}
+	return nil
 }
 func (tx *t3Transaction) activate(stage, stateStage string) error {
 	if e := tx.unchanged(); e != nil {
@@ -343,6 +345,11 @@ func (tx *t3Transaction) activate(stage, stateStage string) error {
 	tx.newLink = "../lib/node_modules/t3/bin/t3.js"
 	if tx.guard != nil {
 		if e = tx.guard(); e != nil {
+			return e
+		}
+	}
+	if tx.activationGuard != nil {
+		if e = tx.activationGuard(); e != nil {
 			return e
 		}
 	}
@@ -557,7 +564,8 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			return "", Failf("unsupported controlled T3 platform")
 		}
 	}
-	if installed, _ := before["artifact_installed"].(bool); controlled && installed {
+	upstream := !controlled && release.VerifyT3Upstream(c.Home, adapterSpecString(before, "npm_prefix"), version) == nil
+	if installed, _ := before["artifact_installed"].(bool); (controlled || upstream) && installed {
 		served, _ := before["artifact_served"].(bool)
 		active, _ := before["service_active"].(bool)
 		if served && active && before["check_ok"] == true && before["installed"] == version && before["served"] == version {
@@ -569,7 +577,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			return "converged", nil
 		}
 	}
-	if controlled && before["artifact_installed"] == true && before["service_active"] == false && !c.DryRun {
+	if (controlled || upstream) && before["artifact_installed"] == true && before["service_active"] == false && !c.DryRun {
 		if _, _, err = stewardVerifyPairBinary(c, t3StewardBinary(c)); err != nil {
 			return "", err
 		}
@@ -590,7 +598,18 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		if !t3BoundaryIdle(c) {
 			return "deferred", nil
 		}
-		seeded, e := SeedT3Service(c, actions)
+		seedPrefix := adapterSpecString(fresh, "npm_prefix")
+		seeded, e := seedT3Service(c, actions, func() error {
+			obs, err := t3Observe(c, spec)
+			if err != nil || obs["artifact_installed"] != true || adapterSpecString(obs, "npm_prefix") != seedPrefix {
+				return errors.New("T3 installed identity changed before seed start")
+			}
+			if !t3Idle(obs) || !t3BoundaryIdle(c) {
+				return errors.New("T3 seed start idle proof changed")
+			}
+			_, err = t3UnitBinding(c, service, seedPrefix)
+			return err
+		})
 		if e != nil {
 			return "", e
 		}
@@ -601,6 +620,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			}
 			return "updated", nil
 		}
+	}
+	if upstream {
+		return t3RetainedUpstreamApply(c, spec, actions)
 	}
 	if c.DryRun {
 		*actions = append(*actions, "would verify T3 artifact identity and native runtime; activation and restart require fresh zero-thread proof")
@@ -617,14 +639,27 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	if prefix == "" {
 		return "", Failf("unknown controlled T3 npm prefix")
 	}
+	binding, err := t3UnitBinding(c, service, prefix)
+	if err != nil {
+		return "", err
+	}
+	checkBinding := func() error {
+		current, e := t3UnitBinding(c, service, prefix)
+		if e != nil || current != binding {
+			return errors.New("T3 service launcher mapping changed or unsupported")
+		}
+		return nil
+	}
 	tx, err := t3Begin(c, prefix)
 	if err != nil {
 		return "", err
 	}
 	// Retain transaction evidence on failure. Successful installs keep the backup
 	// until an operator-reviewed cleanup, so no automatic retry destroys recovery.
-	journal := func(phase string) { _ = tx.record(phase) }
-	journal("staging")
+	journal := tx.record
+	if err = journal("staging"); err != nil {
+		return "", fmt.Errorf("T3 staging journal failed; evidence %s: %w", tx.dir, err)
+	}
 	stage := filepath.Join(tx.dir, "stage")
 	if err = os.Mkdir(stage, 0700); err != nil {
 		return "", err
@@ -707,7 +742,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	}
 	if !t3Idle(fresh) {
 		*actions = append(*actions, "T3 activation deferred: fresh zero-thread proof unavailable")
-		journal("deferred-before-activation")
+		if err = journal("deferred-before-activation"); err != nil {
+			return "", fmt.Errorf("T3 files unchanged; deferred journal failed; evidence %s: %w", tx.dir, err)
+		}
 		return "deferred", nil
 	}
 	if adapterSpecString(fresh, "npm_prefix") != prefix {
@@ -715,8 +752,12 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	}
 	priorActive, _ := fresh["service_active"].(bool)
 	priorServed := fresh["served"]
+	priorSpec := map[string]any{"service": service, "version": fresh["installed"]}
+	priorUpstream := release.VerifyT3Upstream(c.Home, prefix, adapterSpecString(priorSpec, "version")) == nil
+	priorRetained, _ := release.ReadT3Retained(c.Home)
 	fail := func(cause error, restarted bool) (string, error) {
-		journal("restoration-required")
+		journalErr := journal("restoration-required")
+		cause = errors.Join(cause, journalErr)
 		obs, e := t3Observe(c, spec)
 		if e != nil || !t3Idle(obs) {
 			return "", Failf("rollback incomplete: fresh idle proof unavailable; backup %s; cause %v", tx.dir, cause)
@@ -724,7 +765,10 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		if e = tx.restore(); e != nil {
 			return "", Failf("rollback incomplete: %v; backup %s; cause %v", e, tx.dir, cause)
 		}
-		journal("files-restored")
+		journalErr = errors.Join(journalErr, journal("files-restored"))
+		if journalErr != nil {
+			return "", fmt.Errorf("files restored; service restoration unverified; journal persistence failed; backup %s; cause %v: %w", tx.dir, cause, journalErr)
+		}
 		if restarted {
 			// No retry restart without a new independent successful idle observation.
 			obs, e = t3Observe(c, spec)
@@ -734,6 +778,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			if priorActive {
 				if !t3BoundaryIdle(c) {
 					return "", Failf("files restored; rollback restart idle proof changed; backup %s", tx.dir)
+				}
+				if e = checkBinding(); e != nil {
+					return "", fmt.Errorf("files restored; rollback service mapping changed; backup %s: %w", tx.dir, e)
 				}
 				if _, e = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restore idle previous T3"); e != nil {
 					return "", Failf("files restored; previous service restoration failed; backup %s", tx.dir)
@@ -747,11 +794,24 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 		if priorActive {
 			restored, e := t3Observe(c, spec)
-			if e != nil || restored["check_ok"] != true || restored["served"] != priorServed {
+			identityOK := true
+			if priorUpstream {
+				identityOK = t3UpstreamServed(c, priorSpec, prefix)
+			}
+			if priorRetained != nil {
+				identityOK = t3UnitSelectsOwned(c, service, prefix) && t3ServedArtifact(c, priorSpec, priorRetained)
+			}
+			if e != nil || !identityOK || restored["check_ok"] != true || restored["served"] != priorServed {
 				return "", Failf("files restored; previous service health not verified; backup %s", tx.dir)
 			}
 		}
-		journal("restored")
+		if e = journal("restored"); e != nil {
+			return "", fmt.Errorf("files and previous service restored; journal persistence failed; backup %s: %w", tx.dir, e)
+		}
+		var persistence *t3JournalError
+		if errors.As(cause, &persistence) {
+			return "", fmt.Errorf("files and previous service restored; journal persistence failed; backup %s: %w", tx.dir, cause)
+		}
 		return "", RolledBackf("restored exact previous T3 bytes, modes, launcher and provenance; cause %v; evidence %s", cause, tx.dir)
 	}
 	tx.guard = func() error {
@@ -760,6 +820,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 		return nil
 	}
+	tx.activationGuard = checkBinding
 	if err = tx.activate(stage, stateStage); err != nil {
 		if errors.Is(err, errT3BoundaryIdle) && !tx.packageMoved && !tx.packageActivated {
 			*actions = append(*actions, "T3 activation deferred: idle changed at file boundary")
@@ -767,7 +828,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 		return fail(err, false)
 	}
-	journal("activated")
+	if err = journal("activated"); err != nil {
+		return fail(fmt.Errorf("activation journal failed: %w", err), false)
+	}
 	if err = t3ControlledSelected(c, prefix); err != nil {
 		return fail(err, false)
 	}
@@ -779,7 +842,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		return fail(err, false)
 	}
 	if !t3Idle(fresh) {
-		journal("installed-served-split")
+		if err = journal("installed-served-split"); err != nil {
+			return "", fmt.Errorf("T3 installed; service unchanged; split journal failed; backup %s: %w", tx.dir, err)
+		}
 		*actions = append(*actions, "T3 installed; restart deferred because idle evidence changed; rollback retained at "+tx.dir)
 		return "deferred", nil
 	}
@@ -792,8 +857,14 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 	}
 	if !t3BoundaryIdle(c) {
+		if err = journal("installed-served-split"); err != nil {
+			return "", fmt.Errorf("T3 installed; service unchanged; split journal failed; backup %s: %w", tx.dir, err)
+		}
 		*actions = append(*actions, "T3 installed; restart deferred at restart boundary; backup "+tx.dir)
 		return "deferred", nil
+	}
+	if err = checkBinding(); err != nil {
+		return fail(err, false)
 	}
 	if _, err = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restart idle T3"); err != nil {
 		return fail(err, true)
@@ -809,15 +880,14 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		r, _ := after["artifact_served"].(bool)
 		verified = verified && i && r
 	} else {
-		native := filepath.Join(prefix, "lib/node_modules/t3/node_modules/@t3code/t3-"+release.T3Target()+"/t3")
-		body, e := release.T3ReadFile(native, release.T3FileLimit)
-		runtime := &release.T3Retained{Prefix: prefix, Receipt: &release.T3Receipt{Platform: release.T3Target(), Files: []release.T3File{{Path: "node_modules/@t3code/t3-" + release.T3Target() + "/t3", SHA256: release.T3Digest(body)}}}}
-		verified = verified && e == nil && release.VerifyT3Upstream(c.Home, prefix, version) == nil && t3UnitSelectsOwned(c, service, prefix) && t3ServedArtifact(c, spec, runtime)
+		verified = verified && t3UpstreamServed(c, spec, prefix)
 	}
 	if !verified {
 		return fail(errors.New("T3 post-restart identity or service verification failed"), true)
 	}
-	journal("committed")
+	if err = journal("committed"); err != nil {
+		return "", fmt.Errorf("T3 installed and serving verified identity; commit journal failed; backup %s: %w", tx.dir, err)
+	}
 	// Previous state is retained under the transaction, allowing later transitions.
 	if tx.stateMoved {
 		if err = os.Rename(tx.state+"-previous", filepath.Join(stateBase, "backup-"+filepath.Base(tx.dir))); err != nil {

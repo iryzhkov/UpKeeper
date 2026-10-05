@@ -32,6 +32,7 @@ func t3RetainedFixture(t *testing.T) (string, string, map[string]any, procx.Runn
 	if e = os.Symlink("../lib/node_modules/t3/bin/t3.js", filepath.Join(prefix, "bin/t3")); e != nil {
 		t.Fatal(e)
 	}
+	t.Setenv("PATH", filepath.Join(prefix, "bin"))
 	spec := map[string]any{"kind": "npm-package", "package": "t3", "version": "0.0.45", "service": "t3code.service", "artifact": t3ArtifactMap(s), "compatibility": map[string]any{"min": "0.0.38", "max": "0.0.45", "steward_version": "0.11.0"}}
 	pin, _ := json.Marshal(spec)
 	location, _ := json.Marshal(map[string]any{"prefix": prefix, "link": "../lib/node_modules/t3/bin/t3.js"})

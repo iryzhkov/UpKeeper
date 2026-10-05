@@ -430,11 +430,7 @@ func t3Apply(
 	_, controlled := spec["artifact"] // Identity transitions precede every version-only fast path.
 	prefix := adapterSpecString(before, "npm_prefix")
 	if controlled || release.T3ControlledEvidence(c.Home, prefix) {
-		if !controlled && release.VerifyT3Upstream(c.Home, prefix, adapterSpecString(spec, "version")) == nil {
-			// Verified upstream return has no controlled identity remaining.
-		} else {
-			return t3ControlledApply(c, spec, before, actions)
-		}
+		return t3ControlledApply(c, spec, before, actions)
 	}
 	version := adapterSpecString(spec, "version")
 	service := adapterSpecString(spec, "service")
