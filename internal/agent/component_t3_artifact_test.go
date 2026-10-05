@@ -261,7 +261,7 @@ func t3ArtifactHost(t *testing.T, failQualification, failRestart bool, idleAfter
 		case adapterTestMatches(argv, "MainPID"):
 			return procx.Result{Stdout: pid}
 		case adapterTestMatches(argv, "ExecStart"):
-			return procx.Result{Stdout: "{ path=" + filepath.Join(prefix, "bin/t3") + " ; argv[]=t3 start ; }"}
+			return procx.Result{Stdout: "{ path=" + filepath.Join(prefix, "bin/t3") + " ; argv[]=" + filepath.Join(prefix, "bin/t3") + " start ; ignore_errors=no ; }"}
 		case argv[0] == "python3":
 			// Acquisition is deterministic fixture bytes; no gh/network is run.
 			name := argv[7]

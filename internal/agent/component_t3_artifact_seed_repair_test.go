@@ -14,7 +14,7 @@ func TestT3RepairUnitOwnedMissingAndLegacy(t *testing.T) {
 	runner := &adapterTestRunner{}
 	c.Runner = runner.run
 	runner.handle = func(cmd procx.Command) procx.Result {
-		return procx.Result{Stdout: "{ path=" + tx.link + " ; argv[]=t3 start ; }"}
+		return procx.Result{Stdout: "{ path=" + tx.link + " ; argv[]=" + tx.link + " start ; ignore_errors=no ; }"}
 	}
 	adapterTestWrite(t, filepath.Join(tx.packagePath, "dist/bin.mjs"), "legacy")
 	if e := t3SwapLink("../lib/node_modules/t3/dist/bin.mjs", tx.link); e != nil {
