@@ -43,6 +43,9 @@ type Receipt struct {
 	SourceSHA256          map[string]string    `json:"source_sha256"`
 	Files                 []File               `json:"files"`
 	Policy                *author.SharedPolicy `json:"policy,omitempty"`
+	// Catalog and Guidance are retained canonical receipt5 objects only.
+	Catalog  json.RawMessage `json:"catalog,omitempty"`
+	Guidance json.RawMessage `json:"guidance,omitempty"`
 }
 type Inspection struct {
 	GenerationID string
@@ -155,7 +158,7 @@ func strictJSONLimit(b []byte, value any, canonical bool, limit int) error {
 			return e
 		}
 	}
-	if _, ok := value.(*Receipt); ok {
+	if receipt, ok := value.(*Receipt); ok {
 		var envelope map[string]json.RawMessage
 		if e := json.Unmarshal(b, &envelope); e != nil {
 			return e
@@ -163,6 +166,15 @@ func strictJSONLimit(b []byte, value any, canonical bool, limit int) error {
 		var version int
 		if e := json.Unmarshal(envelope["schema_version"], &version); e != nil {
 			return e
+		}
+		if version == 5 {
+			return decodeCatalogReceipt(b, receipt)
+		}
+		if _, ok := envelope["catalog"]; ok {
+			return errors.New("historical receipt catalog field")
+		}
+		if _, ok := envelope["guidance"]; ok {
+			return errors.New("historical receipt guidance field")
 		}
 		policy, present := envelope["policy"]
 		if version == 1 && present || version == 2 && (!present || bytes.Equal(policy, []byte("null"))) {
@@ -212,6 +224,12 @@ func strictJSONLimit(b []byte, value any, canonical bool, limit int) error {
 	return nil
 }
 func validateReceipt(r Receipt) error {
+	if r.SchemaVersion == 5 {
+		return validateCatalogReceipt(r)
+	}
+	if len(r.Catalog) != 0 || len(r.Guidance) != 0 {
+		return errors.New("historical receipt catalog fields")
+	}
 	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || r.State != "candidate-inert" || r.Owner != "upkeeper" ||
 		r.SourceRepository != "github.com/iryzhkov/UpKeeper" || !pin(r.SourceCommit, 40) ||
 		!pin(r.OwnerDescriptorSHA256, 64) || r.SourceSHA256["owner.json"] != r.OwnerDescriptorSHA256 {

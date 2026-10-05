@@ -308,6 +308,9 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 		if f.Kind == "policy-input" {
 			limit = policyLimit
 		}
+		if r.SchemaVersion == 5 {
+			limit = catalogPayloadLimit(f)
+		}
 		expected[f.Path] = treeFile{uint32(f.Mode), limit, true}
 	}
 	data, e := t.x.treeFiles(fd, expected, false)
@@ -328,6 +331,11 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 			}
 		}
 	}
+	if r.SchemaVersion == 5 {
+		if e = validateCatalogPayload(r, data); e != nil {
+			return Inspection{}, e
+		}
+	}
 	again, e := relative(t.root, path, true)
 	if e != nil {
 		return Inspection{}, e
@@ -341,6 +349,9 @@ func (t *transaction) generation(path, id string) (Inspection, error) {
 	label := "trusted-generated-source"
 	if r.SchemaVersion == 2 {
 		label += "; derivation-only"
+	}
+	if r.SchemaVersion == 5 {
+		label = catalogTrustLabel
 	}
 	return Inspection{id, &r, label}, nil
 }
