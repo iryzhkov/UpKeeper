@@ -23,6 +23,7 @@ try {
  if(legacy&&!pkg.optionalDependencies?.[platform]) { console.log(JSON.stringify({kind:'legacy'})); }
  else if(modern&&!legacy&&['linux-x64','linux-arm64'].includes(key)) {
   const file=req.resolve(platform+'/package.json'),native=JSON.parse(fs.readFileSync(file,'utf8'));
+  if(pkg.upkeeperControlledBuild && fs.realpathSync(file)!==p.join(p.dirname(manifest),'node_modules',platform,'package.json')) throw 0;
   const exe=p.join(p.dirname(file),'t3'),stat=fs.statSync(exe);
   if(native.name!==platform||native.version!==version||native.os?.length!==1||native.os[0]!==process.platform||
     native.cpu?.length!==1||native.cpu[0]!==process.arch||!stat.isFile()||(stat.mode&0o111)===0) throw 0;

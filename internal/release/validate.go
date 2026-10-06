@@ -139,8 +139,8 @@ func validateComponent(name string, component, components map[string]any) error 
 }
 
 func validateT3(component, components map[string]any, kind, name string) error {
-	if !hasExactKeys(component, "kind", "package", "version", "compatibility", "service") {
-		return failure.Validation("invalid T3 component fields")
+	if !hasExactKeys(component, "kind", "package", "version", "compatibility", "service") && !hasExactKeys(component, "kind", "package", "version", "compatibility", "service", "artifact") {
+		return failure.Validation("invalid T3 component fields") // Legacy and artifact pins have exact shapes.
 	}
 	if kind != "npm-package" || component["package"] != "t3" ||
 		component["service"] != "t3code.service" {
@@ -180,6 +180,11 @@ func validateT3(component, components map[string]any, kind, name string) error {
 	}
 	if compareVersions(minimum, current) > 0 || compareVersions(current, maximum) > 0 {
 		return failure.Validation("T3 is outside the captured steward compatibility range")
+	}
+	if raw, present := component["artifact"]; present {
+		if _, err := DecodeT3Artifact(raw, version); err != nil {
+			return err
+		}
 	}
 	return nil
 }

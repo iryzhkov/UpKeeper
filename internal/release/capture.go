@@ -2,6 +2,7 @@ package release
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -162,7 +163,8 @@ func Capture(
 			return Release{}, err
 		}
 	}
-	t3, err := captureT3(runner, home, steward)
+	previousT3, _ := components["t3"].(map[string]any)
+	t3, err := captureT3(runner, home, steward, previousT3)
 	if err != nil {
 		return Release{}, err
 	}
@@ -341,9 +343,9 @@ func captureSteward(runner procx.Runner, home, name string, component map[string
 	return nil
 }
 
-// captureT3 derives the T3 pin from the steward that is actually installed, so
+// captureT3 verifies provenance and derives the T3 pin from the steward that is actually installed, so
 // the pair can never be captured out of the range the steward was tested with.
-func captureT3(runner procx.Runner, home string, steward map[string]any) (map[string]any, error) {
+func captureT3(runner procx.Runner, home string, steward map[string]any, previous ...map[string]any) (map[string]any, error) {
 	path, _ := steward["path"].(string)
 	version := runner(procx.Command{
 		Argv: []string{filepath.Join(home, path), "version"}, Timeout: 15 * time.Second,
@@ -382,7 +384,62 @@ func captureT3(runner procx.Runner, home string, steward map[string]any) (map[st
 		compareVersions(minimum, current) > 0 || compareVersions(current, maximum) > 0 {
 		return nil, failure.Capture("installed T3 is outside the steward tested range")
 	}
-	return map[string]any{
+	prefixResult := runner(procx.Command{Argv: []string{"npm", "prefix", "-g"}, Timeout: 30 * time.Second})
+	prefix := strings.TrimSpace(prefixResult.Stdout)
+	if prefixResult.Err != nil || prefixResult.Code != 0 || !filepath.IsAbs(prefix) {
+		prefix = ""
+	} else if p, e := filepath.EvalSymlinks(prefix); e == nil {
+		prefix = p
+	}
+	expected := false
+	if len(previous) > 0 {
+		_, expected = previous[0]["artifact"]
+	}
+	var artifact any
+	if expected || T3ControlledEvidence(home, prefix) {
+		if !expected && VerifyT3Upstream(home, prefix, packageVersion) == nil {
+			// Positive retained provenance for an explicit return to upstream.
+		} else {
+			retained, e := ReadT3Retained(home)
+			if e != nil || retained.Prefix != prefix || retained.Spec["version"] != packageVersion {
+				return nil, failure.Capture("controlled T3 provenance cannot be verified")
+			}
+			if expected {
+				a, _ := canonjson.Compact(previous[0]["artifact"])
+				b, _ := canonjson.Compact(retained.Spec["artifact"])
+				if string(a) != string(b) {
+					return nil, failure.Capture("controlled T3 previous and retained pins conflict")
+				}
+			}
+			selected, e := exec.LookPath("t3")
+			if e != nil {
+				return nil, failure.Capture("selected controlled T3 launcher unavailable")
+			}
+			resolved, e := filepath.EvalSymlinks(selected)
+			if e == nil && filepath.Base(resolved) == "mise" {
+				which := runner(procx.Command{Argv: []string{resolved, "which", "t3"}, Timeout: 15 * time.Second})
+				selected = strings.TrimSpace(which.Stdout)
+				if which.Err != nil || which.Code != 0 || !filepath.IsAbs(selected) {
+					return nil, failure.Capture("selected mise T3 launcher unavailable")
+				}
+				resolved, e = filepath.EvalSymlinks(selected)
+			}
+			if e != nil || resolved != filepath.Join(prefix, "lib/node_modules/t3/bin/t3.js") {
+				return nil, failure.Capture("selected controlled T3 launcher differs")
+			}
+			artifact = retained.Spec["artifact"]
+		}
+	}
+	if artifact == nil && !T3ControlledEvidence(home, prefix) {
+		resolved, _ := entry["resolved"].(string)
+		if resolved == "" {
+			resolved, _ = entry["_resolved"].(string)
+		}
+		if resolved != "https://registry.npmjs.org/t3/-/t3-"+packageVersion+".tgz" {
+			return nil, failure.Capture("T3 origin ambiguous: positive upstream provenance required")
+		}
+	}
+	pin := map[string]any{
 		"kind":    "npm-package",
 		"package": "t3",
 		"version": packageVersion,
@@ -390,7 +447,11 @@ func captureT3(runner procx.Runner, home string, steward map[string]any) (map[st
 			"min": match[1], "max": match[2], "steward_version": steward["version"],
 		},
 		"service": "t3code.service",
-	}, nil
+	}
+	if artifact != nil {
+		pin["artifact"] = artifact
+	}
+	return pin, nil
 }
 
 // verifySessionHook refuses to publish a steward pin whose reviewed OpenCode

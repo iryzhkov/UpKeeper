@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
 func init() {
@@ -186,6 +187,7 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 	if len(warnings) > 0 {
 		observed["warning"] = strings.Join(warnings, "; ")
 	}
+	t3ArtifactObservation(c, spec, observed)
 	return observed, nil
 }
 
@@ -425,6 +427,11 @@ func t3VerifyInstalledCLI(c *Context, version string) error {
 func t3Apply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
+	_, controlled := spec["artifact"] // Identity transitions precede every version-only fast path.
+	prefix := adapterSpecString(before, "npm_prefix")
+	if controlled || release.T3ControlledEvidence(c.Home, prefix) {
+		return t3ControlledApply(c, spec, before, actions)
+	}
 	version := adapterSpecString(spec, "version")
 	service := adapterSpecString(spec, "service")
 	// Seeding never overwrites an existing unit, its credentials or its bind
