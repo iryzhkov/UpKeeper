@@ -66,10 +66,33 @@ func TestCatalogBaselineGitNoLazyFetchLocalPromisor(t *testing.T) {
 
 func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 	outer := baselineTestOuter(t)
-	for _, kind := range []string{"include", "promisor", "unknown", "alternates", "replacement", "grafts", "root", "ancestor", "names", "config", "object"} {
+	// Each case must produce its own refusal, not merely some error.
+	want := map[string]string{
+		"include":     "baseline unsupported Git configuration",
+		"promisor":    "baseline unsupported Git configuration",
+		"unknown":     "baseline unsupported Git configuration",
+		"alternates":  "baseline indirect Git store",
+		"replacement": "baseline replacements",
+		"grafts":      "baseline indirect Git store",
+		"wrong-head":  "baseline selected HEAD",
+		"ancestor":    "catalog directory custody changed",
+		// A new name or a renamed config changes the held root directory
+		// itself, which the directory custody check refuses first.
+		"names":  "catalog directory custody changed",
+		"config": "catalog directory custody changed",
+		"object": "baseline metadata file custody changed",
+	}
+	for _, kind := range []string{"include", "promisor", "unknown", "alternates", "replacement", "grafts", "wrong-head", "root", "ancestor", "names", "config", "object"} {
 		t.Run(kind, func(t *testing.T) {
 			root := baselineTestOriginal(t, outer)
 			switch kind {
+			case "wrong-head":
+				// An otherwise valid store whose HEAD names a different,
+				// well-formed object that is present in the store.
+				snapshotTestWrite(t, filepath.Join(root, "HEAD"), []byte(sharedUpstreamTree+"\n"), 0644)
+				if got := baselineTestGit(t, root, nil, "rev-parse", "--verify", "HEAD"); got != sharedUpstreamTree {
+					t.Fatal("wrong-HEAD fixture", got)
+				}
 			case "include":
 				baselineTestGit(t, root, nil, "config", "include.path", "/never-read")
 			case "promisor":
@@ -83,8 +106,14 @@ func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 			case "replacement":
 				baselineTestGit(t, root, nil, "update-ref", "refs/replace/"+sharedUpstreamCommit, sharedUpstreamCommit)
 			}
-			reads := 0
-			op := &baselineOriginalOperation{objectRead: func(string) { reads++ }}
+			raw, typed := 0, 0
+			op := &baselineOriginalOperation{objectRead: func(kind string) {
+				if kind == "compressed" {
+					raw++
+				} else {
+					typed++
+				}
+			}}
 			op.beforeBarrier = func() {
 				switch kind {
 				case "root":
@@ -119,8 +148,13 @@ func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 			}
 			fds := snapshotFDCount(t)
 			s, e := acquireCatalogOriginalImport(context.Background(), root, op)
-			if s != nil || e == nil || reads != 0 {
-				t.Fatal("pre-read refusal", s, e, reads)
+			refused := e != nil && strings.Contains(e.Error(), want[kind])
+			if kind == "root" {
+				// The lost root path itself refuses at the barrier.
+				refused = errors.Is(e, os.ErrNotExist)
+			}
+			if s != nil || !refused || raw != 0 || typed != 0 {
+				t.Fatal("pre-read refusal", s, e, raw, typed)
 			}
 			if snapshotFDCount(t) != fds {
 				t.Fatal("metadata refusal leaked descriptors")
@@ -276,6 +310,14 @@ func TestCatalogBaselineInitialGitCancellation(t *testing.T) {
 	}
 }
 func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
+	// The input root is held as a stable, closed directory, so creating a
+	// nested owner inside it is refused by the earlier catalog custody
+	// verification, before the overlap predicate runs. Only the repository
+	// root, held non-stable, reaches the overlap predicate with genuine owners.
+	nested := map[string]string{
+		"repository": "baseline resource alias/containment",
+		"inputs":     "catalog directory custody changed",
+	}
 	for _, rootKind := range []string{"repository", "inputs"} {
 		for _, kind := range []string{"original", "generated", "history"} {
 			t.Run(rootKind+"/"+kind, func(t *testing.T) {
@@ -333,8 +375,17 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 				}
 				a, e := f.audit(context.Background())
 				baselineTestZero(t, a, e)
+				if !strings.Contains(e.Error(), nested[rootKind]) {
+					t.Fatal("nested refusal cause", e)
+				}
 			})
 		}
+	}
+	metadata := map[string]string{
+		"missing":    "baseline resource metadata changed",
+		"incomplete": "baseline resource metadata changed",
+		"stale":      "baseline resource metadata changed",
+		"closed":     "baseline owner closed or uninitialized",
 	}
 	for _, kind := range []string{"missing", "incomplete", "stale", "closed"} {
 		t.Run(kind, func(t *testing.T) {
@@ -354,6 +405,9 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 			}
 			a, e := f.audit(context.Background())
 			baselineTestZero(t, a, e)
+			if !strings.Contains(e.Error(), metadata[kind]) {
+				t.Fatal("metadata refusal cause", e)
+			}
 			if e := f.catalog.Verify(); e != nil {
 				t.Fatal("legacy catalog verification", e)
 			}

@@ -747,7 +747,7 @@ func acquireCatalogOriginalImport(parent context.Context, root string, op *basel
 	if op.beforeBarrier != nil {
 		op.beforeBarrier()
 	}
-	// Aggregate metadata/config/name barrier before ANY compressed/typed data.
+	// Aggregate metadata/config/ref/name barrier before ANY compressed/typed data.
 	if e := baselineVerifyCustody(ctx, c); e != nil {
 		return nil, e
 	}
@@ -864,12 +864,26 @@ func (op *baselineOriginalOperation) configuration(ctx context.Context, root str
 	if e != nil || len(refs) != 0 {
 		return errors.New("baseline replacements")
 	}
+	// Selected HEAD identity is ref metadata: it is refused here, before the
+	// aggregate barrier and any compressed or typed object read, and again
+	// before typed traversal in objects.
+	if e := op.selectedHead(ctx, root); e != nil {
+		return e
+	}
 	return ctx.Err()
 }
-func (op *baselineOriginalOperation) objects(ctx context.Context, root string, data map[string][]byte) error {
+
+// selectedHead resolves HEAD to an object ID without reading object data.
+func (op *baselineOriginalOperation) selectedHead(ctx context.Context, root string) error {
 	head, e := op.git(ctx, root, "rev-parse", "--verify", "HEAD")
 	if e != nil || string(head) != sharedUpstreamCommit+"\n" {
 		return catalogContextErr(ctx, errors.New("baseline selected HEAD"))
+	}
+	return nil
+}
+func (op *baselineOriginalOperation) objects(ctx context.Context, root string, data map[string][]byte) error {
+	if e := op.selectedHead(ctx, root); e != nil {
+		return e
 	}
 	raw, e := op.git(ctx, root, "cat-file", "commit", sharedUpstreamCommit)
 	if e != nil || snapshotObjectID("commit", raw) != sharedUpstreamCommit || !bytes.HasPrefix(raw, []byte("tree "+sharedUpstreamTree+"\n")) {
