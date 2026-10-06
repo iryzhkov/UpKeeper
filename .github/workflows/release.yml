@@ -12,6 +12,9 @@ on:
 
 permissions:
   contents: write
+  actions: read
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -21,26 +24,31 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+      # Tag pushes and CI start concurrently. Wait for the exact commit's push
+      # gate; a failed, missing or timed-out gate never reaches publication.
+      - name: Require successful CI for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-release-ci.py
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           # Pinned rather than floating: the release notes record the exact
           # toolchain, and -trimpath only makes a build reproducible for
           # somebody who uses the same compiler.
-          go-version: "1.24"
+          go-version-file: go.mod
           check-latest: false
-      - name: Prepare pinned semantic policy test inputs
-        run: bash scripts/prepare-policy-test-inputs.sh
-      - name: Gate
-        run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-          go test ./...
       - name: Build both fleet architectures
         run: make go-cross
+      - name: Attest both release binaries
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: |
+            bin/upkeeper-linux-amd64
+            bin/upkeeper-linux-arm64
       - name: Record the toolchain and the checksums
         run: |
-          go version | tee bin/TOOLCHAIN
+          GOTOOLCHAIN=$(awk '/^toolchain / {print $2}' go.mod) go version | tee bin/TOOLCHAIN
           ./bin/upkeeper-linux-amd64 version
           cd bin
           sha256sum upkeeper-linux-amd64 upkeeper-linux-arm64 | tee SHA256SUMS
@@ -51,7 +59,7 @@ jobs:
             echo "with $(cat bin/TOOLCHAIN)."
             echo
             echo "Install the artifact for the host's architecture at"
-            echo "~/.local/bin/upkeeper and check it against SHA256SUMS."
+            echo "\$HOME/.local/bin/upkeeper and check it against SHA256SUMS."
             echo "\`upkeeper version\` prints the source commit it was built from."
             echo
             echo '```'

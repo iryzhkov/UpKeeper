@@ -6,29 +6,24 @@ on:
   pull_request:
 
 jobs:
-  # Reject an invalid or noncanonical release before any expensive Go checks.
+  # Validate the published manifest before dependent production Go checks.
   manifest-gate:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # V1 compatibility fixtures archive the immutable pre-v2 source commit.
+          # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.24"
-          check-latest: true
-      - name: Prepare pinned semantic policy test inputs
-        run: bash scripts/prepare-policy-test-inputs.sh
+          go-version-file: go.mod
+          check-latest: false
       - name: Published manifest is valid and canonical
-        run: go test -count=1 -run '^TestCurrentPublishedManifestValidatesAndIsCanonical$' ./internal/release
+        run: make ci-manifest
 
-  # The race detector covers every package and every runnable test, divided into
-  # three exhaustive groups that the script derives and checks on each run, so
-  # that each group is its own race binary under the default ten-minute alarm.
-  # Every group must pass; fail-fast is off so one failure does not hide another.
+  # Exhaustive shards bound race-test runtime; failures must not cancel peers.
   go-race:
     needs: manifest-gate
     name: go-race (${{ matrix.group }})
@@ -41,19 +36,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # V1 compatibility fixtures archive the immutable pre-v2 source commit.
+          # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.24"
-          check-latest: true
-      - name: Prepare pinned semantic policy test inputs
-        run: bash scripts/prepare-policy-test-inputs.sh
+          go-version-file: go.mod
+          check-latest: false
       - name: Race detector
-        run: python3 scripts/go-race-shards.py --group "${{ matrix.group }}"
+        run: make ci-race GROUP="${{ matrix.group }}"
 
-  # Full production checks run alongside all race groups after the manifest gate.
   go-checks:
     needs: manifest-gate
     runs-on: ubuntu-latest
@@ -61,49 +53,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          # V1 compatibility fixtures archive the immutable pre-v2 source commit.
+          # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.24"
-          check-latest: true
-      - name: Prepare pinned semantic policy test inputs
-        run: bash scripts/prepare-policy-test-inputs.sh
-      - name: Format
-        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Unit tests
-        run: go test ./...
-      - name: Cross-build both fleet architectures
-        run: |
-          make go-cross
-          sha256sum bin/upkeeper-linux-amd64 bin/upkeeper-linux-arm64
-      - name: The production binary needs no interpreter
-        run: |
-          go build -o /tmp/upkeeper ./cmd/upkeeper
-          /tmp/upkeeper version
+          go-version-file: go.mod
+          check-latest: false
+      - name: Production Go checks
+        run: make ci-go-checks
 
-  # Keep the required go-gate check: success requires every Go dependency.
-  # always() permits an explicit failure when a dependency failed or was skipped.
+  # Always run the required check, and fail on failed or skipped dependencies.
   go-gate:
     needs: [manifest-gate, go-checks, go-race]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Every required Go check passed
         env:
           MANIFEST_RESULT: ${{ needs.manifest-gate.result }}
           CHECKS_RESULT: ${{ needs.go-checks.result }}
           RACE_RESULT: ${{ needs.go-race.result }}
-        run: |
-          echo "manifest-gate result: $MANIFEST_RESULT"
-          echo "go-checks result: $CHECKS_RESULT"
-          echo "go-race result: $RACE_RESULT"
-          test "$MANIFEST_RESULT" = success
-          test "$CHECKS_RESULT" = success
-          test "$RACE_RESULT" = success
+        run: make ci-go-gate
 
   gate:
     runs-on: ubuntu-latest
@@ -114,27 +87,5 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.11"
-      - name: Install locked environment
-        run: |
-          python -m pip install uv==0.12.12
-          uv sync --locked --all-extras
-      - name: Install pinned Ansible collections
-        run: uv run ansible-galaxy collection install -r requirements.yml
-      - name: Python lint
-        run: uv run ruff check src tests scripts
-      - name: YAML lint
-        run: uv run yamllint requirements.yml inventory desired playbooks tests/fixtures .forgejo .github
-      - name: Ansible lint
-        run: uv run python scripts/run-captured ansible-lint --offline playbooks
-      - name: Unit tests
-        run: uv run pytest
-      - name: Redaction gate
-        run: uv run pytest tests/test_redaction.py
-      - name: Ansible syntax
-        run: |
-          uv run ansible-playbook playbooks/status.yml --syntax-check >ansible-syntax.log 2>&1
-          sed -n '1,200p' ansible-syntax.log
-      - name: Read-only check mode
-        run: |
-          uv run ansible-playbook -i tests/fixtures/localhost_inventory.yml playbooks/status.yml --check >ansible-check.log 2>&1
-          sed -n '1,200p' ansible-check.log
+      - name: Python and Ansible checks
+        run: make ci-python
