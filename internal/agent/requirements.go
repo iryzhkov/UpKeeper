@@ -156,16 +156,7 @@ func componentStages(c *Context, name string, spec map[string]any) bool {
 		_, err = os.Stat(filepath.Join(base, "releases", toolingIdentity(spec), ".complete"))
 		return err != nil
 	case "huyang":
-		commit := adapterSpecString(spec, "commit")
-		if commit == "" || c.GitHead(c.Path(adapterSpecString(spec, "path"))) != commit {
-			return true
-		}
-		// A checkout already on the pin is still built again when an
-		// interrupted bootstrap is finished, and when its service is not running.
-		if pathExists(c.Path(huyangBootstrapPending)) {
-			return true
-		}
-		return !c.UnitActive(adapterSpecString(spec, "service")) || !pathExists(huyangSocket(c))
+		return huyangWouldBuild(c, spec)
 	}
 	return true
 }

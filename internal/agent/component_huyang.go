@@ -465,6 +465,38 @@ func huyangReconcileUnit(
 	return pending, true, nil
 }
 
+// huyangWouldBuild reports whether huyangApplyCheckout would build, by asking
+// what it asks in the same order; an answer that cannot be had is yes. A
+// checkout already on the pin is built again to finish an interrupted
+// bootstrap, and when its service is not running or does not answer the probe.
+// Only the last needs the probe, and it is asked only when everything else
+// says the installation is converged.
+func huyangWouldBuild(c *Context, spec map[string]any) bool {
+	wanted := adapterSpecString(spec, "commit")
+	checkout := c.Path(adapterSpecString(spec, "path"))
+	head := c.GitHead(checkout)
+	if wanted == "" || head == "" {
+		return true
+	}
+	// Local changes are refused, and so is an interrupted bootstrap whose
+	// checkout has left the pin; neither builds.
+	if dirty := c.GitDirty(checkout); dirty != nil && *dirty {
+		return false
+	}
+	if pathExists(c.Path(huyangBootstrapPending)) {
+		return head == wanted
+	}
+	if head != wanted {
+		// A checkout ahead of the pin is kept. Whether one that is not
+		// diverges is only known after a fetch, so it counts as a build.
+		return c.Payload.AllowDowngrade || !c.GitContains(checkout, wanted, head)
+	}
+	if !c.UnitActive(adapterSpecString(spec, "service")) || !pathExists(huyangSocket(c)) {
+		return true
+	}
+	return !huyangProbeFunc(c, checkout, huyangProbeTools(spec)).OK
+}
+
 // huyangApplyCheckout moves the checkout to the pinned commit, or seeds Huyang
 // on a host that has none.
 func huyangApplyCheckout(

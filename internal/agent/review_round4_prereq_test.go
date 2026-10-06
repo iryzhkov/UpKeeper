@@ -140,3 +140,84 @@ func TestRound4ReviewAHealthyInstallationNeedsNoBuildTools(t *testing.T) {
 		t.Fatalf("huyang = %v, calls %v", entry, runner.calls)
 	}
 }
+
+// The self-review of this round found the rest of the cases in which the
+// preflight and huyangApplyCheckout disagreed about whether Huyang builds.
+
+// huyangRunningWorld is huyangPrereqWorld with the service running, its socket
+// present and no interrupted bootstrap, and the probe answering ok.
+func huyangRunningWorld(t *testing.T, ok bool, tools ...string) (*Context, *adapterTestRunner) {
+	t.Helper()
+	c, runner, _ := huyangPrereqWorld(t, tools...)
+	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil {
+		t.Fatal(err)
+	}
+	adapterTestWrite(t, huyangSocket(c), "")
+	huyangTestPatch(t, huyangTestProbe(ok, 19))
+	inner := runner.handle
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "is-active") {
+			return procx.Result{Stdout: "active"}
+		}
+		return inner(command)
+	}
+	return c, runner
+}
+
+// A running service on the pin that does not answer the probe is rebuilt, so
+// a host without make is blocked with the remedy rather than failing the
+// build and its rollback and skipping everything after Huyang.
+func TestRound4SelfReviewAServiceFailingTheProbeNeedsTheBuildTools(t *testing.T) {
+	for _, dry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry run %v", dry), func(t *testing.T) {
+			c, runner := huyangRunningWorld(t, false, "git", "go")
+			c.DryRun = dry
+			c.Payload.DryRun = dry
+			result := Execute(c)
+			entry := resultEntry(t, result, "huyang")
+			next := resultEntry(t, result, "independent-next")
+			message, _ := entry["error"].(string)
+			if entry["state"] != "blocked" || !strings.Contains(message, "sudo apt-get install -y make") ||
+				next["state"] != "updated" || runner.ran("make", "build") {
+				t.Fatalf("huyang = %v, next = %v, calls %v", entry, next, runner.calls)
+			}
+		})
+	}
+}
+
+// A checkout ahead of the pin is kept and never built, so it needs neither Go
+// nor make.
+func TestRound4SelfReviewACheckoutAheadOfThePinNeedsNoBuildTools(t *testing.T) {
+	c, runner := huyangRunningWorld(t, true, "git")
+	inner := runner.handle
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "rev-parse", "HEAD") {
+			return procx.Result{Stdout: huyangLocal}
+		}
+		return inner(command)
+	}
+	if entry := resultEntry(t, Execute(c), "huyang"); entry["state"] != "ahead" {
+		t.Fatalf("huyang = %v", entry)
+	}
+}
+
+// An interrupted bootstrap whose checkout has local changes is refused, not
+// built: the operator is told about the changes and the marker, and an
+// opted-in host installs nothing first.
+func TestRound4SelfReviewARefusedRecoveryInstallsNothing(t *testing.T) {
+	c, runner, _ := huyangPrereqWorld(t, "git", "go")
+	c.Host.InstallOSPackages = true
+	inner := runner.handle
+	runner.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "status", "--porcelain") {
+			return procx.Result{Stdout: " M main.go\n"}
+		}
+		return inner(command)
+	}
+	entry := resultEntry(t, Execute(c), "huyang")
+	message, _ := entry["error"].(string)
+	if !strings.Contains(message, "has local changes") || !strings.Contains(message, huyangBootstrapPending) ||
+		runner.ran("sudo") || runner.ran("make", "build") {
+		t.Fatalf("huyang = %v, calls %v", entry, runner.calls)
+	}
+}
