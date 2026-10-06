@@ -92,6 +92,17 @@ func TestCurrentPublishedManifestValidatesAndIsCanonical(t *testing.T) {
 	if want := fmt.Sprintf("%x", sha256.Sum256(raw)); digest != want {
 		t.Fatalf("published release identity %s does not match file identity %s", digest, want)
 	}
+	// A published pin must be well formed. Whether its program is this
+	// commit's is deliberately not checked here: while release data lives in
+	// the code repository the check is circular, because a commit that changes
+	// the program can only be pinned by a later release commit, after its
+	// binary is built. That invariant belongs to the configuration
+	// repository's CI (M2b). Until then a host refuses a stale pin as a whole
+	// before fetching anything; see TestAStalePinIsRefusedWithoutAPartialUpdate
+	// in internal/cli.
+	if _, err := value.ProgramPin(); err != nil {
+		t.Fatalf("program pin: %v", err)
+	}
 }
 
 func TestValidateRefusals(t *testing.T) {

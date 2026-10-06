@@ -50,6 +50,7 @@ var commandSummaries = [][2]string{
 	{"install-self-timer", "install the self-convergence systemd user timer"},
 	{"install-pull-timer", "install the controller systemd user timer"},
 	{"hold", "show or clear the scheduled hold markers this host keeps"},
+	{"self", "install, roll back or inspect this host's own UpKeeper binary generations"},
 	{"version", "print the exact source commit this binary was built from"},
 }
 
@@ -84,6 +85,8 @@ func helpText(program, command string) string {
 		return scheduledHelp(program, command)
 	case "hold":
 		return holdHelp(program)
+	case "self":
+		return selfHelp(program)
 	default:
 		return plainHelp(program, command)
 	}
@@ -106,6 +109,26 @@ func holdHelp(program string) string {
 		describe("  --reason TEXT", "why the hold is safe to clear (clear only; required)") +
 		describe("  --json", "") +
 		"\nexit codes: 0 done, 2 malformed command line or no marker for HOST, 30 refused\n"
+}
+
+// selfHelp documents the generation commands. A self-pull updates the binary
+// on its own when the gated release pins another program; these are for the
+// first bootstrap and for an operator who has to undo or inspect one.
+func selfHelp(program string) string {
+	return "usage: " + program + " self install [-h] --expect-sha256 SHA256 [--json]\n" +
+		"       " + program + " self rollback [-h] [--json]\n" +
+		"       " + program + " self status [-h] [--json]\n\n" +
+		"Binaries live as generations under ~/.local/lib/upkeeper/generations, and\n" +
+		"~/.local/bin/upkeeper links to the current one. A self-pull installs the\n" +
+		"binary the gated release pins, verified by size and sha256, when the\n" +
+		"program differs from the one running.\n\n" +
+		"install installs the binary running this command, after checking that its\n" +
+		"sha256 is the one given and that it names a clean source commit. rollback\n" +
+		"makes the previous generation current again. status changes nothing.\n\n" +
+		"options:\n" + helpOption + "\n" +
+		describe("  --expect-sha256 SHA256", "the digest this binary must have (install only; required)") +
+		describe("  --json", "") +
+		"\nexit codes: 0 done, 2 malformed command line, 30 refused, 60 another change holds the lock\n"
 }
 
 func topHelp(program string) string {

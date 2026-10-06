@@ -12,6 +12,7 @@ package converge
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -60,6 +61,13 @@ type Options struct {
 	// ReconcileT3 names the retained controlled T3 transaction an explicit
 	// pull --reconcile-t3-transaction asks the agent to reconcile.
 	ReconcileT3 string
+	// SelfUpdate, when set, is what a self-update did before this run, and is
+	// carried into the report and the run record so that the receipt of the
+	// convergence also says which program applied it.
+	SelfUpdate map[string]any
+	// ExpectedProgramCommit, when set, is sent to every agent, which refuses
+	// the payload unless it runs a binary built from exactly that commit.
+	ExpectedProgramCommit string
 }
 
 // Controller names the inventory host this process is running on, or
@@ -205,9 +213,10 @@ func Fleet(
 			Host: agent.HostRef{
 				Name: name, OSID: spec.OSID, SetupCheckout: spec.SetupCheckout,
 			},
-			Components:  selected,
-			Manifest:    value.Manifest,
-			StoredFiles: stored,
+			Components:            selected,
+			Manifest:              value.Manifest,
+			StoredFiles:           stored,
+			ExpectedProgramCommit: options.ExpectedProgramCommit,
 			Lock: map[string]any{
 				"schema_version":          exitcode.SchemaVersion,
 				"run_id":                  runID,
@@ -250,6 +259,9 @@ func Fleet(
 		"exit_code":               exitCode,
 		"hosts":                   results,
 	}
+	if options.SelfUpdate != nil {
+		report["self_update"] = options.SelfUpdate
+	}
 	if !options.DryRun {
 		final := *record
 		final.Phase = "finished"
@@ -258,11 +270,32 @@ func Fleet(
 			final.Result = "exit-" + itoa(exitCode)
 		}
 		final.Details = map[string]any{"hosts": results}
+		if options.SelfUpdate != nil {
+			final.Details["self_update"] = options.SelfUpdate
+		}
 		if _, err := recordStore.Write(&final); err != nil {
 			return nil, 0, err
 		}
 	}
 	return report, exitCode, nil
+}
+
+// ProgramFence is the program commit a convergence requires of every remote
+// agent: the source commit of the binary the release pins, or nothing for a
+// release that pins none.
+//
+// A rollback sends none. It restores older release intent with whatever
+// program the hosts run now, and requiring the older binary would make a
+// rollback impossible exactly when it is needed.
+func ProgramFence(value release.Release, command string) string {
+	if command == "rollback" {
+		return ""
+	}
+	pin, err := value.ProgramPin()
+	if err != nil || pin == nil {
+		return ""
+	}
+	return pin.SourceCommit
 }
 
 // dispatchWithLock guarantees the lock is released exactly once, including when
@@ -384,6 +417,11 @@ func RunHost(
 		}
 	}
 	if isLocal {
+		// The program fence is for the SSH path, where the target runs its own
+		// binary. In process, the agent is this binary: whoever started it
+		// chose the program, and self-pull has already compared it with the
+		// gated checkout program by program rather than by commit.
+		payload.ExpectedProgramCommit = ""
 		return runLocal(spec, payload, process)
 	}
 	encoded, err := json.Marshal(payload)
@@ -393,7 +431,28 @@ func RunHost(
 			"error": "invalid-agent-payload",
 		}
 	}
-	outcome := transport.Invoke(spec, AgentSubcommand, string(encoded), timeout, process)
+	// A fenced payload is not enough on its own: an agent from before the
+	// fence ignores the field and does the work. The fence is therefore also
+	// an option of the invocation, which such an agent rejects as a usage
+	// error before it reads the payload.
+	command := []string{AgentSubcommand}
+	if payload.ExpectedProgramCommit != "" {
+		command = append(command, AgentProgramFlag, payload.ExpectedProgramCommit)
+	}
+	outcome := transport.InvokeCommand(spec, command, string(encoded), timeout, process)
+	if payload.ExpectedProgramCommit != "" && outcome.Err == nil && outcome.Code == 2 &&
+		strings.Contains(outcome.Stderr, AgentProgramFlag) {
+		return map[string]any{
+			"host": spec.Name, "reachable": true, "transport": "ssh", "result": "failed",
+			"program": map[string]any{"expected_commit": payload.ExpectedProgramCommit},
+			"error": fmt.Sprintf(
+				"this host's upkeeper predates the program fence and refused the fenced "+
+					"invocation before doing any work; the release requires upkeeper built from %s: "+
+					"install that binary on the host before converging it", payload.ExpectedProgramCommit),
+			"returncode": outcome.Code,
+			"stderr":     transport.Tail(outcome.Stderr, 2000),
+		}
+	}
 	if outcome.Err != nil {
 		return map[string]any{
 			"host": spec.Name, "reachable": false, "result": "failed",
@@ -413,6 +472,9 @@ func RunHost(
 
 // AgentSubcommand is the hidden subcommand a target's binary is invoked with.
 const AgentSubcommand = "__agent"
+
+// AgentProgramFlag carries the program fence on the agent's command line.
+const AgentProgramFlag = "--expect-program"
 
 func runLocal(
 	spec inventory.HostSpec, payload agent.Payload, process procx.Runner,

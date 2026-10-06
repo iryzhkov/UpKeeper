@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iryzhkov/UpKeeper/internal/buildinfo"
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
@@ -51,7 +52,15 @@ type Payload struct {
 	// at files-restored for the explicit, guarded reconciliation pull
 	// --reconcile-t3-transaction asks for. Empty in every other run.
 	ReconcileT3Transaction string `json:"reconcile_t3_transaction,omitempty"`
+	// ExpectedProgramCommit is the source commit the controller requires this
+	// binary to be built from, or "" for no requirement. It is omitted when
+	// empty so that a payload without it is byte for byte what it always was.
+	ExpectedProgramCommit string `json:"expected_program_commit,omitempty"`
 }
+
+// programCommit is the source commit of the running binary; a variable so that
+// a test can play a binary built from another commit.
+var programCommit = buildinfo.SourceCommit
 
 // StepFailed is a component step that did not complete. The host stops here.
 type StepFailed struct{ Message string }
@@ -366,6 +375,22 @@ func Execute(context *Context) map[string]any {
 		"dry_run":    context.DryRun,
 		"components": []any{},
 	}
+	// The program fence: a controller that names the program a release was
+	// gated with is never served by another one. An old binary applying a new
+	// manifest is exactly the mismatch the self-pull path refuses, and on this
+	// path nothing else would notice it. It is checked before the lock, so a
+	// refused payload has touched nothing.
+	if expected := context.Payload.ExpectedProgramCommit; expected != "" {
+		if running := programCommit(); running != expected {
+			result["result"] = "failed"
+			result["program"] = map[string]any{"expected_commit": expected, "running_commit": running}
+			result["error"] = fmt.Sprintf(
+				"this host runs upkeeper built from %s and the release requires %s; "+
+					"update it with `upkeeper self-pull` on the host, or install that "+
+					"release's binary, before converging it", running, expected)
+			return result
+		}
+	}
 	owner, err := context.acquireLock()
 	if err != nil {
 		result["result"] = "failed"
@@ -479,6 +504,14 @@ func observeQuietly(
 
 // Run reads one payload from input, converges, and writes one result line.
 func Run(input io.Reader, output io.Writer, runner procx.Runner) error {
+	return RunFenced(input, output, runner, "")
+}
+
+// RunFenced is Run for an agent invoked with the program fence on its command
+// line. The fence is the same requirement as the payload's
+// expected_program_commit; a payload that names another program contradicts
+// its own invocation and is refused, before the lock like any other fence.
+func RunFenced(input io.Reader, output io.Writer, runner procx.Runner, program string) error {
 	data, err := io.ReadAll(io.LimitReader(input, 64<<20))
 	if err != nil {
 		return err
@@ -486,6 +519,13 @@ func Run(input io.Reader, output io.Writer, runner procx.Runner) error {
 	payload, err := DecodePayload(data)
 	if err != nil {
 		return err
+	}
+	if program != "" {
+		if payload.ExpectedProgramCommit != "" && payload.ExpectedProgramCommit != program {
+			return fmt.Errorf("the payload requires program %s and the invocation requires %s",
+				payload.ExpectedProgramCommit, program)
+		}
+		payload.ExpectedProgramCommit = program
 	}
 	context, err := NewContext(payload, runner)
 	if err != nil {

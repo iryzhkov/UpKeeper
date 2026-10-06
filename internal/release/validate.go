@@ -94,6 +94,9 @@ func validateComponent(name string, component, components map[string]any) error 
 		return err
 	}
 	switch name {
+	case ProgramComponent:
+		_, err := DecodeProgramPin(component)
+		return err
 	case JocastaComponent:
 		_, err := DecodeJocasta(component)
 		return err
@@ -354,6 +357,10 @@ func validateFiles(name string, component, components map[string]any) error {
 func validationOrder(components map[string]any) []string {
 	ordered := make([]string, 0, len(components))
 	seen := map[string]bool{}
+	if _, present := components[ProgramComponent]; present {
+		ordered = append(ordered, ProgramComponent)
+		seen[ProgramComponent] = true
+	}
 	for _, name := range ComponentOrder {
 		if _, present := components[name]; present {
 			ordered = append(ordered, name)
@@ -379,10 +386,11 @@ func isKnownComponentSet(components map[string]any) bool {
 	if sameNameSet(components, LegacyComponentOrder) {
 		return true
 	}
-	known := make(map[string]bool, len(ComponentOrder))
+	known := make(map[string]bool, len(ComponentOrder)+1)
 	for _, name := range ComponentOrder {
 		known[name] = true
 	}
+	known[ProgramComponent] = true
 	for name := range components {
 		if !known[name] {
 			return false

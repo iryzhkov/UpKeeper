@@ -73,6 +73,13 @@ push or a controller skip is not proof of convergence. After an uncertain or fai
 dispatch, observe the host before clearing its local scheduled hold.
 A dry run through scripts/upkeeper-self-pull --dry-run never fetches or advances HEAD.
 
+When the gated release pins an UpKeeper binary whose program differs from the
+one a host runs, that host's self-pull installs the pinned binary, verified by
+size and sha256 against the manifest, and re-executes it before converging.
+No hand-installed binary is needed after the first self-update-capable one.
+See "Self-update from the release pin" in docs/go-binary.md for the refusals,
+the generations under ~/.local/lib/upkeeper and `upkeeper self rollback`.
+
 ## Rollout evidence
 
 Implementation 8548a9b145170fb4879999cbeec4d39ad801a88f passed GitHub CI

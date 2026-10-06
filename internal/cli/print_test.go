@@ -58,6 +58,37 @@ func TestStatusText(t *testing.T) {
 
 // A drifting component's reason is printed under its host so an operator does
 // not have to open the JSON to learn why the scheduled pull has not converged it.
+// A host that reports its binary gets one line naming it; one that does not
+// prints exactly what it always did.
+func TestStatusTextNamesTheBinaryAHostReports(t *testing.T) {
+	var out bytes.Buffer
+	printStatus(&out, map[string]any{
+		"run_id": "20260914T090000Z-0a1b2c3d", "controller": "normandy",
+		"result": "converged", "exit_code": 0,
+		"hosts": []any{
+			map[string]any{"name": "homelab", "reachable": true, "result": "converged", "components": []any{},
+				"upkeeper": map[string]any{"binary": map[string]any{
+					"version": "v0.1.31", "commit": strings.Repeat("b", 40), "generation": strings.Repeat("1", 64)}}},
+			map[string]any{"name": "laptop", "reachable": true, "result": "converged", "components": []any{},
+				"upkeeper": map[string]any{"binary": map[string]any{
+					"version": "v0.1.30", "commit": strings.Repeat("a", 40), "generation": nil}}},
+			map[string]any{"name": "normandy", "reachable": true, "result": "converged", "components": []any{}},
+		},
+	})
+	expected := strings.Join([]string{
+		"run 20260914T090000Z-0a1b2c3d controller=normandy status=converged exit=0",
+		"homelab: converged []",
+		"  upkeeper v0.1.31 commit bbbbbbbbbbbb generation 111111111111",
+		"laptop: converged []",
+		"  upkeeper v0.1.30 commit aaaaaaaaaaaa generation unmanaged",
+		"normandy: converged []",
+		"",
+	}, "\n")
+	if out.String() != expected {
+		t.Errorf("got\n%s\nwant\n%s", out.String(), expected)
+	}
+}
+
 func TestStatusTextShowsDriftReasons(t *testing.T) {
 	var out bytes.Buffer
 	printStatus(&out, map[string]any{

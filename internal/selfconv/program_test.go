@@ -1,6 +1,8 @@
 package selfconv_test
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,6 +69,35 @@ func TestAChangedProgramIsRefusedAndNamesTheRemedy(t *testing.T) {
 	if !strings.Contains(err.Error(), checkout) {
 		t.Errorf("the refusal does not name the commit to install: %v", err)
 	}
+	if !errors.Is(err, selfconv.ErrProgramDiffers) {
+		t.Errorf("a changed program is not marked as one a self-update resolves: %v", err)
+	}
+}
+
+// A dependency-only change rebuilds a different binary, so go.sum is part of
+// the program.
+func TestTheProgramIncludesTheDependencySums(t *testing.T) {
+	for _, path := range []string{"go.mod", "go.sum", "cmd", "internal"} {
+		if !slices.Contains(selfconv.ProgramPaths, path) {
+			t.Errorf("ProgramPaths omits %s: %v", path, selfconv.ProgramPaths)
+		}
+	}
+}
+
+// A comparison git could not perform proves nothing, and in particular does
+// not prove that the program changed: only a changed program may trigger a
+// self-update.
+func TestAFailedComparisonIsNotAChangedProgram(t *testing.T) {
+	runner := func(command procx.Command) procx.Result {
+		if slices.Contains(command.Argv, "diff") {
+			return procx.Result{Code: 128}
+		}
+		return procx.Result{Code: 0}
+	}
+	err := selfconv.VerifyProgram("/checkout", strings.Repeat("a", 40), strings.Repeat("b", 40), runner)
+	if err == nil || errors.Is(err, selfconv.ErrProgramDiffers) {
+		t.Fatalf("a failed comparison produced %v", err)
+	}
 }
 
 // A commit the checkout has never heard of cannot be compared, so it cannot be
@@ -80,9 +111,12 @@ func TestAnUnknownBinaryCommitIsRefused(t *testing.T) {
 		}
 		return procx.Result{Code: 0}
 	}
-	if err := selfconv.VerifyProgram("/checkout", strings.Repeat("a", 40),
-		strings.Repeat("b", 40), runner); err == nil {
+	err := selfconv.VerifyProgram("/checkout", strings.Repeat("a", 40), strings.Repeat("b", 40), runner)
+	if err == nil {
 		t.Fatal("a commit absent from the checkout was accepted")
+	}
+	if errors.Is(err, selfconv.ErrProgramDiffers) {
+		t.Error("a binary the checkout cannot compare is marked as a changed program")
 	}
 }
 
@@ -93,8 +127,8 @@ func TestAnUnidentifiedBinaryIsRefused(t *testing.T) {
 			strings.Repeat("b", 40), func(procx.Command) procx.Result {
 				t.Error("ran git for a binary that names no commit")
 				return procx.Result{}
-			}); err == nil {
-			t.Errorf("%q was accepted as a source commit", value)
+			}); err == nil || errors.Is(err, selfconv.ErrProgramDiffers) {
+			t.Errorf("%q was accepted as a source commit, or as one to self-update: %v", value, err)
 		}
 	}
 }

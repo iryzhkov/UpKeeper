@@ -156,7 +156,7 @@ func TestUsageErrors(t *testing.T) {
 			[]string{"converge"},
 			`argument command: invalid choice: "converge" (choose from "doctor", ` +
 				`"status", "push", "pull", "rollback", "fleet-plan", "project", "provider", "author", "self-pull", ` +
-				`"scheduled-pull", "install-self-timer", "install-pull-timer", "hold", "version", "environment")`,
+				`"scheduled-pull", "install-self-timer", "install-pull-timer", "hold", "self", "version", "environment")`,
 		},
 		{
 			"author without its pins",

@@ -186,6 +186,131 @@ program differs, naming the commit whose artifact the host needs. A binary
 older than the checkout is normal and allowed, because main advances on every
 release capture without the Go program changing.
 
+## Self-update from the release pin
+
+A release may pin UpKeeper's own binary in an optional `upkeeper` component:
+
+```json
+"upkeeper": {
+  "kind": "upkeeper-binary",
+  "repository": "iryzhkov/UpKeeper",
+  "tag": "v0.1.31",
+  "source_commit": "<40 hex>",
+  "toolchain": "go1.24.13",
+  "assets": {
+    "linux-amd64": {"asset": "upkeeper-linux-amd64", "sha256": "<64 hex>", "size": 9437184},
+    "linux-arm64": {"asset": "upkeeper-linux-arm64", "sha256": "<64 hex>", "size": 9043968}
+  }
+}
+```
+
+Releases without it load, converge and roll back as before. The component is
+not in the convergence order and `--components` cannot select it: the agent
+never converges it.
+
+Code-repository CI does not require the pin's `source_commit` to hold the
+program of the commit under test. While release data lives in the code
+repository that check is circular: a commit that changes the program can only
+be pinned by a later release commit, after its binary is tagged and built, so
+the commit itself would always fail. The plan's CI invariant (plan section 4,
+"New CI invariant") therefore moves to the configuration repository's CI in
+milestone M2b, where a configuration commit may only pin a released UpKeeper
+whose program it declares compatible; `release.CheckProgramPin` implements the
+comparison for it. Until M2b, a pin can be stale: it names a binary whose
+program (`git diff --quiet <source_commit> <checkout> -- go.mod go.sum cmd
+internal`) is not the gated checkout's. A host refuses a stale pin whole, as
+it refused a changed program before self-update: exit 30, a message that says
+the pin is stale and the host keeps its binary, and nothing downloaded,
+adopted or switched, with any hold left as it was. The next release that pins
+a binary built from the current program lets hosts update themselves.
+
+When `self-pull`'s program check finds an identified, clean binary whose
+program differs from the refreshed checkout, and the release at that checkout
+pins a binary, the host updates itself instead of exiting 30. It also updates
+when the program is the same but the binary was built from another commit than
+the pin, because the SSH program fence below compares commits; a failure of
+that update is reported on stderr and convergence continues. No self-update
+runs while the host has a scheduled hold marker.
+
+1. The pin's own program is compared with the checkout again.
+2. The asset for this architecture is downloaded from
+   `https://github.com/iryzhkov/UpKeeper/releases/download/<tag>/`, and its
+   size and sha256 must equal the pin. The `SHA256SUMS` file next to it is
+   not consulted.
+3. The staged file runs `version` with an empty `PATH` and a disposable `HOME`,
+   and must print exactly `upkeeper <tag> (commit <source_commit>)`.
+4. It is installed read-only as
+   `~/.local/lib/upkeeper/generations/<sha256>/upkeeper`, `current` is switched
+   to it by rename and fsync, and `~/.local/bin/upkeeper` becomes a link to
+   `../lib/upkeeper/current/upkeeper`. The binary, its `identity.json` and
+   the staged generation directory are each flushed before the directory is
+   renamed into `generations/`, and that directory is flushed before
+   `current` can name it; a failure of any flush stops the install with
+   `current` unchanged. Only after the flush of `generations/` succeeds is
+   the generation recorded as durable, by a flushed `.durable` marker inside
+   it. A generation that exists without the marker, such as one an earlier
+   attempt named before that flush failed, is never trusted for its valid
+   digest: an apply, `self install`, adoption, rollback or recovery that
+   would reuse or switch to it makes every flush again and refuses, with
+   `current` unchanged, for as long as one fails. The first time, whatever that path held
+   is adopted as a generation (a copied file, or the recorded link target), so
+   a rollback can return to it. Three generations are kept; the current and
+   previous ones are never removed. Every switch is appended to
+   `~/.local/lib/upkeeper/journal.jsonl`.
+5. The process execs the new generation as
+   `self-pull --after-update <commit> --update-transaction <id>`, where the
+   transaction names the switch just made; every switch replaces
+   `~/.local/lib/upkeeper/switch.json` with a fresh one before moving a link.
+   That run locks the checkout (an `flock` on its root directory, which every
+   refresh also takes, so HEAD cannot move under it), refuses a checkout that
+   moved, checks its own program against the checkout, and converges exactly
+   the commit it checked: convergence is given that commit and refuses before
+   loading anything if HEAD is not it. The lock is held until convergence
+   ends. The report and the run record carry a `self_update` entry.
+
+Any refusal before the switch leaves `current` unchanged and the host on the
+binary it was running, with the same exit 30 the refusal had before. If the
+exec fails, or the new binary's program check fails, the previous generation
+is restored before any component work, but only if that update's switch is
+still the last change to the installation: the installation lock is released
+before the exec, and an operator's `self rollback` or `self install` in that
+moment is kept rather than swapped back, with the refusal saying so. An interrupted switch is repaired on
+the next run: stray temporary links and staging are removed, and a `current`
+that names no complete generation is pointed back at `previous`.
+
+An unidentified or `-dirty` binary, a binary built from a commit the checkout
+does not have, and a release with no pin all still refuse. The unit's
+`ExecStart` is unchanged, and `install-self-timer` still refuses while the
+`10-upkeeper-binary.conf` drop-in exists.
+
+By hand:
+
+- `upkeeper self install --expect-sha256 SHA256` installs the running binary
+  through the same generation code, after checking its digest and that it
+  names a clean source commit. This is the one-time bootstrap for a host whose
+  binary predates self-update: stage the verified artifact anywhere, then run
+  it with this command.
+- `upkeeper self rollback` makes the previous generation current again; a
+  second rollback undoes the first. It refuses when `~/.local/bin/upkeeper` is
+  not the managed link. Every rollback, by hand or after a failed update,
+  writes `~/.local/lib/upkeeper/held`, and while it exists self-pull installs
+  nothing (a changed program exits 30; the same program converges). `self
+  install` releases it, or the operator removes the file after observing.
+- `upkeeper self status [--json]` reports the binary path, the generations and
+  which is current and previous.
+
+On the SSH path, `pull` and `scheduled-pull` fence the agent on the pin's
+`source_commit`: the target runs `__agent --expect-program <commit>`, and the
+payload carries the same commit as `expected_program_commit`. A target built
+from another commit refuses before it takes its lock, naming both commits.
+An agent from before the fence ignores the payload field, but rejects the
+unknown option as a usage error before it reads the payload, so it does no
+work; the controller reports that the host's upkeeper predates the fence and
+must be updated to the pinned binary. A rollback sends no fence and invokes
+plain `__agent`, so restoring older intent never requires the older binary;
+the in-process local path is checked by `self-pull` instead. `status` and the probe report each host's
+binary version, commit and active generation.
+
 ## Gates
 
 `make go-gate` runs the format check, `go vet`, `go test`, `go test -race` and

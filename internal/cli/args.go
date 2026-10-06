@@ -9,6 +9,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -64,6 +65,18 @@ type arguments struct {
 
 	// self-pull and scheduled-pull
 	convergeOnly bool
+	// afterUpdate is the hidden self-pull option a freshly installed binary
+	// is re-executed with: the commit whose program it was installed for.
+	afterUpdate string
+	// updateTransaction names the switch that installed it, when there was one.
+	updateTransaction string
+
+	// __agent: the program the controller requires this binary to be.
+	agentProgram string
+
+	// self
+	selfAction       string
+	selfExpectSHA256 string
 
 	// fleet-plan
 	previousRelease string
@@ -107,11 +120,35 @@ type arguments struct {
 var Commands = []string{
 	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project", "provider",
 	"author", "self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
-	"hold", "version", "environment",
+	"hold", "self", "version", "environment",
 }
 
 const agentCommand = "__agent"
 const probeCommand = "__probe"
+
+// agentProgramFlag is the program fence on the agent's command line, spelled
+// as converge.AgentProgramFlag. An agent from before the fence rejects it as
+// an unrecognized argument, which is the point: it must not do fenced work.
+const agentProgramFlag = "--expect-program"
+
+// parseAgent accepts the agent's only option, the program fence.
+func parseAgent(parsed *arguments, argv []string) error {
+	for index := 0; index < len(argv); index++ {
+		if argv[index] != agentProgramFlag || parsed.agentProgram != "" {
+			return usagef("unrecognized arguments: %s", strings.Join(argv[index:], " "))
+		}
+		value, next, err := takeValue(argv, index, agentProgramFlag)
+		if err != nil {
+			return err
+		}
+		if !fullCommit(value) {
+			return usagef("argument %s: expected a full lowercase commit", agentProgramFlag)
+		}
+		parsed.agentProgram = value
+		index = next
+	}
+	return nil
+}
 
 // isCommand reports whether a token names a subcommand. The machine-facing
 // halves are deliberately excluded: they have no help to print and a
@@ -159,7 +196,11 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseScheduled(parsed, rest)
 	case "hold":
 		return parsed, parseHold(parsed, rest)
-	case "install-self-timer", "install-pull-timer", agentCommand, probeCommand, "version":
+	case "self":
+		return parsed, parseSelf(parsed, rest)
+	case agentCommand:
+		return parsed, parseAgent(parsed, rest)
+	case "install-self-timer", "install-pull-timer", probeCommand, "version":
 		if len(rest) > 0 {
 			return nil, usagef("unrecognized arguments: %s", strings.Join(rest, " "))
 		}
@@ -617,15 +658,102 @@ func splitWorkers(value string) []string {
 }
 
 func parseScheduled(parsed *arguments, argv []string) error {
-	for _, token := range argv {
-		switch token {
-		case "--dry-run":
+	for index := 0; index < len(argv); index++ {
+		token := argv[index]
+		switch {
+		case token == "--dry-run":
 			parsed.dryRun = true
-		case "--converge":
+		case token == "--converge":
 			parsed.convergeOnly = true
+		case token == afterUpdateFlag && parsed.command == "self-pull":
+			value, next, err := takeValue(argv, index, afterUpdateFlag)
+			if err != nil {
+				return err
+			}
+			if !fullCommit(value) {
+				return usagef("argument %s: expected a full lowercase commit", afterUpdateFlag)
+			}
+			parsed.afterUpdate = value
+			index = next
+		case token == transactionFlag && parsed.command == "self-pull":
+			value, next, err := takeValue(argv, index, transactionFlag)
+			if err != nil {
+				return err
+			}
+			if !transactionPattern.MatchString(value) {
+				return usagef("argument %s: expected 32 lowercase hex digits", transactionFlag)
+			}
+			parsed.updateTransaction = value
+			index = next
 		default:
 			return unrecognized(token)
 		}
+	}
+	if parsed.updateTransaction != "" && parsed.afterUpdate == "" {
+		return usagef("argument %s: only allowed with %s", transactionFlag, afterUpdateFlag)
+	}
+	// The re-executed binary converges exactly the refreshed checkout; it
+	// neither refreshes again nor previews.
+	if parsed.afterUpdate != "" && (parsed.dryRun || parsed.convergeOnly) {
+		return usagef("argument %s: not allowed with --dry-run or --converge", afterUpdateFlag)
+	}
+	return nil
+}
+
+// afterUpdateFlag is undocumented on purpose: only a self-update passes it,
+// spelled as selfupdate.AfterUpdateFlag.
+const afterUpdateFlag = "--after-update"
+
+// transactionFlag names the switch the self-update made, spelled as
+// selfupdate.TransactionFlag; it is as undocumented as afterUpdateFlag.
+const transactionFlag = "--update-transaction"
+
+var transactionPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func fullCommit(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// parseSelf reads `self install --expect-sha256 SHA [--json]`, `self rollback
+// [--json]` and `self status [--json]`. The digest is required on the command
+// line: installing a binary is authorized by the digest somebody checked, not
+// by the binary's own say-so.
+func parseSelf(parsed *arguments, argv []string) error {
+	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+		return usagef("the following arguments are required: action (install, rollback or status)")
+	}
+	parsed.selfAction = argv[0]
+	if parsed.selfAction != "install" && parsed.selfAction != "rollback" && parsed.selfAction != "status" {
+		return usagef("argument action: invalid choice: %q (choose from \"install\", \"rollback\", \"status\")",
+			parsed.selfAction)
+	}
+	rest := argv[1:]
+	for index := 0; index < len(rest); index++ {
+		token := rest[index]
+		switch {
+		case token == "--json":
+			parsed.asJSON = true
+		case token == "--expect-sha256" && parsed.selfAction == "install":
+			value, next, err := takeValue(rest, index, "--expect-sha256")
+			if err != nil {
+				return err
+			}
+			parsed.selfExpectSHA256 = value
+			index = next
+		default:
+			return unrecognized(token)
+		}
+	}
+	if parsed.selfAction == "install" && parsed.selfExpectSHA256 == "" {
+		return usagef("the following arguments are required: --expect-sha256")
 	}
 	return nil
 }

@@ -4,11 +4,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agent"
+	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/runstore"
@@ -104,6 +106,53 @@ func TestCheckoutRevisionRefusesADirtyOrForeignTree(t *testing.T) {
 	_, err = selfconv.CheckoutRevision(script.root, script.run)
 	if err == nil || err.Error() != "--self must use the dev-fleet checkout root" {
 		t.Fatalf("produced %v", err)
+	}
+}
+
+// A binary re-executed after a self-update converges exactly the commit whose
+// program it verified. When HEAD moved after that check, to a commit whose
+// program was never compared with this binary, nothing is loaded from it and
+// nothing is dispatched.
+func TestConvergenceAfterAnUpdateAppliesOnlyTheVerifiedCommit(t *testing.T) {
+	script := newScript(t)
+	script.head = candidate
+	_, _, err := selfconv.ConvergeSelfAfterUpdate(script.root, before, script.run,
+		map[string]any{"after_update": before})
+	if err == nil || !strings.Contains(err.Error(), before) || !strings.Contains(err.Error(), candidate) {
+		t.Fatalf("a checkout that moved after the program check produced %v", err)
+	}
+	if !failure.IsExpected(err) {
+		t.Errorf("the refusal would exit 1 rather than 30: %v", err)
+	}
+	for _, call := range script.calls {
+		if strings.Contains(call, "--end-of-options") || strings.Contains(call, " show ") {
+			t.Errorf("the moved checkout's release was loaded: %s", call)
+		}
+	}
+}
+
+// The checkout lock serializes a refresh with a re-executed binary's check
+// and convergence: while it is held, HEAD does not move.
+func TestRefreshRefusesWhileTheCheckoutIsLocked(t *testing.T) {
+	script := newScript(t)
+	unlock, err := selfconv.LockCheckout(script.root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selfconv.Refresh(script.root, script.run); err == nil || !failure.Is(err, failure.KindLock) {
+		t.Fatalf("a refresh of a locked checkout produced %v", err)
+	}
+	if script.head != before || slices.ContainsFunc(script.calls, func(call string) bool {
+		return strings.Contains(call, "merge --ff-only")
+	}) {
+		t.Fatalf("a locked checkout moved: head %s, calls %v", script.head, script.calls)
+	}
+	if _, err := selfconv.LockCheckout(script.root, 50*time.Millisecond); err == nil {
+		t.Fatal("a second holder took the checkout lock")
+	}
+	unlock()
+	if revision, err := selfconv.Refresh(script.root, script.run); err != nil || revision != candidate {
+		t.Fatalf("a refresh after the lock was released: %s %v", revision, err)
 	}
 }
 

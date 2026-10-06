@@ -297,6 +297,7 @@ var spoolSubcommands = map[string][]string{
 	"project":  {"add", "remove", "update"},
 	"provider": {"add", "remove"},
 	"hold":     {"show", "clear"},
+	"self":     {"install", "rollback", "status"},
 }
 
 // spoolCommands is every command this program publishes. The top-level list
@@ -318,10 +319,11 @@ func spoolCommands() map[string]struct{} {
 // to derive this from; a contract test in this package reads args.go and fails
 // when the parser accepts an option this list does not have.
 var spoolFlags = []string{
-	"all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head", "expect-release-sha256", "help", "h",
+	"after-update", "all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head",
+	"expect-program", "expect-release-sha256", "expect-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "reconcile-t3-transaction", "repository",
-	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "workers",
+	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "update-transaction", "workers",
 }
 
 func spoolDeclaredFlags() map[string]struct{} {

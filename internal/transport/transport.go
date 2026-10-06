@@ -104,6 +104,15 @@ func Invoke(
 	spec inventory.HostSpec, subcommand string, input string,
 	timeout time.Duration, runner procx.Runner,
 ) Outcome {
+	return InvokeCommand(spec, []string{subcommand}, input, timeout, runner)
+}
+
+// InvokeCommand is Invoke for a subcommand with arguments. The arguments
+// reach the remote shell as words, so each must be free of shell syntax.
+func InvokeCommand(
+	spec inventory.HostSpec, command []string, input string,
+	timeout time.Duration, runner procx.Runner,
+) Outcome {
 	if runner == nil {
 		runner = procx.Run
 	}
@@ -111,7 +120,7 @@ func Invoke(
 	if timeout < connect {
 		connect = timeout
 	}
-	argv := SSHArguments(spec, connect, RemoteBinary, subcommand)
+	argv := SSHArguments(spec, connect, append([]string{RemoteBinary}, command...)...)
 	result := runner(procx.Command{Argv: argv, Input: input, Timeout: timeout})
 	return Outcome{
 		Stdout:    result.Stdout,

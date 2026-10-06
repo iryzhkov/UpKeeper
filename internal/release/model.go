@@ -76,7 +76,9 @@ var ComponentOrder = []string{
 // intent is optional because every release captured before it existed has to
 // keep loading, converging and rolling back exactly as it does now: adding a
 // component may not invalidate the releases already published.
-var OptionalComponents = map[string]bool{fleet.Component: true, ToolingComponent: true, JocastaComponent: true, ControlledCodexComponent: true}
+// The program pin is optional for the same reason, and is never converged by
+// the agent: see ProgramComponent.
+var OptionalComponents = map[string]bool{fleet.Component: true, ToolingComponent: true, JocastaComponent: true, ControlledCodexComponent: true, ProgramComponent: true}
 
 // defaultManifest is the shape of a fresh manifest. Everything push captures is
 // null here, so that a manifest which was never captured cannot be mistaken for
@@ -214,14 +216,18 @@ func Describe(value Release) []string {
 	)
 	// The fleet intent is described only when the release carries it, so a
 	// release captured before it existed keeps the summary it always had.
-	intent, present := components[fleet.Component].(map[string]any)
-	if !present {
-		return lines
+	if intent, present := components[fleet.Component].(map[string]any); present {
+		fleetHosts, _ := intent["hosts"].(map[string]any)
+		fleetProjects, _ := intent["projects"].(map[string]any)
+		lines = append(lines, fleet.Component+" "+itoa(len(fleetHosts))+" hosts, "+
+			itoa(len(fleetProjects))+" projects")
 	}
-	fleetHosts, _ := intent["hosts"].(map[string]any)
-	fleetProjects, _ := intent["projects"].(map[string]any)
-	return append(lines, fleet.Component+" "+itoa(len(fleetHosts))+" hosts, "+
-		itoa(len(fleetProjects))+" projects")
+	// Likewise the program pin, which older releases do not carry.
+	if program, present := components[ProgramComponent].(map[string]any); present {
+		lines = append(lines, ProgramComponent+" "+text(program["tag"])+" ("+
+			shorten(text(program["source_commit"]), 12)+")")
+	}
+	return lines
 }
 
 func shorten(value string, size int) string {

@@ -65,6 +65,62 @@ func printStatus(out io.Writer, report map[string]any) {
 		for _, reason := range reasons {
 			fmt.Fprintln(out, reason)
 		}
+		if line := binaryLine(host); line != "" {
+			fmt.Fprintln(out, line)
+		}
+	}
+}
+
+// binaryLine names the UpKeeper binary a host reported running, or "" for a
+// host whose binary predates the report.
+func binaryLine(host map[string]any) string {
+	evidence, _ := host["upkeeper"].(map[string]any)
+	binary, reported := evidence["binary"].(map[string]any)
+	if !reported {
+		return ""
+	}
+	generation := shorten(text(binary["generation"]), 12)
+	if generation == "" {
+		generation = "unmanaged"
+	}
+	return fmt.Sprintf("  upkeeper %s commit %s generation %s",
+		text(binary["version"]), shorten(text(binary["commit"]), 12), generation)
+}
+
+// printSelfStatus renders `self status` for a person.
+func printSelfStatus(out io.Writer, status map[string]any) {
+	running, _ := status["running"].(map[string]any)
+	fmt.Fprintf(out, "running upkeeper %s (commit %s)\n",
+		text(running["version"]), text(running["commit"]))
+	binary, _ := status["binary"].(map[string]any)
+	switch {
+	case flag(binary["managed"]):
+		fmt.Fprintf(out, "%s runs the current generation\n", text(binary["path"]))
+	case flag(binary["missing"]):
+		fmt.Fprintf(out, "%s does not exist\n", text(binary["path"]))
+	case text(binary["link"]) != "":
+		fmt.Fprintf(out, "%s is not managed: it links to %s\n", text(binary["path"]), text(binary["link"]))
+	default:
+		fmt.Fprintf(out, "%s is not managed: it is a file\n", text(binary["path"]))
+	}
+	for _, item := range list(status["generations"]) {
+		generation, _ := item.(map[string]any)
+		marks := []string{}
+		if flag(generation["current"]) {
+			marks = append(marks, "current")
+		}
+		if flag(generation["previous"]) {
+			marks = append(marks, "previous")
+		}
+		if !flag(generation["valid"]) {
+			marks = append(marks, "INVALID")
+		}
+		identity, _ := generation["identity"].(map[string]any)
+		description := text(identity["version_line"])
+		if description == "" {
+			description = text(identity["source"])
+		}
+		fmt.Fprintf(out, "  %s %s [%s]\n", text(generation["name"]), description, join(marks, ","))
 	}
 }
 

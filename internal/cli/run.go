@@ -105,7 +105,7 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 	case "environment":
 		return runEnvironment(parsed, streams)
 	case agentCommand:
-		return runAgent(streams)
+		return runAgent(parsed, streams)
 	case probeCommand:
 		return runProbe(streams)
 	case "version":
@@ -131,6 +131,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runScheduledPull(parsed, streams)
 	case "hold":
 		return runHold(parsed, streams)
+	case "self":
+		return runSelf(parsed, streams)
 	case "install-self-timer", "install-pull-timer":
 		return runInstallTimer(parsed, streams)
 	default:
@@ -140,8 +142,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 
 // runAgent is the target-side half of a convergence. It is invoked by a
 // controller over SSH and speaks only JSON.
-func runAgent(streams Streams) (int, error) {
-	if err := agent.Run(streams.In, streams.Out, procx.Run); err != nil {
+func runAgent(parsed *arguments, streams Streams) (int, error) {
+	if err := agent.RunFenced(streams.In, streams.Out, procx.Run, parsed.agentProgram); err != nil {
 		return 1, err
 	}
 	return exitcode.Success, nil
@@ -372,6 +374,9 @@ func runConvergence(parsed *arguments, streams Streams) (int, error) {
 		SkipUnreachable: parsed.skipUnreachable,
 		Process:         procx.Run,
 		ReconcileT3:     parsed.reconcileT3,
+		// A remote host must run the program the release pins; see the
+		// agent's program fence.
+		ExpectedProgramCommit: converge.ProgramFence(value, parsed.command),
 	})
 	if err != nil {
 		return exitcode.Preflight, err
@@ -499,8 +504,27 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	// Exactly one local inventory identity, established before any network.
-	if _, err := selfconv.LocalHost(config); err != nil {
+	host, err := selfconv.LocalHost(config)
+	if err != nil {
 		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
+	}
+	// A binary a self-update just installed converges the checkout it was
+	// installed for, and nothing else; see selfUpdate.afterUpdate.
+	if parsed.afterUpdate != "" {
+		updater, err := newSelfUpdate()
+		if err != nil {
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
+		}
+		document, code, err := updater.afterUpdate(root, parsed.afterUpdate, parsed.updateTransaction)
+		if err != nil {
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
+		}
+		if err := printJSON(streams.Out, document); err != nil {
+			return 1, err
+		}
+		printScheduledSummary(streams.Err, parsed.command, document,
+			scheduledRecordPath(parsed, document), code)
+		return code, nil
 	}
 	if !parsed.dryRun && !parsed.convergeOnly {
 		refreshed, err := selfconv.Refresh(root, procx.Run)
@@ -510,9 +534,15 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		// Run the gated code, never an old program against a new manifest.
 		// The Python launcher was the checkout, so re-executing it after the
 		// refresh satisfied that by construction; a binary is not the checkout,
-		// so the identity is checked instead.
-		if err := selfconv.VerifyProgram(
-			root, buildinfo.SourceCommit(), refreshed, procx.Run); err != nil {
+		// so the identity is checked instead. A changed program is replaced by
+		// the binary the release pins, which is then re-executed in this
+		// process's place; anything else is refused as before.
+		verified := selfconv.VerifyProgram(root, buildinfo.SourceCommit(), refreshed, procx.Run)
+		replaced, err := programUpdate(root, host, refreshed, verified, streams.Err)
+		if replaced {
+			return exitcode.Success, nil
+		}
+		if err != nil {
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
 	}
