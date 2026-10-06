@@ -30,15 +30,17 @@ type CatalogSnapshotOptions struct {
 // Semantic input approval, configured catalog validation, Stage A/b32,
 // interpreter/tokenizer acquisition, handoff and runtime gates remain required.
 type CatalogSnapshot struct {
-	mu       sync.Mutex
-	sources  map[string][]byte
-	inputs   map[string][]byte
-	commit   string
-	tree     string
-	verify   func(context.Context) error
-	close    func() error
-	closed   bool
-	closeErr error
+	resources     []catalogResource
+	resourceCheck func([]catalogResource) error
+	mu            sync.Mutex
+	sources       map[string][]byte
+	inputs        map[string][]byte
+	commit        string
+	tree          string
+	verify        func(context.Context) error
+	close         func() error
+	closed        bool
+	closeErr      error
 }
 
 // SourceBytes returns a defensive copy, or nil for an unknown path/closed owner.
@@ -95,6 +97,8 @@ func (s *CatalogSnapshot) Close() error {
 		if s.close != nil {
 			s.closeErr = s.close()
 		}
+		s.resources = nil
+		s.resourceCheck = nil
 		s.sources, s.inputs = nil, nil
 		s.verify, s.close = nil, nil
 	}

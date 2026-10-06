@@ -9,6 +9,7 @@ import time
 TARGETS = (
     ("ci-manifest",),
     ("ci-go-checks",),
+    ("ci-race", "GROUP=author-baseline"),
     ("ci-race", "GROUP=author-catalog"),
     ("ci-race", "GROUP=author-other"),
     ("ci-race", "GROUP=other-packages"),

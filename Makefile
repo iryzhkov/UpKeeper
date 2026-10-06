@@ -60,7 +60,7 @@ go-build:
 go-test:
 	go test ./...
 
-# The full race gate, run as three exhaustive groups so that no one race binary
+# The full race gate, run as four exhaustive groups so that no one race binary
 # carries the whole author package into the default ten-minute alarm. The script
 # derives the groups from the real inventory and refuses any gap or overlap.
 go-race:

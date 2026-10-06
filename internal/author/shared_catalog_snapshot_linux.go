@@ -28,6 +28,57 @@ type snapshotDirectory struct {
 	stat   syscall.Stat_t
 	stable bool
 }
+
+// resource copies endpoint and ancestor identities from authenticated held
+// descriptors. File endpoints remain held and checked until owner Close.
+func (c *snapshotCustody) resource(path string, directory bool) (catalogResource, error) {
+	r := catalogResource{directory: directory}
+	var st syscall.Stat_t
+	if directory {
+		d := c.dirs[path]
+		if d == nil || syscall.Fstat(d.fd, &st) != nil || st.Dev != d.stat.Dev || st.Ino != d.stat.Ino || st.Mode != d.stat.Mode || st.Uid != d.stat.Uid || d.stable && !sharedSame(st, d.stat) {
+			return r, errors.New("catalog resource directory binding")
+		}
+	} else {
+		fd, err := sharedHeld(path, false)
+		if err != nil {
+			return r, err
+		}
+		if syscall.Fstat(fd, &st) != nil || st.Nlink != 1 {
+			syscall.Close(fd)
+			return r, errors.New("catalog resource file binding")
+		}
+		c.closes = append(c.closes, func() { syscall.Close(fd) })
+		bound := st
+		c.checks = append(c.checks, func() error {
+			var held, current syscall.Stat_t
+			other, err := sharedHeld(path, false)
+			if err != nil {
+				return err
+			}
+			defer syscall.Close(other)
+			if syscall.Fstat(fd, &held) != nil || syscall.Fstat(other, &current) != nil || !sharedSame(bound, held) || !sharedSame(bound, current) || current.Nlink != 1 {
+				return errors.New("catalog resource file changed")
+			}
+			return nil
+		})
+	}
+	r.endpoint = catalogEndpoint{path, uint64(st.Dev), st.Ino}
+	parent := filepath.Dir(path)
+	if directory {
+		parent = path
+	}
+	for parent != "/" {
+		d := c.dirs[parent]
+		if d == nil || syscall.Fstat(d.fd, &st) != nil || st.Dev != d.stat.Dev || st.Ino != d.stat.Ino || st.Mode != d.stat.Mode || st.Uid != d.stat.Uid || d.stable && !sharedSame(st, d.stat) {
+			return r, errors.New("catalog resource ancestor binding")
+		}
+		r.ancestors = append(r.ancestors, catalogEndpoint{parent, uint64(st.Dev), st.Ino})
+		parent = filepath.Dir(parent)
+	}
+	return r, nil
+}
+
 type snapshotCustody struct {
 	dirs   map[string]*snapshotDirectory
 	checks []func() error
@@ -626,6 +677,14 @@ func acquireCatalogSnapshotHeld(ctx context.Context, o CatalogSnapshotOptions, s
 		}
 		return verifyCtx.Err()
 	}
+	for _, path := range []string{o.Repository, o.InputRoot} {
+		r, e := c.resource(path, true)
+		if e != nil {
+			return nil, e
+		}
+		s.resources = append(s.resources, r)
+	}
+	s.resourceCheck = baselineBindResources(s.resources)
 	s.verify = verify
 	s.close = c.release
 	if err = ctx.Err(); err != nil {

@@ -55,7 +55,7 @@ def test_ci_job_names_dependencies_and_local_coverage():
     assert race["name"] == "go-race (${{ matrix.group }})"
     assert race["strategy"]["fail-fast"] is False
     groups = race["strategy"]["matrix"]["group"]
-    assert groups == ["author-catalog", "author-other", "other-packages"]
+    assert groups == ["author-baseline", "author-catalog", "author-other", "other-packages"]
     assert list(local.TARGETS) == [
         ("ci-manifest",), ("ci-go-checks",),
         *[("ci-race", f"GROUP={group}") for group in groups],
@@ -168,7 +168,7 @@ def test_local_job_failures_match_dependency_and_matrix_behavior(monkeypatch, fa
         assert gate_env["MANIFEST_RESULT"] == "failure"
         assert gate_env["CHECKS_RESULT"] == gate_env["RACE_RESULT"] == "skipped"
     else:
-        assert names.count("ci-race") == 3
+        assert names.count("ci-race") == 4
         assert gate_env["CHECKS_RESULT"] == ("failure" if failed == "ci-go-checks" else "success")
         assert gate_env["RACE_RESULT"] == (
             "failure" if failed == "GROUP=author-catalog" else "success"

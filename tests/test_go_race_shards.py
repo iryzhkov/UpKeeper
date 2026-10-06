@@ -27,7 +27,14 @@ SPEC.loader.exec_module(shards)
 AUTHOR = shards.AUTHOR_PACKAGE
 OTHERS = [f"{shards.MODULE}/cmd/upkeeper", f"{shards.MODULE}/internal/agent"]
 PACKAGES = [OTHERS[0], AUTHOR, OTHERS[1]]
-RUNNABLE = ["TestCatalogOne", "TestCatalogTwo", "TestAuthorOne", "FuzzAuthor", "ExampleAuthor"]
+RUNNABLE = [
+    "TestCatalogOne",
+    "TestCatalogBaselineOne",
+    "TestCatalogTwo",
+    "TestAuthorOne",
+    "FuzzAuthor",
+    "ExampleAuthor",
+]
 
 FAKE_GO = r"""
 import json, os, re, signal, sys, time
@@ -192,10 +199,17 @@ def test_package_inventory_refusals(fake, go_list, exit_code, message):
 
 
 def test_partition_is_exact_and_assigns_future_names_once():
-    future = RUNNABLE + ["TestCatalogAddedLater", "FuzzAddedLater", "ExampleAddedLater"]
+    future = RUNNABLE + [
+        "TestCatalogAddedLater",
+        "TestCatalogBaselineAddedLater",
+        "FuzzAddedLater",
+        "ExampleAddedLater",
+    ]
     groups = shards.partition(PACKAGES, future)
+    baseline = groups["author-baseline"]["tests"]
     catalog = groups["author-catalog"]["tests"]
     other = groups["author-other"]["tests"]
+    assert baseline == ["TestCatalogBaselineOne", "TestCatalogBaselineAddedLater"]
     assert catalog == ["TestCatalogOne", "TestCatalogTwo", "TestCatalogAddedLater"]
     assert other == [
         "TestAuthorOne",
@@ -204,14 +218,21 @@ def test_partition_is_exact_and_assigns_future_names_once():
         "FuzzAddedLater",
         "ExampleAddedLater",
     ]
-    assert sorted(catalog + other) == sorted(future)
+    assert sorted(baseline + catalog + other) == sorted(future)
     assert groups["other-packages"]["packages"] == OTHERS
     assert groups["other-packages"]["argv"][-2:] == OTHERS
 
 
 @pytest.mark.parametrize(
     "runnable, message",
-    [(["TestAuthorOne"], "nonempty"), (["TestCatalogOne"], "nonempty")],
+    [
+        (["TestAuthorOne"], "nonempty"),
+        (["TestCatalogOne"], "nonempty"),
+        (["TestCatalogBaselineOne"], "nonempty"),
+        (["TestCatalogOne", "TestAuthorOne"], "baseline 0"),
+        (["TestCatalogBaselineOne", "TestAuthorOne"], "catalog 0"),
+        (["TestCatalogOne", "TestCatalogBaselineOne"], "other 0"),
+    ],
 )
 def test_partition_refuses_an_empty_author_group(runnable, message):
     with pytest.raises(shards.InventoryError, match=message):
@@ -233,8 +254,16 @@ def test_run_patterns_are_anchored_to_exact_names():
     pattern = argv[argv.index("-run") + 1]
     assert pattern == "^(TestCatalogOne|TestCatalogTwo)$"
     assert re.fullmatch(pattern, "TestCatalogOne")
-    for near in ("TestCatalogOneMore", "XTestCatalogOne", "TestCatalog", "TestAuthorOne"):
+    for near in (
+        "TestCatalogOneMore",
+        "XTestCatalogOne",
+        "TestCatalog",
+        "TestCatalogBaselineOne",
+        "TestAuthorOne",
+    ):
         assert not re.search(pattern, near)
+    baseline = groups["author-baseline"]["argv"]
+    assert baseline[baseline.index("-run") + 1] == "^(TestCatalogBaselineOne)$"
 
 
 def test_anchored_escapes_regex_syntax():
@@ -258,7 +287,8 @@ def test_plan_lists_the_real_shape_without_running_tests(fake, tmp_path):
     assert status == 0
     assert receipt["counts"] == {
         "packages": 3,
-        "author_runnable": 5,
+        "author_runnable": 6,
+        "author-baseline": 1,
         "author-catalog": 2,
         "author-other": 3,
         "other-packages": 2,
@@ -277,11 +307,12 @@ def test_all_runs_every_group_and_checks_each_result(fake, tmp_path, capfd):
     assert status == 0, receipt
     assert receipt["result"] == "pass"
     assert [run["group"] for run in receipt["runs"]] == list(shards.GROUPS)
-    catalog, other, rest = receipt["runs"]
+    baseline, catalog, other, rest = receipt["runs"]
+    assert baseline["tests"]["pass"] == ["TestCatalogBaselineOne"]
     assert catalog["tests"]["pass"] == ["TestCatalogOne", "TestCatalogTwo"]
     assert other["tests"]["pass"] == sorted(["TestAuthorOne", "FuzzAuthor", "ExampleAuthor"])
     assert sorted(rest["packages"]) == sorted(OTHERS)
-    assert len(fake.runs()) == 3
+    assert len(fake.runs()) == 4
     output = capfd.readouterr().out
     assert "--- PASS: FuzzAuthor" in output
     assert "not a json line" in output
@@ -301,8 +332,8 @@ def test_a_failed_shard_fails_the_run_but_later_groups_still_run(fake, tmp_path,
     status, receipt = run_main(["--group", "all"], tmp_path)
     assert status == 1
     assert receipt["result"] == "fail"
-    assert receipt["runs"][0]["tests"]["fail"] == ["TestCatalogTwo"]
-    assert [run["result"] for run in receipt["runs"]] == ["fail", "pass", "pass"]
+    assert receipt["runs"][1]["tests"]["fail"] == ["TestCatalogTwo"]
+    assert [run["result"] for run in receipt["runs"]] == ["pass", "fail", "pass", "pass"]
     assert "--- FAIL: TestCatalogTwo" in capfd.readouterr().out
 
 
@@ -382,6 +413,6 @@ def test_cancellation_reaches_the_child_and_never_reports_a_pass(fake, tmp_path)
         os.kill(child, 0)
     document = json.loads(receipt.read_text())
     assert document["result"] == "cancelled"
-    assert [run["group"] for run in document["runs"]] == ["author-catalog"]
+    assert [run["group"] for run in document["runs"]] == ["author-baseline"]
     assert document["runs"][0]["result"] == "fail"
     assert len(fake.runs()) == 1
