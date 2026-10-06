@@ -368,6 +368,9 @@ func stewardPairPrepare(t *testing.T, host stewardPairHost) (*Context, *adapterT
 				return procx.Result{Stdout: `{"dependencies": {"t3": {"version": "0.0.38"}}}`}
 			}
 			return procx.Result{Code: 1, Stdout: `{}`}
+		case adapterTestMatches(argv, "npm", "prefix", "-g"):
+			// An empty global prefix: npm has never installed anything.
+			return procx.Result{Stdout: context.Path(".npm-global") + "\n"}
 		case adapterTestMatches(argv, "systemctl", "is-active"):
 			if loaded(last) && (last != "t3code.service" || host.t3Serving != "") {
 				return procx.Result{Stdout: "active"}

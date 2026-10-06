@@ -404,7 +404,9 @@ func t3NotInstalled(c *Context, t3Spec, observed map[string]any) bool {
 // only a JSON object npm produced on its own terms, without an error and
 // without a t3 entry, counts. npm exits 1 when the package it was asked about
 // is not installed. A missing npm, a timeout, a permission error or output
-// that does not parse leaves the package unknown, which is not absent.
+// that does not parse leaves the package unknown, which is not absent. npm
+// also leaves out a package it cannot read, without saying so, so its empty
+// answer counts only once the package's own directory is proved missing.
 func t3PackageAbsent(c *Context) bool {
 	result := c.Runner(procx.Command{
 		Argv: []string{"npm", "ls", "-g", "--depth=0", "--json", "t3"},
@@ -429,21 +431,29 @@ func t3PackageAbsent(c *Context) bool {
 	if result.Code != 0 && result.Code != 1 {
 		return false
 	}
-	raw, listed := document["dependencies"]
-	if !listed {
-		return true
+	if raw, listed := document["dependencies"]; listed {
+		var dependencies map[string]json.RawMessage
+		if json.Unmarshal(raw, &dependencies) != nil || dependencies == nil {
+			return false
+		}
+		if _, present := dependencies["t3"]; present {
+			return false
+		}
 	}
-	var dependencies map[string]json.RawMessage
-	if json.Unmarshal(raw, &dependencies) != nil || dependencies == nil {
-		return false
-	}
-	_, present := dependencies["t3"]
-	return !present
+	return t3GlobalPathMissing(c, "lib", "node_modules", "t3")
 }
 
 // t3GlobalLibMissing reports whether npm's global prefix is an absolute path
 // whose lib directory certainly does not exist.
 func t3GlobalLibMissing(c *Context) bool {
+	return t3GlobalPathMissing(c, "lib")
+}
+
+// t3GlobalPathMissing reports whether npm's global prefix is an absolute path
+// and the path below it certainly does not exist. Only "no such file" counts:
+// a directory on the way that cannot be searched answers "permission denied",
+// which says nothing about what it holds.
+func t3GlobalPathMissing(c *Context, below ...string) bool {
 	result := c.Runner(procx.Command{Argv: []string{"npm", "prefix", "-g"}, Env: c.Env, Timeout: 30 * time.Second})
 	if result.Err != nil || result.TimedOut || result.Code != 0 {
 		return false
@@ -452,7 +462,7 @@ func t3GlobalLibMissing(c *Context) bool {
 	if !filepath.IsAbs(prefix) || strings.ContainsAny(prefix, "\n\r") {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(prefix, "lib"))
+	_, err := os.Lstat(filepath.Join(append([]string{prefix}, below...)...))
 	return errors.Is(err, fs.ErrNotExist)
 }
 

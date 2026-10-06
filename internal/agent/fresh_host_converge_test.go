@@ -85,6 +85,9 @@ func (h *freshHost) run(command procx.Command) procx.Result {
 			return procx.Result{Stdout: `{"dependencies": {"t3": {"version": "0.0.38"}}}`}
 		}
 		return procx.Result{Code: 1, Stdout: `{}`}
+	case adapterTestMatches(argv, "npm", "prefix", "-g"):
+		// An empty global prefix: npm has never installed anything.
+		return procx.Result{Stdout: filepath.Join(h.home, ".npm-global") + "\n"}
 	case adapterTestMatches(argv, "secret-tool", "lookup"):
 		return procx.Result{Code: 1}
 	}

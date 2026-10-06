@@ -473,11 +473,13 @@ func huyangApplyCheckout(
 	if commit == "" {
 		return huyangBootstrap(c, spec, actions)
 	}
-	if pathExists(c.Path(huyangBootstrapPending)) {
-		return huyangResumeBootstrap(c, spec, checkout, commit, actions)
-	}
+	// Local changes outrank the release, including a bootstrap an earlier run
+	// left unfinished: whoever changed the checkout since owns it now.
 	if dirty, _ := before["dirty"].(bool); dirty {
 		return "", Failf("%s has local changes; refusing to move it", checkout)
+	}
+	if pathExists(c.Path(huyangBootstrapPending)) {
+		return huyangResumeBootstrap(c, spec, checkout, commit, actions)
 	}
 	wanted := adapterSpecString(spec, "commit")
 	allowDowngrade := c.Payload.AllowDowngrade
@@ -702,6 +704,13 @@ func huyangResumeBootstrap(
 		if err := huyangSeedUnit(unit, relative); err != nil {
 			return "", err
 		}
+	}
+	// The observation may be stale by now. The service is started only for a
+	// checkout that is still on the pin and provably has no local changes.
+	dirty := c.GitDirty(checkout)
+	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
+		return "", Failf("an interrupted Huyang bootstrap found %s changed or unreadable; "+
+			"preserving local work. Inspect it, then remove %s", checkout, c.Path(huyangBootstrapPending))
 	}
 	if err := huyangStart(c, spec, checkout, service); err != nil {
 		return "", err
