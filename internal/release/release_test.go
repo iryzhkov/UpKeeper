@@ -3,8 +3,10 @@ package release_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -95,16 +97,43 @@ func TestCurrentPublishedManifestValidatesAndIsCanonical(t *testing.T) {
 	// The program pin must name the program this commit holds, or every host
 	// would install a binary that refuses the release it arrived with. This
 	// runs here because this test is the manifest gate CI runs first.
+	//
+	// It binds a commit that publishes release intent, one that changes the
+	// manifest. A commit that only changes the program cannot carry its own
+	// binary's pin, because that binary is tagged and built from it afterwards;
+	// hosts refuse such a commit's stale pin on their own (self-pull compares
+	// the pin's program with the checkout before installing anything) until
+	// the next release commit pins the new binary.
 	pin, err := value.ProgramPin()
 	if err != nil {
 		t.Fatalf("program pin: %v", err)
 	}
-	if pin != nil {
+	if pin != nil && publishesReleaseIntent(t) {
 		if err := release.CheckProgramPin(
 			filepath.Join("..", ".."), pin.SourceCommit, "HEAD", nil); err != nil {
 			t.Fatalf("published program pin: %v", err)
 		}
 	}
+}
+
+// publishesReleaseIntent reports whether HEAD changed the published manifest
+// relative to its first parent. A root commit, or one whose parent is not
+// available, counts as publishing, so the check is never skipped by accident.
+func publishesReleaseIntent(t *testing.T) bool {
+	t.Helper()
+	command := exec.Command("git", "-C", filepath.Join("..", ".."),
+		"diff", "--quiet", "HEAD^", "HEAD", "--", release.File)
+	err := command.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return true
+	}
+	if err != nil {
+		t.Logf("cannot compare %s with HEAD^ (%v); checking the pin anyway", release.File, err)
+		return true
+	}
+	t.Logf("HEAD does not change %s; the program pin is checked by the commit that does", release.File)
+	return false
 }
 
 func TestValidateRefusals(t *testing.T) {

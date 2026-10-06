@@ -503,7 +503,8 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	// Exactly one local inventory identity, established before any network.
-	if _, err := selfconv.LocalHost(config); err != nil {
+	host, err := selfconv.LocalHost(config)
+	if err != nil {
 		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
 	// A binary a self-update just installed converges the checkout it was
@@ -535,12 +536,12 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		// so the identity is checked instead. A changed program is replaced by
 		// the binary the release pins, which is then re-executed in this
 		// process's place; anything else is refused as before.
-		if err := selfconv.VerifyProgram(
-			root, buildinfo.SourceCommit(), refreshed, procx.Run); err != nil {
-			replaced, err := programUpdate(root, refreshed, err)
-			if replaced {
-				return exitcode.Success, nil
-			}
+		verified := selfconv.VerifyProgram(root, buildinfo.SourceCommit(), refreshed, procx.Run)
+		replaced, err := programUpdate(root, host, refreshed, verified, streams.Err)
+		if replaced {
+			return exitcode.Success, nil
+		}
+		if err != nil {
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
 	}

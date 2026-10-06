@@ -71,6 +71,10 @@ func (l Layout) Staging() string { return filepath.Join(l.Root(), "staging") }
 // Journal is the append-only record of every switch.
 func (l Layout) Journal() string { return filepath.Join(l.Root(), "journal.jsonl") }
 
+// Hold, while it exists, stops Apply: a rollback writes it, so that the next
+// scheduled self-pull does not reinstall what was just rolled back.
+func (l Layout) Hold() string { return filepath.Join(l.Root(), "held") }
+
 // Lock serializes every change to the installation.
 func (l Layout) Lock() string { return filepath.Join(l.Root(), ".lock") }
 

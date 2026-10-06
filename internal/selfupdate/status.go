@@ -62,8 +62,16 @@ func (i *Installer) Status() map[string]any {
 		"current":     nullable(current),
 		"previous":    nullable(previous),
 		"generations": generations,
+		"held":        heldReason(layout),
 		"running":     map[string]any{"version": buildinfo.Version, "commit": buildinfo.SourceCommit()},
 	}
+}
+
+func heldReason(layout Layout) any {
+	if reason, held := (&Installer{Layout: layout}).held(); held {
+		return reason
+	}
+	return nil
 }
 
 // ExecFunc replaces this process with another program. It is syscall.Exec in

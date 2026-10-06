@@ -299,6 +299,144 @@ func TestApplyRefusalsLeaveCurrentUnchanged(t *testing.T) {
 	}
 }
 
+// A refusal on a host that was never managed leaves it unmanaged: the binary
+// it runs is not adopted, moved or relinked for an update that did not happen.
+func TestARefusalLeavesAnUnmanagedHostUnmanaged(t *testing.T) {
+	store, server := serve(t)
+	target := installer(t, server)
+	original := newProgram("v0.1.30", "a")
+	if err := os.MkdirAll(filepath.Dir(target.Layout.Binary()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target.Layout.Binary(), original.body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	update := newProgram("v0.1.31", "b")
+	store.bodies[assetPath(update.tag)] = newProgram("v0.1.31", "c").body
+	if _, err := target.Apply(update.pin()); err == nil {
+		t.Fatal("a digest mismatch was accepted")
+	}
+	if info, err := os.Lstat(target.Layout.Binary()); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("the unmanaged binary was replaced: %v %v", info, err)
+	}
+	if _, err := os.Lstat(target.Layout.Current()); err == nil {
+		t.Error("a refusal created current")
+	}
+	if _, err := os.Stat(target.Layout.Generations()); err == nil {
+		t.Error("a refusal created generations")
+	}
+}
+
+// A rollback never links over a binary somebody put in place by hand, never
+// reports success for a switch to itself, and holds automatic updates until
+// an operator installs a binary again.
+func TestRollbackRefusalsAndHold(t *testing.T) {
+	store, server := serve(t)
+	target := installer(t, server)
+	first, second := newProgram("v0.1.30", "a"), newProgram("v0.1.31", "b")
+	managedOn(t, store, target, first)
+	managedOn(t, store, target, second)
+
+	hand := newProgram("v9.9.9", "9")
+	if err := os.Remove(target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target.Layout.Binary(), hand.body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Rollback("operator"); err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("a rollback over a hand-installed binary produced %v", err)
+	}
+	if got := runBinary(t, target.Layout); got != versionOf(hand) {
+		t.Fatalf("the hand-installed binary was replaced: %q", got)
+	}
+	if err := os.Remove(target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../lib/upkeeper/current/upkeeper", target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := target.Rollback("operator"); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if _, err := target.Apply(second.pin()); err == nil || !strings.Contains(err.Error(), "held") {
+		t.Fatalf("an update after a rollback produced %v", err)
+	}
+	if target.Layout.CurrentGeneration() != first.sha() {
+		t.Fatal("a held update switched")
+	}
+	if target.Status()["held"] == nil {
+		t.Error("status does not report the hold")
+	}
+	staged := filepath.Join(t.TempDir(), "upkeeper")
+	if err := os.WriteFile(staged, second.body, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.InstallFile(staged, second.sha(), versionOf(second)); err != nil {
+		t.Fatalf("an explicit install was refused: %v", err)
+	}
+	if _, err := os.Stat(target.Layout.Hold()); err == nil {
+		t.Error("an explicit install did not release the hold")
+	}
+
+	// previous == current, as an interruption between the two links leaves it.
+	if err := os.Remove(target.Layout.Previous()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("generations/"+second.sha(), target.Layout.Previous()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Rollback("operator"); err == nil {
+		t.Error("a rollback onto the current generation reported success")
+	}
+}
+
+// A damaged current whose digest is the pinned one, with nothing to fall back
+// on, is repaired by installing the pin again rather than refused forever.
+func TestADamagedCurrentWithThePinnedDigestIsReplaced(t *testing.T) {
+	store, server := serve(t)
+	target := installer(t, server)
+	update := newProgram("v0.1.31", "b")
+	managedOn(t, store, target, update)
+	path := target.Layout.GenerationBinary(update.sha())
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 9\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Apply(update.pin()); err != nil {
+		t.Fatalf("the damaged generation was not replaced: %v", err)
+	}
+	if got := runBinary(t, target.Layout); got != versionOf(update) {
+		t.Errorf("the host runs %q", got)
+	}
+}
+
+// A binary path that already links into the installation, spelled
+// absolutely, is not adopted as a link to itself.
+func TestALinkIntoTheInstallationIsNotAdopted(t *testing.T) {
+	store, server := serve(t)
+	target := installer(t, server)
+	first, second := newProgram("v0.1.30", "a"), newProgram("v0.1.31", "b")
+	managedOn(t, store, target, first)
+	if err := os.Remove(target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(target.Layout.Current(), "upkeeper"), target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+	store.publish(second)
+	result, err := target.Apply(second.pin())
+	if err != nil || result.Adopted != "" {
+		t.Fatalf("apply %+v, %v", result, err)
+	}
+	if got := runBinary(t, target.Layout); got != versionOf(second) {
+		t.Errorf("the host runs %q", got)
+	}
+}
+
 // An unmanaged host with nothing at ~/.local/bin/upkeeper has nothing to adopt.
 func TestAFreshHostInstallsWithoutAdopting(t *testing.T) {
 	store, server := serve(t)
@@ -397,6 +535,9 @@ func TestRetentionKeepsThreeAndNeverTheActiveOnes(t *testing.T) {
 	// the oldest other generation goes even though d was activated long ago.
 	if _, err := target.Rollback("test"); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.Remove(target.Layout.Hold()); err != nil {
+		t.Fatalf("the rollback left no hold: %v", err)
 	}
 	sixth := newProgram("v0.1.9", "f")
 	managedOn(t, store, target, sixth)

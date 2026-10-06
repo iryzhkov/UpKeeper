@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,6 +82,7 @@ type fakeUpdate struct {
 	steps      []string
 	execArgv   []string
 	details    map[string]any
+	held       string
 }
 
 func (f *fakeUpdate) seam() *selfUpdate {
@@ -114,6 +116,7 @@ func (f *fakeUpdate) seam() *selfUpdate {
 			f.details = details
 			return map[string]any{"run_id": "r"}, 0, nil
 		},
+		scheduledHold: func(string) (string, bool) { return f.held, f.held != "" },
 	}
 }
 
@@ -126,31 +129,28 @@ func testPin() *release.ProgramPin {
 
 func TestUpdateProgramRefusals(t *testing.T) {
 	refreshed := strings.Repeat("c", 40)
-	refusal := failure.Wrap(selfconv.ErrProgramDiffers, failure.KindValue, "program differs")
 	cases := []struct {
 		name     string
 		fake     fakeUpdate
 		expected string
 		steps    []string
 	}{
-		{"a release that pins no binary", fakeUpdate{}, "pins no upkeeper binary",
-			[]string{"load " + refreshed}},
 		{"a pin that is not the gated program", fakeUpdate{pin: testPin(), verifyErr: map[string]error{
 			strings.Repeat("b", 40): errors.New("differs")}}, "not the gated program",
-			[]string{"load " + refreshed, "verify " + strings.Repeat("b", 40)}},
+			[]string{"verify " + strings.Repeat("b", 40)}},
 		{"an install that refuses", fakeUpdate{pin: testPin(), installErr: failure.Value("has sha256 x")},
 			"self-update to upkeeper v0.1.31 refused: has sha256 x",
-			[]string{"load " + refreshed, "verify " + strings.Repeat("b", 40), "install v0.1.31"}},
+			[]string{"verify " + strings.Repeat("b", 40), "install v0.1.31"}},
 		{"an exec that fails after a switch", fakeUpdate{pin: testPin(), execErr: errors.New("ENOEXEC"),
 			result: selfupdate.Result{Path: "/g/upkeeper", Switched: true}}, "rolled back to generation previous-generation",
-			[]string{"load " + refreshed, "verify " + strings.Repeat("b", 40), "install v0.1.31", "exec /g/upkeeper", "rollback"}},
+			[]string{"verify " + strings.Repeat("b", 40), "install v0.1.31", "exec /g/upkeeper", "rollback"}},
 		{"an exec that fails without a switch", fakeUpdate{pin: testPin(), execErr: errors.New("ENOEXEC"),
 			result: selfupdate.Result{Path: "/g/upkeeper"}}, "cannot start",
-			[]string{"load " + refreshed, "verify " + strings.Repeat("b", 40), "install v0.1.31", "exec /g/upkeeper"}},
+			[]string{"verify " + strings.Repeat("b", 40), "install v0.1.31", "exec /g/upkeeper"}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			replaced, err := test.fake.seam().updateProgram("/checkout", refreshed, refusal)
+			replaced, err := test.fake.seam().updateProgram("/checkout", refreshed, test.fake.pin)
 			if replaced || err == nil || !strings.Contains(err.Error(), test.expected) {
 				t.Fatalf("replaced=%v error %v, want %q", replaced, err, test.expected)
 			}
@@ -173,9 +173,72 @@ func TestOnlyAChangedProgramIsUpdated(t *testing.T) {
 		return nil, nil
 	}
 	unidentified := failure.Value("this binary does not name a clean source commit")
-	replaced, err := programUpdate("/checkout", strings.Repeat("c", 40), unidentified)
+	replaced, err := programUpdate("/checkout", "homelab", strings.Repeat("c", 40), unidentified, io.Discard)
 	if replaced || err != unidentified {
 		t.Fatalf("replaced=%v err=%v", replaced, err)
+	}
+}
+
+// What a self-pull does with each answer of its program check.
+func TestProgramUpdateDecisions(t *testing.T) {
+	refreshed := strings.Repeat("c", 40)
+	pinned := strings.Repeat("b", 40)
+	differs := failure.Wrap(selfconv.ErrProgramDiffers, failure.KindValue, "program differs")
+	switched := selfupdate.Result{Path: "/g/upkeeper", Switched: true}
+	cases := []struct {
+		name     string
+		verified error
+		fake     fakeUpdate
+		replaced bool
+		expected string // "" means no error
+		notice   string
+		steps    []string
+	}{
+		{"a changed program without a pin is refused", differs, fakeUpdate{binary: "a"},
+			false, "pins no upkeeper binary", "", []string{"load " + refreshed}},
+		{"a changed program is updated", differs, fakeUpdate{binary: "a", pin: testPin(), result: switched},
+			true, "", "", []string{"load " + refreshed, "verify " + pinned, "install v0.1.31", "exec /g/upkeeper"}},
+		{"a changed program on a held host is refused", differs, fakeUpdate{binary: "a", pin: testPin(), held: "/h/homelab.hold"},
+			false, "scheduled hold /h/homelab.hold", "", []string{"load " + refreshed}},
+		{"the pinned commit needs nothing", nil, fakeUpdate{binary: pinned, pin: testPin()},
+			false, "", "", []string{"load " + refreshed}},
+		{"the same program without a pin needs nothing", nil, fakeUpdate{binary: "a"},
+			false, "", "", []string{"load " + refreshed}},
+		// The fence on the SSH path compares commits, so a host left on
+		// another commit of the same program would be refused by every pull.
+		{"the same program from another commit is updated", nil, fakeUpdate{binary: "a", pin: testPin(), result: switched},
+			true, "", "", []string{"load " + refreshed, "verify " + pinned, "install v0.1.31", "exec /g/upkeeper"}},
+		{"a failed update of the same program still converges", nil,
+			fakeUpdate{binary: "a", pin: testPin(), installErr: failure.Value("self-update is held")},
+			false, "", "update to the pinned binary skipped", []string{"load " + refreshed, "verify " + pinned, "install v0.1.31"}},
+		{"the same program on a held host converges without updating", nil,
+			fakeUpdate{binary: "a", pin: testPin(), held: "/h/homelab.hold"},
+			false, "", "", []string{"load " + refreshed}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			fake := test.fake
+			previous := newSelfUpdate
+			t.Cleanup(func() { newSelfUpdate = previous })
+			newSelfUpdate = func() (*selfUpdate, error) { return fake.seam(), nil }
+			var notice bytes.Buffer
+			replaced, err := programUpdate("/checkout", "homelab", refreshed, test.verified, &notice)
+			if replaced != test.replaced {
+				t.Errorf("replaced=%v", replaced)
+			}
+			switch {
+			case test.expected == "" && err != nil:
+				t.Errorf("error %v", err)
+			case test.expected != "" && (err == nil || !strings.Contains(err.Error(), test.expected)):
+				t.Errorf("error %v, want %q", err, test.expected)
+			}
+			if !strings.Contains(notice.String(), test.notice) || (test.notice == "" && notice.Len() != 0) {
+				t.Errorf("notice %q, want %q", notice.String(), test.notice)
+			}
+			if !slices.Equal(fake.steps, test.steps) {
+				t.Errorf("steps %v, want %v", fake.steps, test.steps)
+			}
+		})
 	}
 }
 
@@ -254,7 +317,7 @@ func TestAChangedProgramSelfUpdatesAndReexecutes(t *testing.T) {
 	newSelfUpdate = func() (*selfUpdate, error) { return seam, nil }
 
 	refusal := failure.Wrap(selfconv.ErrProgramDiffers, failure.KindValue, "program differs")
-	replaced, err := programUpdate("/checkout", commit, refusal)
+	replaced, err := programUpdate("/checkout", "homelab", commit, refusal, io.Discard)
 	if err != nil || !replaced {
 		t.Fatalf("replaced=%v err=%v steps=%v", replaced, err, fake.steps)
 	}
@@ -282,7 +345,7 @@ func TestSelfStatusAndARollbackWithNothingToRestore(t *testing.T) {
 	if code := Main("upkeeper", []string{"self", "rollback"}, Streams{Out: &out, Err: &errs}); code != exitcode.Preflight {
 		t.Fatalf("rollback exit %d", code)
 	}
-	if !strings.Contains(errs.String(), "no previous upkeeper generation") {
+	if !strings.Contains(errs.String(), "nothing to roll back") {
 		t.Errorf("rollback refusal %q", errs.String())
 	}
 	out.Reset()

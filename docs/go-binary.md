@@ -206,13 +206,21 @@ A release may pin UpKeeper's own binary in an optional `upkeeper` component:
 
 Releases without it load, converge and roll back as before. The component is
 not in the convergence order and `--components` cannot select it: the agent
-never converges it. The published-manifest gate (the first CI job) proves that
-the pin's `source_commit` holds the same program as the commit under test, by
-requiring `git diff --quiet <source_commit> HEAD -- go.mod go.sum cmd internal`.
+never converges it. On every commit that changes `desired/release.json`, the
+published-manifest gate (the first CI job) proves that the pin's
+`source_commit` holds the same program as the commit under test, by requiring
+`git diff --quiet <source_commit> HEAD -- go.mod go.sum cmd internal`. A commit
+that changes only the program is not held to it, because its binary is tagged
+and built from it afterwards; on such a commit hosts refuse the stale pin, as
+below, until a release commit pins the new binary.
 
 When `self-pull`'s program check finds an identified, clean binary whose
 program differs from the refreshed checkout, and the release at that checkout
-pins a binary, the host updates itself instead of exiting 30:
+pins a binary, the host updates itself instead of exiting 30. It also updates
+when the program is the same but the binary was built from another commit than
+the pin, because the SSH program fence below compares commits; a failure of
+that update is reported on stderr and convergence continues. No self-update
+runs while the host has a scheduled hold marker.
 
 1. The pin's own program is compared with the checkout again.
 2. The asset for this architecture is downloaded from
@@ -254,7 +262,11 @@ By hand:
   binary predates self-update: stage the verified artifact anywhere, then run
   it with this command.
 - `upkeeper self rollback` makes the previous generation current again; a
-  second rollback undoes the first.
+  second rollback undoes the first. It refuses when `~/.local/bin/upkeeper` is
+  not the managed link. Every rollback, by hand or after a failed update,
+  writes `~/.local/lib/upkeeper/held`, and while it exists self-pull installs
+  nothing (a changed program exits 30; the same program converges). `self
+  install` releases it, or the operator removes the file after observing.
 - `upkeeper self status [--json]` reports the binary path, the generations and
   which is current and previous.
 

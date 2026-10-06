@@ -109,14 +109,16 @@ func (i *Installer) Apply(pin *release.ProgramPin) (Result, error) {
 	}
 	var result Result
 	err := i.locked(func() error {
+		// A rollback is an operator's or a failed update's decision, and an
+		// automatic update may not undo it on the next scheduled run.
+		if reason, held := i.held(); held {
+			return failure.Value(
+				"self-update is held (%s); observe this host, then install a binary with "+
+					"`upkeeper self install` or remove %s", reason, i.Layout.Hold())
+		}
 		// An unrecoverable current does not block an install: the switch
 		// below replaces it, and it is never kept as the previous generation.
 		_ = i.recover()
-		adopted, err := i.adopt()
-		if err != nil {
-			return err
-		}
-		result.Adopted = adopted
 		name := asset.SHA256
 		if !i.Layout.validGeneration(name) {
 			staged, cleanup, err := i.fetch(pin.URL(i.BaseURL, target), asset)
@@ -138,17 +140,22 @@ func (i *Installer) Apply(pin *release.ProgramPin) (Result, error) {
 			// its name alone: its name proves its bytes, not what they say.
 			return err
 		}
+		// Adoption happens only once the new binary is verified and
+		// installed, so that a refusal leaves an unmanaged host unmanaged.
+		adopted, err := i.adopt()
+		if err != nil {
+			return err
+		}
+		result.Adopted = adopted
 		switched, err := i.switchTo(name, "apply "+pin.Tag)
 		if err != nil {
 			return err
 		}
 		result.Switched = switched
+		result = i.describe(result)
 		return nil
 	})
-	if err != nil {
-		return result, err
-	}
-	return i.describe(result), nil
+	return result, err
 }
 
 // InstallFile installs a binary that is already on this machine, such as the
@@ -195,12 +202,14 @@ func (i *Installer) InstallFile(path, expectSHA256, versionLine string) (Result,
 			return err
 		}
 		result.Switched = switched
+		// An explicit install is the operator's answer to a held update.
+		if err := os.Remove(i.Layout.Hold()); err == nil {
+			i.journal(map[string]any{"event": "release-hold", "reason": "self install"})
+		}
+		result = i.describe(result)
 		return nil
 	})
-	if err != nil {
-		return result, err
-	}
-	return i.describe(result), nil
+	return result, err
 }
 
 // Rollback makes the previous generation current again, and the generation it
@@ -211,18 +220,44 @@ func (i *Installer) Rollback(reason string) (Result, error) {
 		if err := i.recover(); err != nil {
 			return err
 		}
+		// A binary somebody put in place by hand is not a generation; linking
+		// over it would destroy it rather than roll anything back.
+		if target, err := os.Readlink(i.Layout.Binary()); err != nil || target != binaryLink {
+			return failure.Value("%s is not managed by generations; nothing to roll back",
+				i.Layout.Binary())
+		}
 		previous := i.Layout.PreviousGeneration()
-		if previous == "" || !i.Layout.validGeneration(previous) {
+		if previous == "" || !i.Layout.validGeneration(previous) ||
+			previous == i.Layout.CurrentGeneration() {
 			return failure.Value("there is no previous upkeeper generation to roll back to")
+		}
+		// The hold goes first: a crash after it and before the switch holds
+		// updates on the old binary, which is the conservative outcome.
+		if err := fsatomic.WriteFile(i.Layout.Hold(),
+			[]byte("rolled back from "+i.Layout.CurrentGeneration()+": "+reason+"\n"), 0o600); err != nil {
+			return failure.Value("cannot record the rollback hold: %v", err)
 		}
 		switched, err := i.switchTo(previous, "rollback: "+reason)
 		result.Switched = switched
+		if err == nil {
+			result = i.describe(result)
+		}
 		return err
 	})
+	return result, err
+}
+
+// held reports the rollback hold, which stops Apply until an operator acts.
+func (i *Installer) held() (string, bool) {
+	content, err := os.ReadFile(i.Layout.Hold())
 	if err != nil {
-		return result, err
+		return "", false
 	}
-	return i.describe(result), nil
+	reason := strings.TrimSpace(string(content))
+	if reason == "" {
+		reason = "rolled back"
+	}
+	return reason, true
 }
 
 // Recover repairs an installation an interrupted switch left behind: stray
@@ -298,13 +333,11 @@ func (i *Installer) installGeneration(staged, name string, record identity) erro
 	}
 	_ = fsatomic.SyncDirectory(directory)
 	final := i.Layout.Generation(name)
-	// A directory of this name that did not validate is debris from an
-	// earlier interruption; it cannot be current, because recovery never
-	// leaves current on an invalid generation.
+	// A directory of this name is only replaced after it failed to verify, so
+	// it is debris from an interruption or a damaged copy. Even when current
+	// names it, nothing usable is lost: current already names nothing that
+	// runs, and the rename below makes it whole again.
 	if _, err := os.Lstat(final); err == nil {
-		if name == i.Layout.CurrentGeneration() || name == i.Layout.PreviousGeneration() {
-			return failure.Value("generation %s is in use but does not verify; inspect it", name)
-		}
 		if err := removeGeneration(final); err != nil {
 			return failure.Value("cannot remove the incomplete generation %s: %v", name, err)
 		}
@@ -413,6 +446,12 @@ func (i *Installer) adopt() (string, error) {
 		}
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(filepath.Dir(path), target)
+		}
+		// A link into this installation, spelled some other way, is already
+		// a generation; adopting it would make a link through current to
+		// itself, or one that dangles once its generation is pruned.
+		if strings.HasPrefix(filepath.Clean(target), i.Layout.Root()+string(filepath.Separator)) {
+			return "", nil
 		}
 		if err := os.Symlink(target, staged); err != nil {
 			return "", failure.Value("cannot record the adopted link: %v", err)

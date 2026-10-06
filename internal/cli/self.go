@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,8 @@ type selfUpdate struct {
 	exec         selfupdate.ExecFunc
 	// converge is selfconv.ConvergeSelfAfterUpdate.
 	converge func(root string, details map[string]any) (map[string]any, int, error)
+	// scheduledHold names this host's scheduled hold marker when it exists.
+	scheduledHold func(host string) (string, bool)
 }
 
 // newSelfUpdate builds the production seam. It is a variable so that a test
@@ -65,26 +68,29 @@ var newSelfUpdate = func() (*selfUpdate, error) {
 		converge: func(root string, details map[string]any) (map[string]any, int, error) {
 			return selfconv.ConvergeSelfAfterUpdate(root, procx.Run, details)
 		},
+		scheduledHold: func(host string) (string, bool) {
+			directory, err := selfconv.HoldDirectory()
+			if err != nil {
+				// An unknowable hold is treated as present.
+				return "(hold directory unavailable)", true
+			}
+			marker := selfconv.HoldPath(directory, host)
+			if _, err := os.Lstat(marker); err != nil {
+				return "", false
+			}
+			return marker, true
+		},
 	}, nil
 }
 
 // updateProgram replaces this binary with the one the gated release pins and
-// re-executes it. It is called only when VerifyProgram found an identified,
-// clean binary whose program differs from the refreshed checkout's.
+// re-executes it.
 //
 // It returns replaced=true only when the exec returned without an error,
 // which a real exec never does; the error is the refusal to report otherwise.
-// Nothing here converges a component: a refusal leaves the host exactly as
-// the scheduled refusal before self-update did, on the program it was running.
-func (s *selfUpdate) updateProgram(root, refreshed string, refusal error) (bool, error) {
-	pin, err := s.loadPin(root, refreshed)
-	if err != nil {
-		return false, err
-	}
-	if pin == nil {
-		return false, failure.Wrap(refusal, failure.KindValue,
-			"%s; the release at %s pins no upkeeper binary to update to", refusal.Error(), refreshed)
-	}
+// Nothing here converges a component: a refusal leaves the host on the
+// program it was running.
+func (s *selfUpdate) updateProgram(root, refreshed string, pin *release.ProgramPin) (bool, error) {
 	// The gate already proved this; it is proved again here because this is
 	// the moment a host acts on it.
 	if err := s.verify(root, pin.SourceCommit, refreshed); err != nil {
@@ -149,17 +155,49 @@ func (s *selfUpdate) afterUpdate(root, commit string) (map[string]any, int, erro
 	})
 }
 
-// programUpdate decides what a self-pull does when VerifyProgram refused: a
-// changed program is updated, anything else stays the refusal it was.
-func programUpdate(root, refreshed string, refusal error) (bool, error) {
-	if !errors.Is(refusal, selfconv.ErrProgramDiffers) {
-		return false, refusal
+// programUpdate decides what a self-pull does with VerifyProgram's answer.
+//
+// A changed program is updated to the pinned binary, and without a pin it
+// stays the refusal it always was; any other refusal is returned unchanged.
+// An unchanged program built from another commit than the pin is updated
+// too, because the agent's program fence compares commits and a host left on
+// it would be refused by every controller pull; a failure of that update is
+// reported on notice and convergence goes on, since the program is the gated
+// one either way. A scheduled hold on this host stops every self-update: the
+// host is waiting for an operator, not for a newer binary.
+func programUpdate(root, host, refreshed string, verified error, notice io.Writer) (bool, error) {
+	if verified != nil && !errors.Is(verified, selfconv.ErrProgramDiffers) {
+		return false, verified
 	}
 	updater, err := newSelfUpdate()
 	if err != nil {
 		return false, err
 	}
-	return updater.updateProgram(root, refreshed, refusal)
+	pin, err := updater.loadPin(root, refreshed)
+	if err != nil {
+		return false, err
+	}
+	if verified == nil && (pin == nil || updater.binaryCommit() == pin.SourceCommit) {
+		return false, nil
+	}
+	if pin == nil {
+		return false, failure.Wrap(verified, failure.KindValue,
+			"%s; the release at %s pins no upkeeper binary to update to", verified.Error(), refreshed)
+	}
+	if marker, held := updater.scheduledHold(host); held {
+		if verified != nil {
+			return false, failure.Wrap(verified, failure.KindValue,
+				"%s; self-update skipped while the scheduled hold %s is present", verified.Error(), marker)
+		}
+		return false, nil
+	}
+	replaced, err := updater.updateProgram(root, refreshed, pin)
+	if err != nil && verified == nil {
+		fmt.Fprintf(notice, "upkeeper self-pull: update to the pinned binary skipped, "+
+			"converging with the same program: %s\n", firstLineOf(err.Error()))
+		return false, nil
+	}
+	return replaced, err
 }
 
 // runSelf is `upkeeper self install|rollback|status`.
