@@ -199,7 +199,9 @@ Deferral is drift (exit 10), not convergence. A fresh check is repeated after np
 before restart. This is a point-in-time guard, not a scheduler admission lock.
 The steward component restarts t3-steward-worker.service onto a newly installed binary
 only when `t3-steward worker inspect-journal` reports zero dispatched and zero
-settle-pending attempts; otherwise the restart is deferred. While the running worker's
+settle-pending attempts; otherwise the restart is deferred. Each count must be a
+non-negative integer in plain decimal digits; a fractional, negative, exponent or
+out-of-range count fails the pass without restarting. While the running worker's
 executable (`/proc/<MainPID>/exe`) is no longer the file installed at its path, status
 reports the component as drift ("worker restart pending"), and each later pass retries
 the restart under the same idle rule.

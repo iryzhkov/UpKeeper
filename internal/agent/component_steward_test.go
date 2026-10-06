@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -452,6 +453,75 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 				t.Fatalf("actions %v do not report %q", actions, test.action)
 			}
 		})
+	}
+}
+
+// A count is a non-negative integer. A fractional, negative, exponent or
+// out-of-range count is malformed evidence: it must never be read as zero and
+// authorize a restart, on the first pass or on the retry after a deferral.
+func TestStewardRefusesMalformedJournalCounts(t *testing.T) {
+	malformed := []string{
+		`0.5`, `-0.5`, `-1`, `-0`, `0.0`, `1e0`, `0e0`, `9223372036854775808`,
+		`99999999999999999999`, `"-1"`, `"+0"`, `"0.5"`, `""`, `true`, `null`,
+	}
+	for _, field := range []string{"dispatched", "settlePending"} {
+		for _, value := range malformed {
+			counts := map[string]string{"dispatched": "0", "settlePending": "0"}
+			counts[field] = value
+			journal := fmt.Sprintf(`{"dispatched":%s,"settlePending":%s}`,
+				counts["dispatched"], counts["settlePending"])
+			t.Run("first pass "+journal, func(t *testing.T) {
+				context, runner := stewardTestPrepare(t, stewardTestHost{
+					active: true, workerLoaded: true, dispatched: journal,
+				})
+				actions := []string{}
+				restarted, err := stewardRestartPersistentWorker(
+					context, context.Path(".local/bin/t3-steward"), &actions)
+				if err == nil || !strings.Contains(err.Error(), "no usable summary") {
+					t.Fatalf("want a refusal, got %v (actions %v)", err, actions)
+				}
+				if restarted || runner.ran("restart", stewardWorkerUnit) {
+					t.Fatalf("restarted the worker on a malformed count: %v", runner.calls)
+				}
+			})
+			t.Run("retry "+journal, func(t *testing.T) {
+				context, runner := stewardTestPrepare(t, stewardTestHost{
+					active: true, workerLoaded: true, workerPID: "4242", dispatched: journal,
+				})
+				spec := stewardTestSpec(false)
+				context.Components["t3-steward"] = spec
+				adapterTestWrite(t, context.Path(".local/bin/t3-steward"), stewardTestBinary)
+				previous := context.Path("previous-t3-steward")
+				adapterTestWrite(t, previous, "#!/bin/sh\necho previous steward\n")
+				stewardTestRunningWorker(t, context, previous)
+				stewardTestServe(t, nil, "")
+				before, err := stewardObserve(context, spec)
+				if err != nil {
+					t.Fatalf("observe: %v", err)
+				}
+				actions := []string{}
+				if state, err := stewardApply(context, spec, before, &actions); err == nil {
+					t.Fatalf("state = %q with no error on a malformed count (actions %v)", state, actions)
+				}
+				if runner.ran("restart", stewardWorkerUnit) {
+					t.Fatalf("restarted the worker on a malformed count: %v", runner.calls)
+				}
+			})
+		}
+	}
+	// Well-formed counts keep working, including the largest representable one.
+	for _, journal := range []string{
+		`{"dispatched":0,"settlePending":0}`, `{"dispatched":"0","settlePending":"0"}`,
+		fmt.Sprintf(`{"dispatched":%d,"settlePending":0}`, math.MaxInt),
+	} {
+		context, _ := stewardTestPrepare(t, stewardTestHost{
+			active: true, workerLoaded: true, dispatched: journal,
+		})
+		actions := []string{}
+		if _, err := stewardRestartPersistentWorker(
+			context, context.Path(".local/bin/t3-steward"), &actions); err != nil {
+			t.Errorf("%s was refused: %v", journal, err)
+		}
 	}
 }
 

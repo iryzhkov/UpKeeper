@@ -797,21 +797,25 @@ func stewardRestartPersistentWorker(c *Context, binary string, actions *[]string
 }
 
 // stewardJournalCount reads one attempt count from the worker journal summary.
+//
+// A count is a non-negative integer written in decimal digits alone, as a JSON
+// number or a string, that fits in an int. Anything else is malformed: a
+// fractional, negative, signed, exponent or out-of-range value must never be
+// read as zero, because zero authorizes a worker restart.
 func stewardJournalCount(document map[string]any, field string) (int, bool) {
+	var text string
 	switch typed := document[field].(type) {
 	case json.Number:
-		number, err := typed.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return int(number), true
+		text = typed.String()
 	case string:
-		number, err := strconv.Atoi(typed)
-		if err != nil {
-			return 0, false
-		}
-		return number, true
+		text = typed
 	default:
 		return 0, false
 	}
+	// ParseUint accepts neither a sign, a fraction nor an exponent.
+	number, err := strconv.ParseUint(text, 10, strconv.IntSize-1)
+	if err != nil {
+		return 0, false
+	}
+	return int(number), true
 }
