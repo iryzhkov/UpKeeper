@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Run the Go race detector over the whole module as three exhaustive, fixed groups.
+"""Run the Go race detector over the whole module as four exhaustive, fixed groups.
 
 The race gate is the same coverage as `go test -race ./...`: every package and every
 runnable top-level test, fuzz target and example. It is divided only so that the
 author package, whose single race binary outgrew the default ten-minute alarm on the
-hosted runner, runs as two separately timed binaries:
+hosted runner, runs as three separately timed binaries:
 
-* author-catalog: the author package's runnable names that start with TestCatalog;
+* author-baseline: the author package's runnable names that start with
+  TestCatalogBaseline;
+* author-catalog: the author package's remaining runnable names that start with
+  TestCatalog;
 * author-other: the author package's remaining runnable names, fuzz and examples
   included;
 * other-packages: every other package that `go list -race ./...` reports.
@@ -39,7 +42,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULE = "github.com/iryzhkov/UpKeeper"
 AUTHOR_PACKAGE = f"{MODULE}/internal/author"
 CATALOG_PREFIX = "TestCatalog"
-GROUPS = ("author-catalog", "author-other", "other-packages")
+BASELINE_PREFIX = "TestCatalogBaseline"
+GROUPS = ("author-baseline", "author-catalog", "author-other", "other-packages")
 MODES = ("all", *GROUPS, "plan")
 
 # The go command the runner invokes. Tests replace it with a finite fake program;
@@ -225,21 +229,34 @@ def check_argv(group: str, argv: list[str]) -> None:
 
 
 def partition(packages: list[str], runnable: list[str]) -> dict[str, dict]:
-    catalog = [name for name in runnable if name.startswith(CATALOG_PREFIX)]
+    baseline = [name for name in runnable if name.startswith(BASELINE_PREFIX)]
+    catalog = [
+        name
+        for name in runnable
+        if name.startswith(CATALOG_PREFIX) and not name.startswith(BASELINE_PREFIX)
+    ]
     other = [name for name in runnable if not name.startswith(CATALOG_PREFIX)]
     rest = [package for package in packages if package != AUTHOR_PACKAGE]
-    if not catalog or not other:
+    if not baseline or not catalog or not other:
         raise InventoryError(
-            f"both author groups must be nonempty (catalog {len(catalog)}, other {len(other)})"
+            "every author group must be nonempty "
+            f"(baseline {len(baseline)}, catalog {len(catalog)}, other {len(other)})"
         )
-    if set(catalog) & set(other) or set(catalog) | set(other) != set(runnable):
+    author = (set(baseline), set(catalog), set(other))
+    overlap = any(a & b for i, a in enumerate(author) for b in author[i + 1 :])
+    if overlap or set().union(*author) != set(runnable):
         raise InventoryError("the author groups are not an exact partition of the inventory")
-    if len(catalog) + len(other) != len(runnable):
+    if len(baseline) + len(catalog) + len(other) != len(runnable):
         raise InventoryError("the author groups do not account for every name once")
     if not rest or set(rest) | {AUTHOR_PACKAGE} != set(packages):
         raise InventoryError("the other-packages group is not the package set less author")
     base = [*_GO, "test", "-race", "-count=1", "-json"]
     groups = {
+        "author-baseline": {
+            "packages": [AUTHOR_PACKAGE],
+            "tests": baseline,
+            "argv": [*base, "-run", anchored(baseline), AUTHOR_PACKAGE],
+        },
         "author-catalog": {
             "packages": [AUTHOR_PACKAGE],
             "tests": catalog,
@@ -282,6 +299,7 @@ def inventory(runner: Runner) -> dict:
         "counts": {
             "packages": len(packages),
             "author_runnable": len(runnable),
+            "author-baseline": len(groups["author-baseline"]["tests"]),
             "author-catalog": len(groups["author-catalog"]["tests"]),
             "author-other": len(groups["author-other"]["tests"]),
             "other-packages": len(groups["other-packages"]["packages"]),
@@ -364,7 +382,7 @@ def write_receipt(path: Path | None, document: dict) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the Go race detector as three exhaustive, fixed groups."
+        description="Run the Go race detector as four exhaustive, fixed groups."
     )
     parser.add_argument("--group", required=True, choices=MODES)
     parser.add_argument("--receipt", type=Path, help="also write the receipt to this new file")

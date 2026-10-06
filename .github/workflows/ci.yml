@@ -26,7 +26,7 @@ jobs:
         run: go test -count=1 -run '^TestCurrentPublishedManifestValidatesAndIsCanonical$' ./internal/release
 
   # The race detector covers every package and every runnable test, divided into
-  # three exhaustive groups that the script derives and checks on each run, so
+  # four exhaustive groups that the script derives and checks on each run, so
   # that each group is its own race binary under the default ten-minute alarm.
   # Every group must pass; fail-fast is off so one failure does not hide another.
   go-race:
@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [author-catalog, author-other, other-packages]
+        group: [author-baseline, author-catalog, author-other, other-packages]
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
