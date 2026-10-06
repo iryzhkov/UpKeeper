@@ -3,6 +3,7 @@ package inventory_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,8 +37,14 @@ func TestTheFleetsOwnSourcesOfTruthLoad(t *testing.T) {
 	if len(config.Components()) == 0 {
 		t.Error("the desired component set is empty")
 	}
-	if names := config.HostNames(); len(names) != 4 || names[0] != "homelab" {
-		t.Errorf("host order is not deterministic: %v", names)
+	// The fleet grows, so this checks the order rather than a host count: the
+	// names are every inventory host, sorted, and the same on every call.
+	names := config.HostNames()
+	if len(names) != len(config.Hosts) || !slices.IsSorted(names) {
+		t.Errorf("host names are not every host in sorted order: %v", names)
+	}
+	if again := config.HostNames(); !slices.Equal(names, again) {
+		t.Errorf("host order is not deterministic: %v then %v", names, again)
 	}
 }
 
