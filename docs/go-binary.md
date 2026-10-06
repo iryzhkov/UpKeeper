@@ -225,7 +225,9 @@ ignored only when it is proven not to be compiled: a `*_test.go` file, or a
 non-Go file under a `testdata` directory that holds no non-test Go file, and
 in either case one that no `//go:embed` directive of a non-test Go file at
 either commit can match. A non-test Go file under `testdata` counts, because a
-production package can import its package explicitly. A host refuses a stale pin whole, as
+production package can import its package explicitly. When either commit has a
+cgo file or an assembly, C or other non-Go source the go command compiles, no
+`testdata` file is ignored, because an `#include` can reach it. A host refuses a stale pin whole, as
 it refused a changed program before self-update: exit 30, a message that says
 the pin is stale and the host keeps its binary, and nothing downloaded,
 adopted or switched, with any hold left as it was. The next release that pins

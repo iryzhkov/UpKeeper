@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
@@ -33,7 +34,9 @@ var programEmbedDirective = regexp.MustCompile(`^[ \t]*//go:embed(?:[ \t]+(.*))?
 //   - a file under a testdata directory that is not a Go file, whose
 //     directory holds no non-test Go file (a package there can be imported
 //     explicitly, and files beside its Go files can be compiled with it), and
-//     that no //go:embed directive can match.
+//     that no //go:embed directive can match. When either commit has a cgo
+//     Go file or a non-Go source the go command compiles (assembly, C and
+//     the like), no such file is ignored: an #include can reach it anywhere.
 //
 // Every other changed path, including a non-test Go file under testdata,
 // changes the program. A directive this function cannot parse makes every
@@ -65,6 +68,7 @@ func ProgramDiffers(git ProgramGit, from, to string) (bool, error) {
 	}
 	packages := map[string]bool{}
 	embeds := []programEmbed{}
+	includes := false
 	for _, commit := range []string{from, to} {
 		files := git(append([]string{"ls-tree", "-r", "-z", "--name-only", commit, "--"},
 			ProgramPaths...)...)
@@ -75,15 +79,23 @@ func ProgramDiffers(git ProgramGit, from, to string) (bool, error) {
 			if isProgramSource(name) {
 				packages[path.Dir(name)] = true
 			}
+			if programForeignSources[path.Ext(name)] {
+				includes = true
+			}
 		}
 		found, err := programEmbeds(git, commit)
 		if err != nil {
 			return false, err
 		}
 		embeds = append(embeds, found...)
+		cgo, err := programUsesCgo(git, commit)
+		if err != nil {
+			return false, err
+		}
+		includes = includes || cgo
 	}
 	for _, name := range candidates {
-		if !strings.HasSuffix(path.Base(name), "_test.go") && packages[path.Dir(name)] {
+		if !strings.HasSuffix(path.Base(name), "_test.go") && (includes || packages[path.Dir(name)]) {
 			return true, nil
 		}
 		for _, embed := range embeds {
@@ -106,6 +118,43 @@ func testOnlyCandidate(name string) bool {
 		return false
 	}
 	return slices.Contains(strings.Split(path.Dir(name), "/"), "testdata")
+}
+
+// programForeignSources are the non-Go file extensions the go command
+// compiles in a package (go/build's lists). Any of them can #include a file
+// from anywhere in the tree.
+var programForeignSources = map[string]bool{
+	".c": true, ".cc": true, ".cpp": true, ".cxx": true, ".m": true,
+	".h": true, ".hh": true, ".hpp": true, ".hxx": true,
+	".f": true, ".F": true, ".for": true, ".f90": true,
+	".s": true, ".S": true, ".sx": true, ".swig": true, ".swigcxx": true, ".syso": true,
+}
+
+// programGrep runs git grep over the non-test Go files under ProgramPaths at
+// one commit. Every file is read as text whatever git's attributes say, so a
+// file marked binary cannot hide a directive, and the output format does not
+// depend on the user's grep configuration. found is false when nothing matched.
+func programGrep(git ProgramGit, commit string, options ...string) (string, bool, error) {
+	arguments := append([]string{"grep", "--text", "--no-color", "--no-line-number", "-z"},
+		options...)
+	arguments = append(arguments, commit, "--")
+	for _, name := range ProgramPaths {
+		arguments = append(arguments, ":(glob)"+name+"/**/*.go")
+	}
+	arguments = append(arguments, ":(exclude,glob)**/*_test.go")
+	result := git(arguments...)
+	if result.Err != nil || (result.Code != 0 && result.Code != 1) {
+		return "", false, ErrProgramIncomparable
+	}
+	return result.Stdout, result.Code == 0, nil
+}
+
+// programUsesCgo reports whether a non-test Go file may import "C". It only
+// looks for the literal, so a mention in a comment or string counts as well:
+// that costs nothing but a needlessly conservative comparison.
+func programUsesCgo(git ProgramGit, commit string) (bool, error) {
+	_, found, err := programGrep(git, commit, "-l", "-F", "-e", `"C"`)
+	return found, err
 }
 
 func isProgramSource(name string) bool {
@@ -156,20 +205,12 @@ func (e programEmbed) matches(name string) bool {
 // programEmbeds lists the //go:embed directives of the non-test Go files under
 // ProgramPaths at one commit.
 func programEmbeds(git ProgramGit, commit string) ([]programEmbed, error) {
-	arguments := []string{"grep", "-z", "-I", "-E", `^[[:space:]]*//go:embed`, commit, "--"}
-	for _, name := range ProgramPaths {
-		arguments = append(arguments, ":(glob)"+name+"/**/*.go")
-	}
-	arguments = append(arguments, ":(exclude,glob)**/*_test.go")
-	result := git(arguments...)
-	if result.Err != nil || (result.Code != 0 && result.Code != 1) {
-		return nil, ErrProgramIncomparable
-	}
-	if result.Code == 1 {
-		return nil, nil
+	output, found, err := programGrep(git, commit, "-E", "-e", `^[[:space:]]*//go:embed`)
+	if err != nil || !found {
+		return nil, err
 	}
 	embeds := []programEmbed{}
-	for _, line := range strings.Split(result.Stdout, "\n") {
+	for _, line := range strings.Split(output, "\n") {
 		if line == "" {
 			continue
 		}
@@ -180,7 +221,8 @@ func programEmbeds(git ProgramGit, commit string) ([]programEmbed, error) {
 			return nil, ErrProgramIncomparable
 		}
 		embed := programEmbed{dir: path.Dir(name)}
-		match := programEmbedDirective.FindStringSubmatch(text)
+		// The go command drops carriage returns from comments.
+		match := programEmbedDirective.FindStringSubmatch(strings.ReplaceAll(text, "\r", ""))
 		if match == nil {
 			// For example "//go:embedded": not a directive, but nothing is
 			// lost by counting its package's whole tree.
@@ -199,6 +241,13 @@ func programEmbeds(git ProgramGit, commit string) ([]programEmbed, error) {
 // space-separated, each optionally a Go string literal, with an optional
 // "all:" prefix.
 func embedPatterns(arguments string) ([]string, bool) {
+	// The go command splits on any Unicode space; anything but a space or a
+	// tab, or any other control character, is left to the generous fallback.
+	if strings.IndexFunc(arguments, func(r rune) bool {
+		return r != ' ' && r != '\t' && (unicode.IsSpace(r) || unicode.IsControl(r))
+	}) >= 0 {
+		return nil, false
+	}
 	patterns := []string{}
 	rest := strings.TrimLeft(arguments, " \t")
 	for rest != "" {

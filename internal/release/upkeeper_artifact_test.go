@@ -324,6 +324,48 @@ func TestAFileBesideAHelperUnderTestdataIsPartOfTheProgram(t *testing.T) {
 	}
 }
 
+// The comparison must read every directive the go command reads: one in a
+// file with CRLF line endings, and one in a file git's attributes call binary.
+// And a fixture a cgo or assembly source can include is compiled wherever it
+// lives.
+func TestEveryWayAFixtureIsCompiledIsPartOfTheProgram(t *testing.T) {
+	embed := "package a\n\nimport _ \"embed\"\n\n//go:embed testdata/x.txt\nvar Data string\n"
+	for _, test := range []struct {
+		name  string
+		files map[string]string
+		path  string
+	}{
+		{"a CRLF embed directive", map[string]string{
+			"internal/a/a.go": strings.ReplaceAll(embed, "\n", "\r\n"),
+		}, "internal/a/testdata/x.txt"},
+		{"an embed directive in a file git treats as binary", map[string]string{
+			".gitattributes": "*.go -diff\n", "internal/a/a.go": embed,
+		}, "internal/a/testdata/x.txt"},
+		{"a header a cgo preamble includes", map[string]string{
+			"internal/a/a.go": "package a\n\n// #include \"testdata/x.h\"\nimport \"C\"\n",
+		}, "internal/a/testdata/x.h"},
+		{"a file an assembly source includes", map[string]string{
+			"internal/a/a.go":       "package a\n",
+			"internal/a/a_amd64.s":  "#include \"testdata/x.h\"\n",
+			"internal/a/a_stub.go":  "package a\n\nfunc f()\n",
+			"internal/a/a_other.go": "package a\n",
+		}, "internal/a/testdata/x.h"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := map[string]string{"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n"}
+			for name, content := range test.files {
+				first[name] = content
+			}
+			first[test.path] = "one\n"
+			root, commits := gitRepository(t, first, map[string]string{test.path: "two\n"})
+			if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+				!strings.Contains(err.Error(), "differs") {
+				t.Errorf("a changed compiled fixture kept the program: %v", err)
+			}
+		})
+	}
+}
+
 // goRun runs the fixture's command when a Go toolchain is available, proving
 // that the fixture really compiles what the test says it does.
 func goRun(t *testing.T, root string) (string, bool) {
