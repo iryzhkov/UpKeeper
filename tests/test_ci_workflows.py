@@ -252,6 +252,19 @@ def test_release_gate_never_supersedes_a_failure_on_incomplete_evidence(failed, 
     assert not gate.passed([success, failed], "abc")
 
 
+@pytest.mark.parametrize("incomplete", [
+    without(run(2, "failure"), "headSha"), without(run(2, "failure"), headSha=None),
+    without(run(2, "failure"), "event"), without(run(2, "failure"), event=None),
+    without(run(2, "failure"), headSha=1),
+])
+def test_release_gate_refuses_an_entry_it_cannot_attribute(incomplete):
+    # gh filters on the commit and the event, so every entry carries both. An
+    # entry without them is malformed, not a run of another commit.
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide([run(3, "success"), incomplete], "abc")
+    assert decision == "fail", reasons
+
+
 def test_release_gate_orders_runs_by_time_not_by_text():
     gate = load_script("check-release-ci")
     failed = without(run(2, "failure"), createdAt="2026-10-06T16:00:00Z")

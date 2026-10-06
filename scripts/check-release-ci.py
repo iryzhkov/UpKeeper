@@ -51,8 +51,10 @@ def describe(run: dict) -> str:
 
 def decide(runs: object, commit: str) -> tuple[str, list[str]]:
     """Return "pass", "fail" or "wait", with one reason line per run considered."""
-    if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
-        return "fail", ["the run listing is malformed"]
+    if not isinstance(runs, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("headSha"), str)
+            and isinstance(r.get("event"), str) for r in runs):
+        return "fail", ["the run listing is malformed: every entry needs a headSha and an event"]
     candidates = [r for r in runs if r.get("headSha") == commit and r.get("event") == "push"]
     malformed = [r for r in candidates if not isinstance(r.get("status"), str)
                  or (r.get("status") == "completed"
