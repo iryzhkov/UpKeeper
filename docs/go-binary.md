@@ -193,6 +193,13 @@ the cross-builds for `linux/amd64` and `linux/arm64`. `make gate` still runs the
 Python reference gate. Both run in CI; the Go gate is a release blocker on its
 own.
 
+Local gates and GitHub release builds use exactly Go 1.26.8, pinned by the
+`go.mod` toolchain directive and forced by Make through `GOTOOLCHAIN`. The
+language directive stays `go 1.24` to preserve its GODEBUG defaults. Run
+`make ci-local` for the hosted job set and `make go-reproducible` to compare
+two clean clones with separate empty build caches. Both commands should run
+from clean committed source, with `TMPDIR` on an executable filesystem.
+
 `upkeeper version` prints the exact source commit the binary was built from.
 
 Release artifacts are built with `-trimpath`, which keeps the absolute path of

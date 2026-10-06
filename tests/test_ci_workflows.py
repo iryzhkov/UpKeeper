@@ -51,7 +51,11 @@ def test_ci_job_names_dependencies_and_local_coverage():
     assert ci["jobs"]["go-checks"]["needs"] == "manifest-gate"
     assert ci["jobs"]["go-race"]["needs"] == "manifest-gate"
     local = load_script("ci-local")
-    groups = ci["jobs"]["go-race"]["strategy"]["matrix"]["group"]
+    race = ci["jobs"]["go-race"]
+    assert race["name"] == "go-race (${{ matrix.group }})"
+    assert race["strategy"]["fail-fast"] is False
+    groups = race["strategy"]["matrix"]["group"]
+    assert groups == ["author-catalog", "author-other", "other-packages"]
     assert list(local.TARGETS) == [
         ("ci-manifest",), ("ci-go-checks",),
         *[("ci-race", f"GROUP={group}") for group in groups],
@@ -59,8 +63,22 @@ def test_ci_job_names_dependencies_and_local_coverage():
     ]
 
 
+@pytest.mark.parametrize("path", sorted([
+    *ROOT.glob(".github/workflows/*.yml"),
+    *ROOT.glob(".github/workflows/*.yaml"),
+    *ROOT.glob(".forgejo/workflows/*.yml"),
+    *ROOT.glob(".forgejo/workflows/*.yaml"),
+]), ids=lambda path: str(path.relative_to(ROOT)))
+def test_every_workflow_action_uses_a_full_commit_sha(path):
+    document = yaml.safe_load(path.read_text())
+    for job in document["jobs"].values():
+        for step in job.get("steps", []):
+            if "uses" in step:
+                assert re.fullmatch(r"[^@]+@[0-9a-fA-F]{40}", step["uses"]), step["uses"]
+
+
 def test_workflows_derive_exact_compiler_from_go_mod():
-    assert re.search(r"^toolchain go1\.25\.7$", (ROOT / "go.mod").read_text(), re.M)
+    assert re.search(r"^toolchain go1\.26\.8$", (ROOT / "go.mod").read_text(), re.M)
     for name in ("ci.yml", "release.yml"):
         setups = [step["with"] for job in workflow(name)["jobs"].values()
                   for step in job["steps"] if step.get("uses", "").startswith("actions/setup-go@")]
@@ -111,6 +129,9 @@ def test_release_authorizes_before_build_and_attests_both_binaries_before_publis
     build_index = runs.index("make go-cross")
     attest_index = next(i for i, step in enumerate(steps)
                         if step.get("uses", "").startswith("actions/attest-build-provenance@"))
+    assert steps[attest_index]["uses"] == (
+        "actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f"
+    )
     publish_index = next(i for i, step in enumerate(steps)
                          if step["name"] == "Publish the release")
     assert gate_index < build_index < attest_index < publish_index
