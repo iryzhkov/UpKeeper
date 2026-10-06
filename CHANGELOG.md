@@ -8,6 +8,21 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- Digest-verified self-update. A release may pin UpKeeper's own binary in an
+  optional `upkeeper` component (tag, source commit, toolchain, and per
+  architecture the asset, size and sha256). When `self-pull` finds that the
+  running binary's program differs from the gated checkout's, it downloads the
+  pinned asset, refuses any size or digest that differs from the manifest,
+  probes its `version` with an empty `PATH`, installs it as a generation under
+  `~/.local/lib/upkeeper`, switches `current` atomically and re-executes it as
+  `self-pull --after-update COMMIT`, which converges. Failures leave `current`
+  unchanged or restore the previous generation. `upkeeper self install
+  --expect-sha256`, `self rollback` and `self status` manage the generations by
+  hand. The published-manifest gate proves the pin was built from the commit's
+  own program, `go.sum` now counts as program, remote agents refuse an
+  `expected_program_commit` they were not built from, and `status` and the
+  probe report each host's binary version, commit and generation.
+
 - `upkeeper author --steward VERSION --omarchy-setup COMMIT` writes an authored
   release into `desired/release.json` without capturing any host. It sets the
   Steward and omarchy-setup pins and refreshes the agent-environment skills and

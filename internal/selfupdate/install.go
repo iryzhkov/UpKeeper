@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -476,14 +477,15 @@ func (i *Installer) installLinkGeneration(staged, name string, record identity) 
 
 // recover is Recover without the lock, for callers that hold it.
 func (i *Installer) recover() error {
-	root := i.Layout.Root()
-	for _, directory := range []string{root, filepath.Dir(i.Layout.Binary())} {
+	// Only the temporary links replaceLink itself makes are removed; nothing
+	// else in ~/.local/bin belongs to this installation.
+	for _, link := range []string{i.Layout.Current(), i.Layout.Previous(), i.Layout.Binary()} {
+		directory := filepath.Dir(link)
+		prefix := "." + filepath.Base(link) + ".tmp-"
 		entries, _ := os.ReadDir(directory)
 		for _, entry := range entries {
-			name := entry.Name()
-			if len(name) > 0 && name[0] == '.' && entry.Type()&fs.ModeSymlink != 0 &&
-				containsTemporaryMarker(name) {
-				_ = os.Remove(filepath.Join(directory, name))
+			if strings.HasPrefix(entry.Name(), prefix) && entry.Type()&fs.ModeSymlink != 0 {
+				_ = os.Remove(filepath.Join(directory, entry.Name()))
 			}
 		}
 	}
@@ -509,15 +511,6 @@ func (i *Installer) recover() error {
 	i.journal(map[string]any{"event": "recover", "from": nullable(current), "to": previous,
 		"reason": "current named no complete generation"})
 	return nil
-}
-
-func containsTemporaryMarker(name string) bool {
-	for index := 0; index+5 <= len(name); index++ {
-		if name[index:index+5] == ".tmp-" {
-			return true
-		}
-	}
-	return false
 }
 
 // prune keeps current, previous and the most recently activated others up to

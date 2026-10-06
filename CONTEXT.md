@@ -18,7 +18,9 @@ release manifests, with historical companion files and current deployment safegu
 U2 adds pull --self. U3 schedules Normandy convergence. U4 refreshes GitHub-gated
 main and converges the self-managed laptop locally from its own timer, without
 controller SSH. See docs/laptop-self-convergence.md. Do not enroll workers as
-part of release distribution.
+part of release distribution. The legacy self-update path stays removed; self-pull
+now replaces its own binary only with the one the gated release pins by size and
+sha256 (docs/go-binary.md, "Self-update from the release pin").
 
 The subsequent user-authorized fleet decentralization extends the gated self timer
 to every inventory host. Each host refreshes and converges independently; Normandy

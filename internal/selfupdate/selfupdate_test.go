@@ -495,6 +495,10 @@ func TestCrashDebrisIsCleanedAndReplaced(t *testing.T) {
 	if err := os.Symlink("generations/"+update.sha(), temporary); err != nil {
 		t.Fatal(err)
 	}
+	foreign := filepath.Join(filepath.Dir(target.Layout.Binary()), ".other-tool.tmp-1")
+	if err := os.Symlink("elsewhere", foreign); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(target.Layout.Staging(), "stage-1"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -506,6 +510,9 @@ func TestCrashDebrisIsCleanedAndReplaced(t *testing.T) {
 	}
 	if _, err := os.Lstat(temporary); err == nil {
 		t.Error("the temporary link survived recovery")
+	}
+	if _, err := os.Lstat(foreign); err != nil {
+		t.Error("recovery removed a link it did not make")
 	}
 	if _, err := os.Stat(target.Layout.Staging()); err == nil {
 		t.Error("the staging directory survived recovery")
