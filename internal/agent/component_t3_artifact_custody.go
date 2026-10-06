@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/redact"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
@@ -44,6 +45,33 @@ func t3EvidenceText(s string) string {
 		s = s[:400]
 	}
 	return s
+}
+
+// t3Must runs a transaction command that has to succeed. Its failure becomes
+// custody evidence, so the complete output is redacted before any bound: the
+// tails Run and Must keep can cut a secret away from the label or delimiter
+// redaction needs and leave the secret itself behind.
+func t3Must(c *Context, argv []string, timeout time.Duration, what string) error {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	result := c.Runner(procx.Command{Argv: argv, Env: c.Env, Timeout: timeout})
+	var output string
+	switch {
+	case result.TimedOut:
+		output = "timeout"
+	case result.Err != nil:
+		output = result.Err.Error()
+	case result.Code == 0:
+		return nil
+	default:
+		output = strings.TrimSpace(result.Stdout + result.Stderr)
+	}
+	output = redact.Text(output)
+	if len(output) > 400 {
+		output = output[len(output)-400:]
+	}
+	return Failf("%s failed: %s", what, output)
 }
 
 // t3PredicateSample is the evidence of one readiness observation: each

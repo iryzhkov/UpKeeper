@@ -8,7 +8,10 @@ activation fails and how to close one that rollback left at `files-restored`.
 ## What a failed transaction retains
 
 - `cause` is the original failure, redacted as a whole and then bounded, so a
-  secret straddling the bound is still removed. It is journaled at
+  secret straddling the bound is still removed. The output of a failed
+  transaction command, such as the T3 restart, is likewise redacted complete
+  before it is cut to its tail, so no fragment of a long secret value survives
+  without the label redaction needs. It is journaled at
   `restoration-required`, before any rollback effect, and is never replaced by
   the restoration result.
 - `failed_samples` holds each failed readiness sample: the installed, served,
@@ -35,6 +38,19 @@ user bus is unreachable) is unknown, not inactive, and refuses the activation
 before any effect. Rollback keeps every dependent that was active when the
 transaction began as an obligation, even one that stopped after the failed
 restart, and does not report the service restored until each is active again.
+This holds when the T3 unit was inactive before the activation too: `PartOf=`
+does not stop a dependent from running on its own, rollback adds no restart to
+bring one back, and an original dependent not active again leaves the
+transaction at `files-restored`.
+
+Each journal record is published by atomically exchanging it with the record
+it supersedes (`renameat2` `RENAME_EXCHANGE`) and checking that the displaced
+record is the one expected: the same inode with the same bytes. If another
+writer replaced or changed the record meanwhile, the exchange is undone and the
+write refuses. If the directory sync after publication fails, the new record is
+withdrawn only while the journal is still exactly that record; a newer record
+from another writer is kept, together with the superseded record (named
+`.journal-*-previous` in the transaction directory) that recovery needs.
 
 A record written before this change has none of these fields. Its original
 cause was not retained and cannot be reconstructed.
@@ -51,7 +67,8 @@ explicitly, from the controller, for one host:
         --reconcile-t3-transaction .upkeeper-t3-NNNN
 
 The dry run performs every check and writes nothing. The real run restarts
-nothing and moves no file; it only rewrites `transaction.json` to phase
+nothing, moves no file and skips the legacy updater retirement every other pull
+performs; it only rewrites `transaction.json` to phase
 `restored`, adding a `reconciliation` record and embedding the previous record
 and its SHA-256 under `reconciled_from`. It proceeds only when all of these
 hold, and otherwise refuses with the journal and every retained tree unchanged:

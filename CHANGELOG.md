@@ -14,11 +14,16 @@ release tags (`v0.1.x`).
   replacing it. Post-restart and restoration readiness are bounded probes that
   also require Steward units declared `PartOf=` the T3 unit to return under a
   new invocation; unknown dependent activity refuses before any effect, and
-  dependents active before the activation remain restoration obligations.
+  dependents active before the activation remain restoration obligations, also
+  when the T3 unit itself was inactive. Failed transaction command output is
+  redacted before it is bounded, and journal records are published and
+  withdrawn by atomic exchange so a record another writer left is never
+  overwritten.
   `upkeeper pull --hosts HOST --components t3
   --reconcile-t3-transaction NAME` explicitly closes one transaction left at
   `files-restored` once every retained tree, the unit and the serving identity
-  prove unchanged; see `docs/t3-transaction-reconciliation.md`.
+  prove unchanged; it does not perform legacy updater retirement. See
+  `docs/t3-transaction-reconciliation.md`.
 
 - `upkeeper author --steward VERSION --omarchy-setup COMMIT` writes an authored
   release into `desired/release.json` without capturing any host. It sets the

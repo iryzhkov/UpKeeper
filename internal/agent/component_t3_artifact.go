@@ -750,7 +750,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	} else {
 		// Returning to upstream uses ordinary npm acquisition in a private prefix.
 		npmStage := filepath.Join(tx.dir, "npm")
-		if _, err = c.Must([]string{"npm", "install", "-g", "--prefix", npmStage, "t3@" + version}, 400*time.Second, "", "stage pinned upstream T3"); err != nil {
+		if err = t3Must(c, []string{"npm", "install", "-g", "--prefix", npmStage, "t3@" + version}, 400*time.Second, "stage pinned upstream T3"); err != nil {
 			return "", err
 		}
 		source := filepath.Join(npmStage, "lib/node_modules/t3")
@@ -860,7 +860,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 					return settle("files-restored", "files restored; rollback dependent units unknown", e)
 				}
 				dependents = t3DependentObligations(tx.dependents, current)
-				if _, e = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restore idle previous T3"); e != nil {
+				if e = t3Must(c, []string{"systemctl", "--user", "restart", service}, 0, "restore idle previous T3"); e != nil {
 					return settle("files-restored", "files restored; previous service restoration failed", e)
 				}
 			} else if active, e := t3UnitState(c, service); e != nil {
@@ -872,6 +872,16 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		if !priorActive {
 			if active, e := t3UnitState(c, service); e != nil || active {
 				return settle("files-restored", "files restored; previous service state not verified", e)
+			}
+			// PartOf= does not stop a dependent from running on its own. No restart
+			// restores one here, so a dependent active when the transaction began
+			// and not active again leaves the restoration unverified.
+			e = tx.awaitReady("restoration", func() (t3PredicateSample, []string, bool) {
+				sample := t3PredicateSample{}
+				return sample, t3DependentsReturned(c, dependents, sample), false
+			})
+			if e != nil {
+				return settle("files-restored", "files restored; previous dependents not verified", e)
 			}
 		}
 		if priorActive {
@@ -961,7 +971,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		return fail(err, false)
 	}
 	dependents := t3DependentObligations(tx.dependents, current)
-	if _, err = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restart idle T3"); err != nil {
+	if err = t3Must(c, []string{"systemctl", "--user", "restart", service}, 0, "restart idle T3"); err != nil {
 		return fail(err, true)
 	}
 	err = tx.awaitReady("post-restart", func() (t3PredicateSample, []string, bool) {
