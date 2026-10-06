@@ -93,7 +93,9 @@ explicitly, from the controller, for one host:
     upkeeper pull --hosts HOST --components t3 \
         --reconcile-t3-transaction .upkeeper-t3-NNNN
 
-The dry run performs every check and writes nothing. The real run restarts
+The controller dispatches exactly the `t3` component for a reconciliation: the
+T3 pair rule that adds `t3-steward` to every other selection of `t3` does not
+apply. The dry run performs every check and writes nothing. The real run restarts
 nothing, moves no file and skips the legacy updater retirement every other pull
 performs; it only rewrites `transaction.json` to phase
 `restored`, adding a `reconciliation` record and embedding the previous record

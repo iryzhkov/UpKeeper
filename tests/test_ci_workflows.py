@@ -1,6 +1,7 @@
 """Local/hosted gate parity and exact-commit release authorization."""
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -113,12 +114,191 @@ def test_release_gate_requires_exact_commit_success(status, conclusion, sha, eve
     assert not gate.passed([], "abc")
 
 
+def run(run_id, conclusion, ref="main", status="completed", sha="abc", event="push"):
+    return {"databaseId": run_id, "headSha": sha, "status": status, "conclusion": conclusion,
+            "event": event, "headBranch": ref,
+            "createdAt": f"2026-10-06T15:{run_id:02d}:00Z"}
+
+
 def test_release_gate_does_not_use_an_older_success():
     gate = load_script("check-release-ci")
-    assert not gate.passed([
-        {"headSha": "abc", "status": "completed", "conclusion": "failure", "event": "push"},
-        {"headSha": "abc", "status": "completed", "conclusion": "success", "event": "push"},
-    ], "abc")
+    # gh lists the newest run first.
+    assert not gate.passed([run(2, "failure"), run(1, "success")], "abc")
+
+
+@pytest.mark.parametrize("runs,expected", [
+    # A failed run superseded by a later success on the same ref.
+    ([run(3, "success"), run(2, "failure")], "pass"),
+    ([run(5, "success"), run(4, "cancelled"), run(3, "success", ref="v0.1.33"),
+      run(2, "failure")], "pass"),
+    # Every completed run succeeded, on every ref.
+    ([run(3, "success", ref="v0.1.33"), run(2, "success")], "pass"),
+    # A later success on another ref does not supersede a failure.
+    ([run(3, "success", ref="v0.1.33"), run(2, "failure")], "fail"),
+    # A failure after the last success on its ref is not superseded.
+    ([run(4, "failure", ref="v0.1.33"), run(3, "success"), run(2, "success", ref="v0.1.33")],
+     "fail"),
+    ([run(2, "failure")], "fail"),
+    # A run still in progress could still fail, so the gate waits for it.
+    ([run(3, None, status="in_progress"), run(2, "success")], "wait"),
+    ([run(3, None, status="queued", ref="v0.1.33"), run(2, "failure")], "wait"),
+    ([], "wait"),
+    # Runs for another commit or another event are not the tagged commit's gate.
+    ([run(3, "success", sha="other"), run(2, "success", event="pull_request")], "wait"),
+    ([run(3, "failure", sha="other"), run(2, "success")], "pass"),
+])
+def test_release_gate_requires_every_failed_run_to_be_superseded(runs, expected):
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide(runs, "abc")
+    assert decision == expected, reasons
+    assert reasons
+
+
+@pytest.mark.parametrize("runs,code,decision", [
+    ([run(3, "success"), run(2, "failure")], 0, "pass"),
+    ([run(3, "success", ref="v0.1.33"), run(2, "failure")], 1, "fail"),
+])
+def test_release_gate_prints_its_decision(monkeypatch, capsys, runs, code, decision):
+    gate = load_script("check-release-ci")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "iryzhkov/UpKeeper")
+    calls = []
+
+    def fake_check_output(argv, **_):
+        calls.append(argv)
+        if argv[0] == "git":
+            return "abc\n"
+        return json.dumps(runs)
+
+    monkeypatch.setattr(gate.subprocess, "check_output", fake_check_output)
+    assert gate.main() == code
+    output = capsys.readouterr().out
+    assert f"ci.yml release gate decision for abc: {decision}" in output
+    for listed in runs:
+        assert f"run {listed['databaseId']}" in output
+    listing = next(argv for argv in calls if argv[0] == "gh")
+    assert listing[listing.index("--limit") + 1] != "1"
+    assert "headBranch" in listing[listing.index("--json") + 1]
+
+
+def fake_listing(monkeypatch, gate, respond):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "iryzhkov/UpKeeper")
+    monkeypatch.setattr(gate.time, "sleep", lambda _: pytest.fail("the gate waited"))
+
+    def fake_check_output(argv, **_):
+        if argv[0] == "git":
+            return "abc\n"
+        return respond(int(argv[argv.index("--limit") + 1]))
+
+    monkeypatch.setattr(gate.subprocess, "check_output", fake_check_output)
+
+
+def test_release_gate_refuses_a_history_cut_at_the_retrieval_cap(monkeypatch, capsys):
+    # gh returns only the newest runs up to --limit. A failure older than the
+    # cap is invisible, so a full page proves nothing about the history.
+    gate = load_script("check-release-ci")
+    history = [run(index, "success") for index in range(5000, 0, -1)]
+    history.append(run(0, "failure", ref="v0.1.33"))
+    fake_listing(monkeypatch, gate, lambda limit: json.dumps(history[:limit]))
+    assert gate.main() == 1
+    captured = capsys.readouterr()
+    assert "ci.yml release gate decision for abc: fail" in captured.out
+    assert "incomplete" in captured.out + captured.err
+
+
+def test_release_gate_accepts_a_history_below_the_retrieval_cap(monkeypatch):
+    gate = load_script("check-release-ci")
+    fake_listing(monkeypatch, gate, lambda limit: json.dumps(
+        [run(index, "success") for index in range(limit - 1, 0, -1)]))
+    assert gate.main() == 0
+
+
+@pytest.mark.parametrize("response", [
+    '{"runs": []}', '["run"]', "[null]", '[{"headSha": "abc", "event": "push", "status": 1}]',
+])
+def test_release_gate_refuses_a_malformed_listing(monkeypatch, response):
+    gate = load_script("check-release-ci")
+    fake_listing(monkeypatch, gate, lambda _: response)
+    assert gate.main() == 1
+
+
+def without(entry, *fields, **values):
+    entry = {key: value for key, value in entry.items() if key not in fields}
+    entry.update(values)
+    return entry
+
+
+@pytest.mark.parametrize("failed,success", [
+    # Absent ref and time on both runs: None == None is not the same ref.
+    (without(run(2, "failure"), "headBranch", "createdAt"),
+     without(run(3, "success"), "headBranch")),
+    (without(run(2, "failure"), "headBranch"), without(run(3, "success"), "headBranch")),
+    (without(run(2, "failure"), headBranch=None), without(run(3, "success"), headBranch=None)),
+    (without(run(2, "failure"), headBranch=""), without(run(3, "success"), headBranch="")),
+    # A failure without a usable time cannot be shown to be older.
+    (without(run(2, "failure"), "createdAt"), run(3, "success")),
+    (without(run(2, "failure"), createdAt=None), run(3, "success")),
+    (without(run(2, "failure"), createdAt=""), run(3, "success")),
+    (without(run(2, "failure"), createdAt="yesterday"), run(3, "success")),
+    (without(run(2, "failure"), createdAt="2026-10-06T15:02:00"), run(3, "success")),
+    # Nor can a success without a usable time be shown to be later.
+    (run(2, "failure"), without(run(3, "success"), "createdAt")),
+    (run(2, "failure"), without(run(3, "success"), createdAt="9999")),
+    (run(2, "failure"), without(run(3, "success"), createdAt=20261006)),
+])
+def test_release_gate_never_supersedes_a_failure_on_incomplete_evidence(failed, success):
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide([success, failed], "abc")
+    assert decision == "fail", reasons
+    assert not gate.passed([success, failed], "abc")
+
+
+# A blank or padded ref names no branch, so two of them are not the same ref.
+# Malformed metadata is refused, never normalized into a valid ref.
+@pytest.mark.parametrize("ref", [" ", "\t", " main ", "main ", "\tmain"])
+def test_release_gate_never_supersedes_on_blank_or_padded_refs(monkeypatch, ref):
+    gate = load_script("check-release-ci")
+    failed = run(2, "failure", ref=ref)
+    success = run(3, "success", ref=ref)
+    decision, reasons = gate.decide([success, failed], "abc")
+    assert decision == "fail", reasons
+    fake_listing(monkeypatch, gate, lambda _: json.dumps([success, failed]))
+    assert gate.main() == 1
+
+
+@pytest.mark.parametrize("incomplete", [
+    without(run(2, "failure"), "headSha"), without(run(2, "failure"), headSha=None),
+    without(run(2, "failure"), "event"), without(run(2, "failure"), event=None),
+    without(run(2, "failure"), headSha=1),
+    # An empty, blank or padded value names no commit or event either, so it
+    # cannot show that the failure belongs to another one.
+    run(2, "failure", ref="release", sha=""), run(2, "failure", ref="release", event=""),
+    run(2, "failure", sha="  "), run(2, "failure", event=" "),
+    run(2, "failure", sha="abc "), run(2, "failure", event=" push"),
+])
+def test_release_gate_refuses_an_entry_it_cannot_attribute(incomplete):
+    # gh filters on the commit and the event, so every entry carries both. An
+    # entry without them is malformed, not a run of another commit.
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide([run(3, "success"), incomplete], "abc")
+    assert decision == "fail", reasons
+
+
+def test_release_gate_still_ignores_runs_it_can_attribute_elsewhere():
+    gate = load_script("check-release-ci")
+    unrelated = [run(2, "failure", ref="release", sha="def"),
+                 run(4, "failure", event="pull_request")]
+    decision, reasons = gate.decide([run(3, "success"), *unrelated], "abc")
+    assert decision == "pass", reasons
+
+
+def test_release_gate_orders_runs_by_time_not_by_text():
+    gate = load_script("check-release-ci")
+    failed = without(run(2, "failure"), createdAt="2026-10-06T16:00:00Z")
+    success = without(run(3, "success"), createdAt="2026-10-06T17:30:00+02:00")
+    # 15:30Z is earlier than 16:00Z although the text sorts after it.
+    assert gate.decide([success, failed], "abc")[0] == "fail"
+    success["createdAt"] = "2026-10-06T18:30:00+02:00"
+    assert gate.decide([success, failed], "abc")[0] == "pass"
 
 
 @pytest.mark.parametrize("private", [False, True], ids=["public", "private"])

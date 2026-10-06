@@ -17,6 +17,48 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
+// `pull --reconcile-t3-transaction NAME --components t3` dispatches exactly the
+// t3 component. The T3 pair expansion does not apply: the agent refuses a
+// reconciliation that selects anything but t3 alone, so expanding it to
+// t3-steward made every reconciliation fail.
+func TestAReconciliationDispatchesExactlyTheT3Component(t *testing.T) {
+	choices := options(t, []string{"normandy"})
+	choices.Components = []string{"t3"}
+	choices.ReconcileT3 = ".upkeeper-t3-1"
+	var seen []agent.Payload
+	choices.Runner = stateRunner("converged", &seen)
+	if _, _, err := converge.Fleet(fleetConfig(t), unpinnedRelease(t), choices); err != nil {
+		t.Fatalf("Fleet: %v", err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the reconciliation was dispatched %d times", len(seen))
+	}
+	if !slices.Equal(seen[0].Components, []string{"t3"}) ||
+		seen[0].ReconcileT3Transaction != ".upkeeper-t3-1" {
+		t.Fatalf("the reconciliation dispatched components %v for transaction %q",
+			seen[0].Components, seen[0].ReconcileT3Transaction)
+	}
+}
+
+// A reconciliation names one transaction of one component; any other
+// selection is refused before anything is dispatched.
+func TestAReconciliationRefusesAnyOtherSelection(t *testing.T) {
+	for _, components := range [][]string{nil, {"t3-steward"}, {"t3", "t3-steward"}} {
+		choices := options(t, []string{"normandy"})
+		choices.Components = components
+		choices.ReconcileT3 = ".upkeeper-t3-1"
+		var seen []agent.Payload
+		choices.Runner = stateRunner("converged", &seen)
+		_, _, err := converge.Fleet(fleetConfig(t), unpinnedRelease(t), choices)
+		if err == nil || !strings.Contains(err.Error(), "--reconcile-t3-transaction") {
+			t.Errorf("components %v: want a reconciliation refusal, got %v", components, err)
+		}
+		if len(seen) != 0 {
+			t.Errorf("components %v: a refused reconciliation was dispatched", components)
+		}
+	}
+}
+
 // An explicit `pull --reconcile-t3-transaction` under a release that pins the
 // program carries the fence like any other pull, and the target's agent,
 // reached through its real command line, refuses it before its target lock and

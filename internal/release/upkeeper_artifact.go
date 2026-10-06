@@ -26,9 +26,11 @@ const ProgramRepository = "iryzhkov/UpKeeper"
 // megabytes; the bound only stops a pin from asking a host to download a disk.
 const ProgramAssetLimit int64 = 256 << 20
 
-// ProgramPaths are the repository paths a change to which changes the program
-// itself, as opposed to the release intent the program applies. go.sum is
-// included because a dependency-only change rebuilds a different binary.
+// ProgramPaths are the repository paths that hold the program itself, as
+// opposed to the release intent the program applies: under them, every change
+// but a test or a test fixture changes the program. go.sum is included because
+// a dependency-only change rebuilds a different binary. A compiled input
+// elsewhere in the repository changes the program too (ProgramDiffers).
 var ProgramPaths = []string{"go.mod", "go.sum", "cmd", "internal"}
 
 // ProgramTargets maps a Go architecture to the asset label a pin carries.
@@ -161,8 +163,10 @@ func (r Release) ProgramPin() (*ProgramPin, error) {
 }
 
 // CheckProgramPin proves that the pinned binary was built from the program a
-// commit holds: no path in ProgramPaths may differ between the pin's source
-// commit and the commit under test. A release whose pin names another program
+// commit holds: no build input may differ between the pin's source commit and
+// the commit under test (ProgramDiffers ignores only files proven not to be
+// compiled, such as tests, test fixtures and the release intent). A release
+// whose pin names another program
 // is stale: hosts refuse it rather than install it. Code-repository CI does
 // not run this, because a commit that changes the program can only be pinned
 // by a later commit; it is for the configuration repository's CI (M2b) and
@@ -182,14 +186,14 @@ func CheckProgramPin(root, sourceCommit, commit string, runner procx.Runner) err
 		return failure.Validation(
 			"upkeeper.source_commit %s is not in this repository's history", sourceCommit)
 	}
-	diff := git(append([]string{"diff", "--quiet", sourceCommit, commit, "--"}, ProgramPaths...)...)
-	if diff.Err != nil || (diff.Code != 0 && diff.Code != 1) {
+	differs, err := ProgramDiffers(git, sourceCommit, commit)
+	if err != nil {
 		return failure.Validation("cannot compare the pinned program with %s", commit)
 	}
-	if diff.Code != 0 {
+	if differs {
 		return failure.Validation(
-			"the upkeeper pin was built from %s, whose program (%s) differs from %s; "+
-				"pin the binary released from this program",
+			"the upkeeper pin was built from %s, whose program (its compiled inputs, "+
+				"such as %s) differs from %s; pin the binary released from this program",
 			sourceCommit, strings.Join(ProgramPaths, ", "), commit)
 	}
 	return nil

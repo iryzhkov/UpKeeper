@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -102,6 +103,17 @@ func Fleet(
 	selected, err := selectComponents(value, options.Components)
 	if err != nil {
 		return nil, 0, err
+	}
+	// A reconciliation resumes one retained T3 transaction and does nothing
+	// else, so it dispatches exactly t3: the T3 pair expansion would add
+	// t3-steward, which the agent refuses for a reconciliation.
+	if options.ReconcileT3 != "" {
+		if len(options.Components) != 1 || options.Components[0] != "t3" ||
+			!slices.Contains(selected, "t3") {
+			return nil, 0, failure.Pull(
+				"--reconcile-t3-transaction requires the t3 component alone in a release that has it")
+		}
+		selected = []string{"t3"}
 	}
 	// Historical releases may predate coordinator ownership. Still dispatch its
 	// retirement adapter when rollback includes that component; otherwise an
