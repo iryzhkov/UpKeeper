@@ -473,6 +473,11 @@ func huyangApplyCheckout(
 	checkout := c.Path(adapterSpecString(spec, "path"))
 	commit, _ := before["commit"].(string)
 	if commit == "" {
+		// A checkout an interrupted bootstrap left whose HEAD cannot be read
+		// is still that bootstrap's, and its marker must be kept.
+		if pathExists(checkout) && pathExists(c.Path(huyangBootstrapPending)) {
+			return "", huyangResumeRefused(c, checkout, "has a HEAD that could not be read")
+		}
 		return huyangBootstrap(c, spec, actions)
 	}
 	// Local changes outrank the release, including a bootstrap an earlier run
@@ -637,7 +642,7 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 			[]string{"systemctl", "--user", "disable", "--now", service},
 			60*time.Second, "", "stop failed Huyang bootstrap",
 		); stopErr != nil {
-			return "", stopErr
+			return "", Failf("%s; %s", err.Error(), stopErr.Error())
 		}
 		return "", err
 	}
@@ -700,11 +705,26 @@ func huyangResumeBootstrap(
 	if err != nil {
 		return "", err
 	}
+	// Only a regular file can be removed once the bootstrap is finished;
+	// anything else would leave a running service and a marker that makes
+	// every later run build and restart it again.
+	if info, err := os.Lstat(c.Path(huyangBootstrapPending)); err != nil || !info.Mode().IsRegular() {
+		return "", Failf("an interrupted Huyang bootstrap found its marker %s is not a regular file; "+
+			"inspect it, and replace it with an empty file to let the next run finish the bootstrap",
+			c.Path(huyangBootstrapPending))
+	}
 	if c.DryRun {
 		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: build, seed and enable "+service)
 		return "updated", nil
 	}
-	origin, err := os.Stat(checkout)
+	// The directory stays open across the build, so its inode cannot be freed
+	// and handed to a directory created in its place meanwhile.
+	handle, err := os.Open(checkout)
+	if err != nil {
+		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
+	defer handle.Close()
+	origin, err := handle.Stat()
 	if err != nil {
 		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
 	}
@@ -845,6 +865,13 @@ func huyangStart(c *Context, spec map[string]any, checkout, service string, rest
 			60*time.Second, "", "Huyang service restart"); err != nil {
 			return err
 		}
+		// The socket the previous process left can still be there when
+		// restart returns, before the new process listens; settle as the
+		// ordinary update path does before probing.
+		if err := huyangWaitForSocket(c); err != nil {
+			return err
+		}
+		time.Sleep(huyangSettleDelay)
 	}
 	probe, err := huyangWaitProbe(c, checkout, huyangProbeTools(spec))
 	if err != nil {
