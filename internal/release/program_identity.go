@@ -2,6 +2,8 @@ package release
 
 import (
 	"errors"
+	"go/parser"
+	"go/token"
 	"path"
 	"regexp"
 	"slices"
@@ -23,79 +25,87 @@ var ErrProgramIncomparable = errors.New("cannot compare the program")
 var programEmbedDirective = regexp.MustCompile(`^[ \t]*//go:embed(?:[ \t]+(.*))?$`)
 
 // ProgramDiffers reports whether the program differs between two commits:
-// whether any build input under ProgramPaths changed.
+// whether any input the go command can compile into it changed.
 //
-// Tests are not build inputs, so a commit that only changes a test or a test
-// fixture keeps the program's identity. A changed path is ignored only when it
-// is proven not to be compiled at either commit:
+// The comparison covers the whole repository, not only ProgramPaths: a
+// production package can import a package anywhere in the module, and that
+// package can embed its own files. Tests, test fixtures and the release
+// intent are not build inputs, so a commit that changes only them keeps the
+// program's identity. A changed path is ignored only when it is proven not to
+// be compiled at either commit, which takes all of these:
 //
-//   - a *_test.go file that no //go:embed directive in a non-test Go file
-//     can match;
-//   - a file under a testdata directory that is not a Go file, whose
-//     directory holds no non-test Go file (a package there can be imported
-//     explicitly, and files beside its Go files can be compiled with it), and
-//     that no //go:embed directive can match. When either commit has a cgo
-//     Go file or a non-Go source the go command compiles (assembly, C and
-//     the like), no such file is ignored: an #include can reach it anywhere.
+//   - it is not a non-test Go file, a module file (go.mod, go.sum, go.work,
+//     go.work.sum) or a file under a vendor directory;
+//   - under ProgramPaths, it is a *_test.go file or a non-Go file under a
+//     testdata directory;
+//   - unless it is a *_test.go file, its directory holds no non-test Go file
+//     (files beside a package's Go files can be compiled with it);
+//   - no //go:embed directive in a non-test Go file can match it;
+//   - neither commit has a cgo Go file, a non-Go source the go command
+//     compiles (assembly, C and the like), a symbolic link or a submodule.
+//     An #include can reach any file whatever its name, including a
+//     *_test.go file, and a link or a submodule can make any path compiled.
 //
-// Every other changed path, including a non-test Go file under testdata,
-// changes the program. A directive this function cannot parse makes every
-// path in its package's tree count.
+// A directive this function cannot parse makes every path in its package's
+// tree count.
 func ProgramDiffers(git ProgramGit, from, to string) (bool, error) {
-	quiet := git(append([]string{"diff", "--quiet", from, to, "--"}, ProgramPaths...)...)
-	if quiet.Err != nil || (quiet.Code != 0 && quiet.Code != 1) {
-		return false, ErrProgramIncomparable
-	}
-	if quiet.Code == 0 {
-		return false, nil
-	}
-	names := git(append([]string{"diff", "--name-only", "--no-renames", "-z", from, to, "--"},
-		ProgramPaths...)...)
-	if !names.OK() {
+	names := git("diff", "--name-only", "--no-renames", "-z", "--exit-code", from, to, "--")
+	if names.Err != nil || (names.Code != 0 && names.Code != 1) {
 		return false, ErrProgramIncomparable
 	}
 	changed := splitNul(names.Stdout)
+	if names.Code == 0 {
+		if len(changed) != 0 {
+			return false, ErrProgramIncomparable
+		}
+		return false, nil
+	}
 	if len(changed) == 0 {
 		// git found a difference it does not name: nothing proves it is a test.
 		return true, nil
 	}
-	candidates := []string{}
 	for _, name := range changed {
 		if !testOnlyCandidate(name) {
 			return true, nil
 		}
-		candidates = append(candidates, name)
 	}
 	packages := map[string]bool{}
 	embeds := []programEmbed{}
-	includes := false
 	for _, commit := range []string{from, to} {
-		files := git(append([]string{"ls-tree", "-r", "-z", "--name-only", commit, "--"},
-			ProgramPaths...)...)
+		files := git("ls-tree", "-r", "-z", "--full-tree", commit)
 		if !files.OK() {
 			return false, ErrProgramIncomparable
 		}
-		for _, name := range splitNul(files.Stdout) {
+		for _, entry := range splitNul(files.Stdout) {
+			// "<mode> <type> <object>\t<path>"
+			info, name, ok := strings.Cut(entry, "\t")
+			mode, _, _ := strings.Cut(info, " ")
+			if !ok || name == "" {
+				return false, ErrProgramIncomparable
+			}
+			if mode != "100644" && mode != "100755" {
+				// A symbolic link or a submodule.
+				return true, nil
+			}
+			if programForeignSources[path.Ext(name)] {
+				return true, nil
+			}
 			if isProgramSource(name) {
 				packages[path.Dir(name)] = true
 			}
-			if programForeignSources[path.Ext(name)] {
-				includes = true
-			}
+		}
+		cgo, err := programUsesCgo(git, commit)
+		if err != nil || cgo {
+			return cgo, err
 		}
 		found, err := programEmbeds(git, commit)
 		if err != nil {
 			return false, err
 		}
 		embeds = append(embeds, found...)
-		cgo, err := programUsesCgo(git, commit)
-		if err != nil {
-			return false, err
-		}
-		includes = includes || cgo
 	}
-	for _, name := range candidates {
-		if !strings.HasSuffix(path.Base(name), "_test.go") && (includes || packages[path.Dir(name)]) {
+	for _, name := range changed {
+		if !strings.HasSuffix(path.Base(name), "_test.go") && packages[path.Dir(name)] {
 			return true, nil
 		}
 		for _, embed := range embeds {
@@ -107,17 +117,34 @@ func ProgramDiffers(git ProgramGit, from, to string) (bool, error) {
 	return false, nil
 }
 
-// testOnlyCandidate is the first, name-only half of the proof: a test file,
-// or a file under testdata that is not a Go source file.
+// programModuleFiles are the files the go command reads to resolve the
+// module and its dependencies.
+var programModuleFiles = map[string]bool{
+	"go.mod": true, "go.sum": true, "go.work": true, "go.work.sum": true,
+}
+
+// testOnlyCandidate is the first, name-only half of the proof. Under
+// ProgramPaths it is a test file or a file under testdata that is not a Go
+// source file; elsewhere it is anything but a non-test Go file, a module file
+// or a vendored file.
 func testOnlyCandidate(name string) bool {
 	base := path.Base(name)
 	if strings.HasSuffix(base, "_test.go") {
 		return true
 	}
-	if strings.HasSuffix(base, ".go") {
+	if strings.HasSuffix(base, ".go") || programModuleFiles[base] {
 		return false
 	}
-	return slices.Contains(strings.Split(path.Dir(name), "/"), "testdata")
+	directories := strings.Split(path.Dir(name), "/")
+	if slices.Contains(directories, "vendor") {
+		return false
+	}
+	for _, root := range ProgramPaths {
+		if name == root || strings.HasPrefix(name, root+"/") {
+			return slices.Contains(directories, "testdata")
+		}
+	}
+	return true
 }
 
 // programForeignSources are the non-Go file extensions the go command
@@ -130,18 +157,14 @@ var programForeignSources = map[string]bool{
 	".s": true, ".S": true, ".sx": true, ".swig": true, ".swigcxx": true, ".syso": true,
 }
 
-// programGrep runs git grep over the non-test Go files under ProgramPaths at
+// programGrep runs git grep over the non-test Go files of the repository at
 // one commit. Every file is read as text whatever git's attributes say, so a
 // file marked binary cannot hide a directive, and the output format does not
 // depend on the user's grep configuration. found is false when nothing matched.
 func programGrep(git ProgramGit, commit string, options ...string) (string, bool, error) {
 	arguments := append([]string{"grep", "--text", "--no-color", "--no-line-number", "-z"},
 		options...)
-	arguments = append(arguments, commit, "--")
-	for _, name := range ProgramPaths {
-		arguments = append(arguments, ":(glob)"+name+"/**/*.go")
-	}
-	arguments = append(arguments, ":(exclude,glob)**/*_test.go")
+	arguments = append(arguments, commit, "--", ":(glob)**/*.go", ":(exclude,glob)**/*_test.go")
 	result := git(arguments...)
 	if result.Err != nil || (result.Code != 0 && result.Code != 1) {
 		return "", false, ErrProgramIncomparable
@@ -149,12 +172,35 @@ func programGrep(git ProgramGit, commit string, options ...string) (string, bool
 	return result.Stdout, result.Code == 0, nil
 }
 
-// programUsesCgo reports whether a non-test Go file may import "C". It only
-// looks for the literal, so a mention in a comment or string counts as well:
-// that costs nothing but a needlessly conservative comparison.
+// programUsesCgo reports whether a non-test Go file may import "C". Every
+// file that mentions the import path in either quoting has its imports
+// parsed, so a mention in a comment or a string does not count; a file that
+// does not parse counts.
 func programUsesCgo(git ProgramGit, commit string) (bool, error) {
-	_, found, err := programGrep(git, commit, "-l", "-F", "-e", `"C"`)
-	return found, err
+	output, found, err := programGrep(git, commit, "-l", "-F", "-e", `"C"`, "-e", "`C`")
+	if err != nil || !found {
+		return false, err
+	}
+	for _, location := range splitNul(output) {
+		name, ok := strings.CutPrefix(location, commit+":")
+		if !ok || name == "" {
+			return false, ErrProgramIncomparable
+		}
+		source := git("cat-file", "blob", commit+":"+name)
+		if !source.OK() {
+			return false, ErrProgramIncomparable
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, source.Stdout, parser.ImportsOnly)
+		if err != nil {
+			return true, nil
+		}
+		for _, spec := range file.Imports {
+			if imported, err := strconv.Unquote(spec.Path.Value); err != nil || imported == "C" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func isProgramSource(name string) bool {
@@ -202,8 +248,8 @@ func (e programEmbed) matches(name string) bool {
 	return false
 }
 
-// programEmbeds lists the //go:embed directives of the non-test Go files under
-// ProgramPaths at one commit.
+// programEmbeds lists the //go:embed directives of the non-test Go files of
+// the repository at one commit.
 func programEmbeds(git ProgramGit, commit string) ([]programEmbed, error) {
 	output, found, err := programGrep(git, commit, "-E", "-e", `^[[:space:]]*//go:embed`)
 	if err != nil || !found {

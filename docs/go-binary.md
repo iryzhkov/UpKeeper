@@ -217,17 +217,27 @@ the commit itself would always fail. The plan's CI invariant (plan section 4,
 milestone M2b, where a configuration commit may only pin a released UpKeeper
 whose program it declares compatible; `release.CheckProgramPin` implements the
 comparison for it. Until M2b, a pin can be stale: it names a binary whose
-program (the build inputs among `go.mod`, `go.sum`, `cmd` and `internal`
-between `<source_commit>` and `<checkout>`, `release.ProgramDiffers`) is not
-the gated checkout's. Tests and test fixtures are not build inputs, so a
-commit that changes only them keeps the program's identity. A changed path is
-ignored only when it is proven not to be compiled: a `*_test.go` file, or a
-non-Go file under a `testdata` directory that holds no non-test Go file, and
-in either case one that no `//go:embed` directive of a non-test Go file at
-either commit can match. A non-test Go file under `testdata` counts, because a
-production package can import its package explicitly. When either commit has a
-cgo file or an assembly, C or other non-Go source the go command compiles, no
-`testdata` file is ignored, because an `#include` can reach it. A host refuses a stale pin whole, as
+program (every build input between `<source_commit>` and `<checkout>`,
+`release.ProgramDiffers`) is not the gated checkout's. The comparison covers
+the whole repository, because a production package can import a package
+outside `cmd` and `internal`, and that package can embed its own files. Tests,
+test fixtures and the release intent are not build inputs, so a commit that
+changes only them keeps the program's identity. A changed path is ignored only
+when it is proven not to be compiled at either commit:
+
+- it is not a non-test Go file, a `go.mod`, `go.sum`, `go.work` or
+  `go.work.sum`, or a file under a `vendor` directory;
+- under `go.mod`, `go.sum`, `cmd` and `internal`, it is a `*_test.go` file or
+  a non-Go file under a `testdata` directory;
+- unless it is a `*_test.go` file, its directory holds no non-test Go file;
+- no `//go:embed` directive of a non-test Go file can match it;
+- neither commit has a cgo file (one that imports `"C"`), an assembly, C or
+  other non-Go source the go command compiles, a symbolic link or a
+  submodule, because an `#include` can reach any file, even a `*_test.go`
+  one, and a link or a submodule can make any path compiled.
+
+A non-test Go file under `testdata` counts, because a production package can
+import its package explicitly. A host refuses a stale pin whole, as
 it refused a changed program before self-update: exit 30, a message that says
 the pin is stale and the host keeps its binary, and nothing downloaded,
 adopted or switched, with any hold left as it was. The next release that pins

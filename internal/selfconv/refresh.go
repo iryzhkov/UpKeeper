@@ -115,11 +115,12 @@ func Refresh(root string, runner procx.Runner) (string, error) {
 	return candidate, nil
 }
 
-// ProgramPaths are the paths a change to which changes the program itself,
-// as opposed to the release intent the program applies. The release package
-// owns the list, because release.CheckProgramPin checks a program pin against
-// the same paths. Tests and test fixtures under them that are proven not to
-// be compiled are ignored by the comparison (release.ProgramDiffers).
+// ProgramPaths are the paths that hold the program itself, as opposed to the
+// release intent the program applies. The release package owns the list,
+// because release.CheckProgramPin compares a program pin the same way. The
+// comparison (release.ProgramDiffers) also counts compiled inputs elsewhere
+// in the repository, and ignores tests and test fixtures proven not to be
+// compiled.
 var ProgramPaths = release.ProgramPaths
 
 // ErrProgramDiffers marks the one VerifyProgram refusal a self-update can

@@ -26,13 +26,12 @@ func TestAProgramThatDidNotChangeIsAccepted(t *testing.T) {
 		strings.Repeat("b", 40), runner); err != nil {
 		t.Fatalf("refused an unchanged program: %v", err)
 	}
-	if len(calls) != 2 || !strings.Contains(calls[1], "diff --quiet") {
+	if len(calls) != 2 || !strings.Contains(calls[1], " diff ") {
 		t.Fatalf("unexpected commands: %v", calls)
 	}
-	for _, path := range selfconv.ProgramPaths {
-		if !strings.Contains(calls[1], path) {
-			t.Errorf("the comparison does not cover %q: %s", path, calls[1])
-		}
+	// A compiled input can live anywhere, so the comparison names no paths.
+	if !strings.HasSuffix(calls[1], " --") {
+		t.Errorf("the comparison does not cover the whole repository: %s", calls[1])
 	}
 }
 
@@ -58,11 +57,8 @@ func TestTheSameCommitAsksGitNothing(t *testing.T) {
 func TestAChangedProgramIsRefusedAndNamesTheRemedy(t *testing.T) {
 	checkout := strings.Repeat("b", 40)
 	runner := func(command procx.Command) procx.Result {
-		switch {
-		case slices.Contains(command.Argv, "--quiet"):
-			return procx.Result{Code: 1}
-		case slices.Contains(command.Argv, "--name-only"):
-			return procx.Result{Code: 0, Stdout: "internal/a.go\x00"}
+		if slices.Contains(command.Argv, "--name-only") {
+			return procx.Result{Code: 1, Stdout: "internal/a.go\x00"}
 		}
 		return procx.Result{Code: 0}
 	}

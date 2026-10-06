@@ -4,10 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/release"
+	"github.com/iryzhkov/UpKeeper/internal/selfconv"
 )
 
 func programPinFixture() map[string]any {
@@ -151,6 +153,10 @@ func TestProgramPinRefusals(t *testing.T) {
 	}
 }
 
+// symlinkTo marks a gitRepository change that makes the path a symbolic link to
+// the rest of the content.
+const symlinkTo = "\x00symlink:"
+
 // gitRepository builds a throwaway repository with one commit per change and
 // returns its root and the commits, oldest first.
 func gitRepository(t *testing.T, changes ...map[string]string) (string, []string) {
@@ -176,6 +182,16 @@ func gitRepository(t *testing.T, changes ...map[string]string) (string, []string
 	commits := []string{}
 	for _, change := range changes {
 		for path, content := range change {
+			if target, ok := strings.CutPrefix(content, symlinkTo); ok {
+				writeFile(t, filepath.Join(root, path), nil)
+				if err := os.Remove(filepath.Join(root, path)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(root, path)); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
 			writeFile(t, filepath.Join(root, path), []byte(content))
 		}
 		git("add", "--all")
@@ -350,6 +366,15 @@ func TestEveryWayAFixtureIsCompiledIsPartOfTheProgram(t *testing.T) {
 			"internal/a/a_stub.go":  "package a\n\nfunc f()\n",
 			"internal/a/a_other.go": "package a\n",
 		}, "internal/a/testdata/x.h"},
+		{"a test-named file a cgo preamble includes", map[string]string{
+			"internal/a/a.go": "package a\n\n// #include \"x_test.go\"\nimport \"C\"\n",
+		}, "internal/a/x_test.go"},
+		{"a header a raw-string cgo import includes", map[string]string{
+			"internal/a/a.go": "package a\n\n// #include \"testdata/x.inc\"\nimport `C`\n",
+		}, "internal/a/testdata/x.inc"},
+		{"a header outside the program paths a cgo preamble includes", map[string]string{
+			"internal/a/a.go": "package a\n\n// #include \"../../include/x.inc\"\nimport \"C\"\n",
+		}, "include/x.inc"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			first := map[string]string{"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n"}
@@ -363,6 +388,115 @@ func TestEveryWayAFixtureIsCompiledIsPartOfTheProgram(t *testing.T) {
 				t.Errorf("a changed compiled fixture kept the program: %v", err)
 			}
 		})
+	}
+}
+
+// A file named like a test is not compiled as Go, but an assembly or C source
+// can still include it. Here the legacy build constraint keeps go vet and the
+// go command from reading it as a test, and the assembler takes its #define.
+func TestAnAssemblyIncludeOfATestNamedFileIsPartOfTheProgram(t *testing.T) {
+	root, commits := gitRepository(t, map[string]string{
+		"go.mod":            "module x\n\ngo 1.21\n",
+		"go.sum":            "",
+		"cmd/main.go":       "package main\n\nimport \"fmt\"\n\nfunc value() int\n\nfunc main() { fmt.Print(value()) }\n",
+		"cmd/value_amd64.s": "#include \"textflag.h\"\n#include \"value_test.go\"\nTEXT ·value(SB), NOSPLIT, $0-8\nMOVQ $VALUE, ret+0(FP)\nRET\n",
+		"cmd/value_test.go": "// +build ignore\n\n#define VALUE 1\n",
+	}, map[string]string{"cmd/value_test.go": "// +build ignore\n\n#define VALUE 2\n"})
+	if runtime.GOARCH == "amd64" {
+		if output, ok := goRun(t, root); ok && output != "2" {
+			t.Fatalf("the fixture does not assemble the included file: %q", output)
+		}
+	}
+	if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a changed file the assembly includes kept the program: %v", err)
+	}
+	if err := selfconv.VerifyProgram(root, commits[0], commits[1], nil); err == nil {
+		t.Error("a changed file the assembly includes kept the binary's program")
+	}
+}
+
+// The program is whatever the go command compiles, not what lives under
+// ProgramPaths: a production package can import a package anywhere in the
+// module, that package can embed its own files, and a symbolic link can make
+// any file a Go source.
+func TestCompiledInputsOutsideTheProgramPathsArePartOfTheProgram(t *testing.T) {
+	command := func(importPath, name string) string {
+		return "package main\n\nimport (\n\t\"fmt\"\n\n\t\"x/" + importPath + "\"\n)\n\n" +
+			"func main() { fmt.Print(" + name + ".Value) }\n"
+	}
+	for _, test := range []struct {
+		name  string
+		files map[string]string
+		path  string
+	}{
+		{"an imported package", map[string]string{
+			"cmd/main.go":      command("helper", "helper"),
+			"helper/helper.go": "package helper\n\nconst Value = 1\n",
+		}, "helper/helper.go"},
+		{"a file an imported package embeds", map[string]string{
+			"cmd/main.go":             command("helper", "helper"),
+			"helper/helper.go":        "package helper\n\nimport _ \"embed\"\n\n//go:embed assets/value.txt\nvar Value string\n",
+			"helper/assets/value.txt": "1",
+		}, "helper/assets/value.txt"},
+		{"a file a symbolic link makes a Go source", map[string]string{
+			"cmd/main.go":        command("cmd/value", "value"),
+			"cmd/value/value.go": symlinkTo + "../../data/value.txt",
+			"data/value.txt":     "package value\n\nconst Value = 1\n",
+		}, "data/value.txt"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := map[string]string{"go.mod": "module x\n\ngo 1.21\n", "go.sum": ""}
+			for name, content := range test.files {
+				first[name] = content
+			}
+			changed := strings.Replace(test.files[test.path], "1", "2", 1)
+			root, commits := gitRepository(t, first, map[string]string{test.path: changed},
+				map[string]string{"docs/a.md": "words\n", "desired/release.json": "{}\n"})
+			if output, ok := goRun(t, root); ok && output != "2" {
+				t.Fatalf("the fixture does not compile the changed file: %q", output)
+			}
+			if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+				!strings.Contains(err.Error(), "differs") {
+				t.Errorf("a changed compiled input kept the program: %v", err)
+			}
+			if err := selfconv.VerifyProgram(root, commits[0], commits[1], nil); err == nil {
+				t.Error("a changed compiled input kept the binary's program")
+			}
+			// A symbolic link anywhere makes every change count, so only the
+			// others show that the release intent beside them is not compiled.
+			if test.path != "data/value.txt" {
+				if err := release.CheckProgramPin(root, commits[1], commits[2], nil); err != nil {
+					t.Errorf("a release-only change refused its program's pin: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// Outside ProgramPaths, as under them, tests and files nothing compiles keep
+// the program's identity, and so does a mention of cgo that is not an import.
+func TestTestOnlyChangesAnywhereKeepTheProgramIdentity(t *testing.T) {
+	root, commits := gitRepository(t,
+		map[string]string{
+			"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n",
+			"internal/a/a.go":                  "package a\n\nconst Letter = \"C\" + `C`\n",
+			"internal/a/testdata/fixture.json": "{}\n",
+			"helper/helper.go":                 "package helper\n",
+			"helper/helper_test.go":            "package helper\n",
+			"scripts/tool.py":                  "print(1)\n",
+		},
+		map[string]string{"internal/a/testdata/fixture.json": "{\"changed\": true}\n"},
+		map[string]string{"helper/helper_test.go": "package helper // changed\n"},
+		map[string]string{"scripts/tool.py": "print(2)\n", "docs/new.md": "new\n"},
+	)
+	for index, what := range []string{
+		"a fixture beside a mention of cgo", "a test outside the program paths",
+		"a script and a document",
+	} {
+		if err := release.CheckProgramPin(root, commits[index], commits[index+1], nil); err != nil {
+			t.Errorf("%s changed the program: %v", what, err)
+		}
 	}
 }
 
