@@ -254,3 +254,90 @@ func TestTestOnlyChangesKeepTheProgramIdentity(t *testing.T) {
 		t.Errorf("a go.sum change kept the program: %v", err)
 	}
 }
+
+// A directory's name does not make its files test-only. Go skips testdata in
+// wildcard package discovery, but a production package may still import a
+// package there explicitly, and that package is compiled into the binary.
+func TestAnImportedHelperUnderTestdataIsPartOfTheProgram(t *testing.T) {
+	root, commits := gitRepository(t,
+		map[string]string{
+			"go.mod": "module x\n\ngo 1.21\n", "go.sum": "",
+			"cmd/main.go": "package main\n\nimport (\n\t\"fmt\"\n\n\t\"x/internal/testdata/helper\"\n)\n\n" +
+				"func main() { fmt.Println(helper.Value) }\n",
+			"internal/testdata/helper/helper.go": "package helper\n\nconst Value = 1\n",
+		},
+		map[string]string{"internal/testdata/helper/helper.go": "package helper\n\nconst Value = 2\n"},
+	)
+	if output, ok := goRun(t, root); ok && output != "2" {
+		t.Fatalf("the fixture does not compile the helper into the program: %q", output)
+	}
+	if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a changed helper the program imports kept the program: %v", err)
+	}
+}
+
+// An embedded file is compiled into the binary whatever its name or
+// directory, so a change to it changes the program.
+func TestAnEmbeddedTestFixtureIsPartOfTheProgram(t *testing.T) {
+	source := "package a\n\nimport _ \"embed\"\n\n%s\nvar Data string\n"
+	for _, test := range []struct {
+		name, directive, path string
+	}{
+		{"an embedded fixture", "//go:embed testdata/config.json", "internal/a/testdata/config.json"},
+		{"an embedded fixture directory", "//go:embed testdata", "internal/a/testdata/nested/config.json"},
+		{"a quoted embed pattern", "//go:embed \"testdata/*.json\"", "internal/a/testdata/config.json"},
+		{"an embedded test-named file", "//go:embed all:golden_test.go", "internal/a/golden_test.go"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, commits := gitRepository(t,
+				map[string]string{
+					"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n",
+					"internal/a/a.go": strings.Replace(source, "%s", test.directive, 1),
+					test.path:         "one\n",
+				},
+				map[string]string{test.path: "two\n"},
+			)
+			if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+				!strings.Contains(err.Error(), "differs") {
+				t.Errorf("a changed embedded file kept the program: %v", err)
+			}
+		})
+	}
+}
+
+// Any file beside a compiled Go file can be compiled with it (assembly, cgo
+// sources, syso objects), so a testdata directory that holds a package is not
+// a fixture directory.
+func TestAFileBesideAHelperUnderTestdataIsPartOfTheProgram(t *testing.T) {
+	root, commits := gitRepository(t,
+		map[string]string{
+			"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n",
+			"internal/testdata/helper/helper.go":     "package helper\n",
+			"internal/testdata/helper/value_amd64.s": "// one\n",
+		},
+		map[string]string{"internal/testdata/helper/value_amd64.s": "// two\n"},
+	)
+	if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a changed file in a testdata package kept the program: %v", err)
+	}
+}
+
+// goRun runs the fixture's command when a Go toolchain is available, proving
+// that the fixture really compiles what the test says it does.
+func goRun(t *testing.T, root string) (string, bool) {
+	t.Helper()
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		return "", false
+	}
+	command := exec.Command(goTool, "run", "./cmd")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOFLAGS=", "GOWORK=off", "GO111MODULE=on")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run ./cmd: %v: %s", err, output)
+	}
+	return strings.TrimSpace(string(output)), true
+}

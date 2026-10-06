@@ -217,10 +217,15 @@ the commit itself would always fail. The plan's CI invariant (plan section 4,
 milestone M2b, where a configuration commit may only pin a released UpKeeper
 whose program it declares compatible; `release.CheckProgramPin` implements the
 comparison for it. Until M2b, a pin can be stale: it names a binary whose
-program (`git diff --quiet <source_commit> <checkout> -- go.mod go.sum cmd
-internal ':(exclude,glob)**/*_test.go' ':(exclude,glob)**/testdata/**'`) is
-not the gated checkout's. Tests and test fixtures are not build inputs, so a
-commit that changes only them keeps the program's identity. A host refuses a stale pin whole, as
+program (the build inputs among `go.mod`, `go.sum`, `cmd` and `internal`
+between `<source_commit>` and `<checkout>`, `release.ProgramDiffers`) is not
+the gated checkout's. Tests and test fixtures are not build inputs, so a
+commit that changes only them keeps the program's identity. A changed path is
+ignored only when it is proven not to be compiled: a `*_test.go` file, or a
+non-Go file under a `testdata` directory that holds no non-test Go file, and
+in either case one that no `//go:embed` directive of a non-test Go file at
+either commit can match. A non-test Go file under `testdata` counts, because a
+production package can import its package explicitly. A host refuses a stale pin whole, as
 it refused a changed program before self-update: exit 30, a message that says
 the pin is stale and the host keeps its binary, and nothing downloaded,
 adopted or switched, with any hold left as it was. The next release that pins
