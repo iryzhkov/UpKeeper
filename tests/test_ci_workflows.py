@@ -252,6 +252,19 @@ def test_release_gate_never_supersedes_a_failure_on_incomplete_evidence(failed, 
     assert not gate.passed([success, failed], "abc")
 
 
+# A blank or padded ref names no branch, so two of them are not the same ref.
+# Malformed metadata is refused, never normalized into a valid ref.
+@pytest.mark.parametrize("ref", [" ", "\t", " main ", "main ", "\tmain"])
+def test_release_gate_never_supersedes_on_blank_or_padded_refs(monkeypatch, ref):
+    gate = load_script("check-release-ci")
+    failed = run(2, "failure", ref=ref)
+    success = run(3, "success", ref=ref)
+    decision, reasons = gate.decide([success, failed], "abc")
+    assert decision == "fail", reasons
+    fake_listing(monkeypatch, gate, lambda _: json.dumps([success, failed]))
+    assert gate.main() == 1
+
+
 @pytest.mark.parametrize("incomplete", [
     without(run(2, "failure"), "headSha"), without(run(2, "failure"), headSha=None),
     without(run(2, "failure"), "event"), without(run(2, "failure"), event=None),

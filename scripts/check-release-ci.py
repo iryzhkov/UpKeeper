@@ -27,8 +27,16 @@ RUN_LIMIT = 1000
 
 
 def ref_of(run: dict) -> str | None:
+    """The run's branch, or None unless it names one exactly.
+
+    A blank, whitespace-only or padded value names no branch. It is refused
+    rather than stripped, so malformed metadata can never be turned into the
+    "same ref" evidence that lets a later success supersede a failure.
+    """
     ref = run.get("headBranch")
-    return ref if isinstance(ref, str) and ref else None
+    if not isinstance(ref, str) or not ref or ref != ref.strip() or any(c.isspace() for c in ref):
+        return None
+    return ref
 
 
 def created_at(run: dict) -> datetime | None:
