@@ -2686,7 +2686,7 @@
       "compatibility": {
         "max": "0.0.45",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.111"
+        "steward_version": "0.11.0-rc.113"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -2700,7 +2700,26 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.111"
+      "version": "0.11.0-rc.113"
+    },
+    "upkeeper": {
+      "assets": {
+        "linux-amd64": {
+          "asset": "upkeeper-linux-amd64",
+          "sha256": "7a5843abc76d4bd23163fefe175a551e39c8cb0df8a07ccf3d0e999a8b297f64",
+          "size": 13202698
+        },
+        "linux-arm64": {
+          "asset": "upkeeper-linux-arm64",
+          "sha256": "f9653ac4fd7ffaaf555f82a8a928afc3f65b6890bba9973aba92302b9475387f",
+          "size": 12154675
+        }
+      },
+      "kind": "upkeeper-binary",
+      "repository": "iryzhkov/UpKeeper",
+      "source_commit": "515743175a34326242341b82992dfcd01b4f681a",
+      "tag": "v0.1.32",
+      "toolchain": "go1.26.8"
     },
     "worker-configuration": {
       "hosts": {
