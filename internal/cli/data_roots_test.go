@@ -217,6 +217,12 @@ func TestInspectionCommittedMarkers(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(code, "cmd/upkeeper/main.go")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal("fixture is not sparse")
 		}
+		// Modern sparse-checkout enables worktree config. That unsupported
+		// source must be refused; disabling it leaves local committed objects
+		// and the missing working marker available for the observation test.
+		inspectionTestGit(t, code, "config", "--local", "extensions.worktreeConfig", "true")
+		inspectionRead(t, code, data, nil, false)
+		inspectionTestGit(t, code, "config", "--local", "extensions.worktreeConfig", "false")
 		inspectionRead(t, code, data, nil, true)
 	})
 	for _, module := range []string{"module wrong.invalid\n", "go 1.24\n", "module github.com/iryzhkov/UpKeeper\nmodule github.com/iryzhkov/UpKeeper\n",
@@ -352,6 +358,68 @@ func TestInspectionIsolationAndNoRetrieval(t *testing.T) {
 	inspectionRead(t, code, data, nil, false)
 	if _, err := os.Stat(invocation); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("retrieval/helper ran")
+	}
+}
+
+func TestInspectionRepositoryConfigSources(t *testing.T) {
+	for _, role := range []string{"code", "data"} {
+		for _, arrangement := range []string{"include", "includeIf", "worktree", "linked-worktree"} {
+			t.Run(role+"/"+arrangement, func(t *testing.T) {
+				code := inspectionFixture(t, true, false, "git@code.example:Repo")
+				data := inspectionFixture(t, false, true, "git@data.example:Repo")
+				root := code
+				if role == "data" {
+					root = data
+				}
+				commonRoot := root
+				switch arrangement {
+				case "include", "includeIf":
+					policy := filepath.Join(root, ".git", "inspection-policy")
+					inspectionWrite(t, root, ".git/inspection-policy", "[remote \"origin\"]\n promisor = true\n")
+					key := "include.path"
+					if arrangement == "includeIf" {
+						key = "includeIf.gitdir:" + filepath.Join(root, ".git") + ".path"
+					}
+					inspectionTestGit(t, root, "config", key, policy)
+				case "worktree", "linked-worktree":
+					if arrangement == "linked-worktree" {
+						linked := filepath.Join(t.TempDir(), "linked")
+						inspectionTestGit(t, root, "worktree", "add", "-q", "--detach", linked)
+						root = linked
+						if role == "code" {
+							code = linked
+						} else {
+							data = linked
+						}
+					}
+					inspectionTestGit(t, root, "config", "--local", "extensions.worktreeConfig", "true")
+					inspectionTestGit(t, root, "config", "--worktree", "remote.origin.promisor", "true")
+				}
+				// All marker objects are present. Prove the adversarial setting is
+				// active, rather than merely installing an unused config file.
+				if got := inspectionTestGit(t, root, "config", "--includes", "--get", "remote.origin.promisor"); got != "true" {
+					t.Fatalf("fixture promisor setting is not effective: %q", got)
+				}
+				beforeCommon := inspectionState(t, commonRoot)
+				real := inspectionReal(t)
+				objectReads := 0
+				wrapper := inspectionRunnerFunc(func(ctx context.Context, c inspectionGitCommand) ([]byte, []byte, error) {
+					if c.root == root && (c.operation == inspectionTree || c.operation >= inspectionMarkers) {
+						objectReads++
+					}
+					return real.run(ctx, c)
+				})
+				inspectionRead(t, code, data, wrapper, false)
+				if objectReads != 0 {
+					t.Fatal("object read preceded unsupported repository config refusal")
+				}
+				// Includes and linked-worktree common metadata must remain intact,
+				// including files outside the selected worktree.
+				if !reflect.DeepEqual(beforeCommon, inspectionState(t, commonRoot)) {
+					t.Fatal("inspection changed common repository metadata or include")
+				}
+			})
+		}
 	}
 }
 

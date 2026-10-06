@@ -110,7 +110,7 @@ func (c inspectionGitCommand) argv() ([]string, error) {
 	case inspectionOrigin:
 		tail = []string{"config", "--no-includes", "--local", "--get-all", "remote.origin.url"}
 	case inspectionPartial:
-		tail = []string{"config", "--no-includes", "--local", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.promisor)$"}
+		tail = []string{"config", "--no-includes", "--local", "--get-regexp", "^(extensions\\.(partialclone|worktreeconfig)|remote\\..*\\.promisor|include\\.path|includeif\\..*\\.path)$"}
 	case inspectionTree, inspectionMarkers, inspectionType, inspectionSize, inspectionBlob:
 		if !inspectionHex(c.object) {
 			return nil, errors.New("invalid inspection object")
@@ -307,6 +307,19 @@ func inspectOneRoot(ctx context.Context, path string, code bool, runner inspecti
 		}
 		if key == "extensions.partialclone" {
 			return zero, errors.New("inspection refuses partial clone")
+		}
+		// Object commands read repository includes and enabled worktree config.
+		// Refuse these unsupported sources before interpreting any object.
+		if key == "include.path" || strings.HasPrefix(key, "includeif.") {
+			return zero, errors.New("inspection refuses repository includes")
+		}
+		if key == "extensions.worktreeconfig" {
+			switch strings.ToLower(value) {
+			case "false", "no", "off", "0":
+				continue
+			default:
+				return zero, errors.New("inspection refuses worktree configuration")
+			}
 		}
 		if !strings.HasPrefix(key, "remote.") || !strings.HasSuffix(key, ".promisor") {
 			return zero, errors.New("unsupported inspection config policy")
