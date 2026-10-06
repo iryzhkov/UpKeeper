@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -107,6 +108,8 @@ type stewardTestHost struct {
 	workerLoaded    bool
 	dispatched      string
 	versionReport   string
+	// workerPID is what systemd reports as the worker unit's main process.
+	workerPID string
 }
 
 func stewardTestPrepare(t *testing.T, host stewardTestHost) (*Context, *adapterTestRunner) {
@@ -137,6 +140,8 @@ func stewardTestPrepare(t *testing.T, host stewardTestHost) (*Context, *adapterT
 				return procx.Result{Stdout: "active"}
 			}
 			return procx.Result{Stdout: "inactive"}
+		case adapterTestMatches(command.Argv, "show", "MainPID"):
+			return procx.Result{Stdout: host.workerPID}
 		case adapterTestMatches(command.Argv, "show", "LoadState"):
 			if host.workerLoaded {
 				return procx.Result{Stdout: "loaded"}
@@ -366,7 +371,7 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 			name: "an idle worker is restarted onto the installed binary",
 			host: stewardTestHost{
 				active: true, workerLoaded: true,
-				dispatched: `{"workerId":"testhost","dispatched":0}`,
+				dispatched: `{"workerId":"testhost","dispatched":0,"settlePending":0}`,
 			},
 			action:      "restarted t3-steward-worker.service onto the pinned steward",
 			wantRestart: true,
@@ -375,9 +380,25 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 			name: "a worker whose journal owns dispatched execution defers",
 			host: stewardTestHost{
 				active: true, workerLoaded: true,
-				dispatched: `{"workerId":"testhost","dispatched":2}`,
+				dispatched: `{"workerId":"testhost","dispatched":2,"settlePending":0}`,
 			},
 			action: "worker restart deferred: 2 dispatched attempt(s) in the journal",
+		},
+		{
+			name: "a worker whose journal has attempts waiting to settle defers",
+			host: stewardTestHost{
+				active: true, workerLoaded: true,
+				dispatched: `{"workerId":"testhost","dispatched":0,"settlePending":1}`,
+			},
+			action: "worker restart deferred: 1 settle-pending attempt(s) in the journal",
+		},
+		{
+			name: "a journal summary that does not count settle-pending attempts defers",
+			host: stewardTestHost{
+				active: true, workerLoaded: true,
+				dispatched: `{"workerId":"testhost","dispatched":0}`,
+			},
+			action: "worker restart deferred: the journal summary does not count settle-pending attempts",
 		},
 		{
 			name:      "an unreadable journal fails instead of restarting",
@@ -395,7 +416,7 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 			name: "a worker that stays down after a restart is reported",
 			host: stewardTestHost{
 				workerLoaded: true,
-				dispatched:   `{"dispatched":0}`,
+				dispatched:   `{"dispatched":0,"settlePending":0}`,
 			},
 			errorText:   "persistent worker is inactive after restart",
 			wantRestart: true,
@@ -403,7 +424,7 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 		{
 			name: "a dry run reports the restart without performing it",
 			host: stewardTestHost{
-				active: true, workerLoaded: true, dispatched: `{"dispatched":0}`,
+				active: true, workerLoaded: true, dispatched: `{"dispatched":0,"settlePending":0}`,
 			},
 			dryRun: true,
 			action: "would restart t3-steward-worker.service onto the pinned steward",
@@ -414,7 +435,7 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 			context, runner := stewardTestPrepare(t, test.host)
 			context.DryRun = test.dryRun
 			actions := []string{}
-			err := stewardRestartPersistentWorker(
+			_, err := stewardRestartPersistentWorker(
 				context, context.Path(".local/bin/t3-steward"), &actions)
 			if test.errorText != "" {
 				if err == nil || !strings.Contains(err.Error(), test.errorText) {
@@ -428,6 +449,145 @@ func TestStewardPersistentWorkerRestart(t *testing.T) {
 					!test.wantRestart, test.wantRestart)
 			}
 			if test.action != "" && !adapterTestMatches(actions, test.action) {
+				t.Fatalf("actions %v do not report %q", actions, test.action)
+			}
+		})
+	}
+}
+
+// stewardTestRunningWorker makes the worker process execute running, as if it
+// had been started from the installed binary's path.
+func stewardTestRunningWorker(t *testing.T, context *Context, running string) {
+	t.Helper()
+	saved := stewardWorkerExecutable
+	stewardWorkerExecutable = func(pid int) (string, os.FileInfo, error) {
+		if pid != 4242 {
+			t.Errorf("asked for the executable of process %d", pid)
+		}
+		info, err := os.Stat(running)
+		if err != nil {
+			return "", nil, err
+		}
+		path, err := filepath.EvalSymlinks(context.Path(".local/bin/t3-steward"))
+		return path, info, err
+	}
+	t.Cleanup(func() { stewardWorkerExecutable = saved })
+}
+
+// A restart deferred because the worker was busy must not be forgotten: the
+// next pass sees the binary already installed, so only the running worker's
+// own executable says that it still serves the previous release.
+func TestStewardObserveReportsAPendingWorkerRestart(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		stale       bool
+		workerPID   string
+		wantPending bool
+	}{
+		{name: "a worker running the replaced binary", stale: true, workerPID: "4242", wantPending: true},
+		{name: "a worker running the installed binary", workerPID: "4242"},
+		{name: "a worker with no main process", stale: true, workerPID: "0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			context, _ := stewardTestPrepare(t, stewardTestHost{
+				active: true, workerLoaded: true, workerPID: test.workerPID,
+			})
+			spec := stewardTestSpec(false)
+			context.Components["t3-steward"] = spec
+			binary := context.Path(".local/bin/t3-steward")
+			adapterTestWrite(t, binary, stewardTestBinary)
+			running := binary
+			if test.stale {
+				running = context.Path("previous-t3-steward")
+				adapterTestWrite(t, running, "#!/bin/sh\necho previous steward\n")
+			}
+			stewardTestRunningWorker(t, context, running)
+			observed, err := stewardObserve(context, spec)
+			if err != nil {
+				t.Fatalf("observe: %v", err)
+			}
+			if observed["worker_restart_pending"] != test.wantPending {
+				t.Fatalf("worker_restart_pending = %v, want %v", observed["worker_restart_pending"], test.wantPending)
+			}
+			drift, _ := observed["drift"].([]string)
+			if test.wantPending != adapterTestMatches(drift, "worker restart pending") {
+				t.Fatalf("drift = %v", drift)
+			}
+			if matches := observationMatches(context, "t3-steward", spec, observed); matches == test.wantPending {
+				t.Fatalf("status reports converged = %v for a pending restart = %v", matches, test.wantPending)
+			}
+		})
+	}
+}
+
+// The pass after a deferral restarts the worker once the journal owns nothing,
+// and never while it owns dispatched or settle-pending attempts.
+func TestStewardRetriesADeferredWorkerRestart(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		journal     string
+		dryRun      bool
+		wantState   string
+		wantRestart bool
+		action      string
+	}{
+		{
+			name:        "an idle journal restarts the worker",
+			journal:     `{"dispatched":0,"settlePending":0}`,
+			wantState:   "updated",
+			wantRestart: true,
+			action:      "restarted t3-steward-worker.service onto the pinned steward",
+		},
+		{
+			name:      "dispatched attempts defer again",
+			journal:   `{"dispatched":1,"settlePending":0}`,
+			wantState: "converged",
+			action:    "worker restart deferred: 1 dispatched attempt(s) in the journal",
+		},
+		{
+			name:      "settle-pending attempts defer again",
+			journal:   `{"dispatched":0,"settlePending":2}`,
+			wantState: "converged",
+			action:    "worker restart deferred: 2 settle-pending attempt(s) in the journal",
+		},
+		{
+			name:      "a dry run describes the restart",
+			journal:   `{"dispatched":0,"settlePending":0}`,
+			dryRun:    true,
+			wantState: "updated",
+			action:    "would restart t3-steward-worker.service onto the pinned steward",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			context, runner := stewardTestPrepare(t, stewardTestHost{
+				active: true, workerLoaded: true, workerPID: "4242", dispatched: test.journal,
+			})
+			spec := stewardTestSpec(false)
+			context.Components["t3-steward"] = spec
+			binary := context.Path(".local/bin/t3-steward")
+			adapterTestWrite(t, binary, stewardTestBinary)
+			previous := context.Path("previous-t3-steward")
+			adapterTestWrite(t, previous, "#!/bin/sh\necho previous steward\n")
+			stewardTestRunningWorker(t, context, previous)
+			stewardTestServe(t, nil, "")
+			before, err := stewardObserve(context, spec)
+			if err != nil {
+				t.Fatalf("observe: %v", err)
+			}
+			context.DryRun = test.dryRun
+			actions := []string{}
+			state, err := stewardApply(context, spec, before, &actions)
+			if err != nil || state != test.wantState {
+				t.Fatalf("state = %q, error = %v, want %q (actions %v)", state, err, test.wantState, actions)
+			}
+			if runner.ran("restart", stewardWorkerUnit) != test.wantRestart {
+				t.Fatalf("worker restart performed = %v, want %v: %v",
+					!test.wantRestart, test.wantRestart, runner.calls)
+			}
+			if runner.ran("restart", "t3-steward.service") {
+				t.Fatalf("a converged steward service was restarted: %v", runner.calls)
+			}
+			if !adapterTestMatches(actions, test.action) {
 				t.Fatalf("actions %v do not report %q", actions, test.action)
 			}
 		})

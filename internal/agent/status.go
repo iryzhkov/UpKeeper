@@ -66,7 +66,8 @@ func observationMatches(c *Context, name string, spec, observed map[string]any) 
 		return ok && len(stale) == 0
 	case "t3-steward":
 		v, _ := observed["version"].(string)
-		return strings.TrimPrefix(v, "v") == spec["version"] && observed["service_active"] == true && stewardSessionHookConverged(c, spec)
+		return strings.TrimPrefix(v, "v") == spec["version"] && observed["service_active"] == true &&
+			stewardSessionHookConverged(c, spec) && observed["worker_restart_pending"] != true
 	case "t3":
 		return observed["installed"] == spec["version"] && observed["served"] == spec["version"] && observed["service_active"] == true && observed["check_ok"] == true
 	case "agent-config":

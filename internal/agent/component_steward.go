@@ -427,7 +427,64 @@ func stewardObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	if digest := c.SHA256File(binary); digest != "" {
 		observed["binary_sha256"] = digest
 	}
+	pending := stewardWorkerRestartPending(c, binary)
+	observed["worker_restart_pending"] = pending
+	observed["drift"] = []string{}
+	if pending {
+		observed["drift"] = []string{"worker restart pending"}
+	}
 	return observed, nil
+}
+
+// stewardWorkerExecutable reports the path a process was started from, without
+// the " (deleted)" suffix the kernel adds once that file has been replaced, and
+// the identity of the file the process is actually executing. It is a package
+// variable so that a test can stand in for /proc.
+var stewardWorkerExecutable = func(pid int) (string, os.FileInfo, error) {
+	executable := filepath.Join("/proc", strconv.Itoa(pid), "exe")
+	link, err := os.Readlink(executable)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		return "", nil, err
+	}
+	return strings.TrimSuffix(link, " (deleted)"), info, nil
+}
+
+// stewardWorkerRestartPending reports whether the running persistent worker
+// predates the installed binary: it was started from the installed path, and
+// the file it executes is no longer the file at that path.
+//
+// A restart deferred because the worker owned execution leaves exactly this
+// state behind, and the next pass finds the pinned version already installed,
+// so without this check the worker would serve the previous release until
+// something else restarted it. Anything that cannot be proven, such as a worker
+// that is not running or one started from another path, is not pending.
+func stewardWorkerRestartPending(c *Context, binary string) bool {
+	if !c.UnitLoaded(stewardWorkerUnit) || !c.UnitActive(stewardWorkerUnit) {
+		return false
+	}
+	result := c.Run([]string{"systemctl", "--user", "show", stewardWorkerUnit,
+		"-p", "MainPID", "--value"}, 10*time.Second, "")
+	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
+	if !result.OK || err != nil || pid <= 0 {
+		return false
+	}
+	installedPath, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		return false
+	}
+	installed, err := os.Stat(installedPath)
+	if err != nil {
+		return false
+	}
+	startedFrom, running, err := stewardWorkerExecutable(pid)
+	if err != nil || startedFrom != installedPath {
+		return false
+	}
+	return !os.SameFile(running, installed)
 }
 
 func stewardApply(
@@ -454,6 +511,18 @@ func stewardApplyPinnedBinary(
 		}
 		active, _ := before["service_active"].(bool)
 		if active && stewardSessionHookConverged(c, spec) {
+			if before["worker_restart_pending"] != true {
+				return "converged", nil
+			}
+			// An earlier pass installed this binary and deferred the worker
+			// restart; retry it now, under the same idle rule.
+			restarted, err := stewardRestartPersistentWorker(c, binary, actions)
+			if err != nil {
+				return "", err
+			}
+			if restarted {
+				return "updated", nil
+			}
 			return "converged", nil
 		}
 	}
@@ -531,7 +600,7 @@ func stewardApplyPinnedBinary(
 		*actions = append(*actions,
 			"installed verified OpenCode caller hook; loaded by new OpenCode servers")
 	}
-	if err := stewardRestartPersistentWorker(c, binary, actions); err != nil {
+	if _, err := stewardRestartPersistentWorker(c, binary, actions); err != nil {
 		return "", err
 	}
 	return "updated", nil
@@ -666,11 +735,13 @@ func stewardRestoreBinary(c *Context, before map[string]any, state stewardRestor
 // Installing the binary does not change the worker process that is already
 // running, so a host that runs the worker would keep serving the previous
 // release against a coordinator that already speaks the new one. A worker whose
-// durable journal still owns dispatched execution is reported and left running,
-// never forced.
-func stewardRestartPersistentWorker(c *Context, binary string, actions *[]string) error {
+// durable journal still owns dispatched or settle-pending execution is reported
+// and left running, never forced; the next pass sees the restart pending and
+// retries it. restarted is true when the restart was performed, or would have
+// been in a dry run.
+func stewardRestartPersistentWorker(c *Context, binary string, actions *[]string) (bool, error) {
 	if !c.UnitLoaded(stewardWorkerUnit) {
-		return nil
+		return false, nil
 	}
 	summary := c.Run([]string{binary, "worker", "inspect-journal"}, 30*time.Second, "")
 	if !summary.OK {
@@ -678,40 +749,56 @@ func stewardRestartPersistentWorker(c *Context, binary string, actions *[]string
 		if len(tail) > 200 {
 			tail = tail[len(tail)-200:]
 		}
-		return Failf("worker journal inspection failed: %s", tail)
+		return false, Failf("worker journal inspection failed: %s", tail)
 	}
-	dispatched, counted := stewardDispatchedCount(summary.Output)
+	document, err := canonjson.DecodeObject([]byte(summary.Output))
+	if err != nil {
+		return false, Failf("worker journal inspection returned no usable summary")
+	}
+	dispatched, counted := stewardJournalCount(document, "dispatched")
 	if !counted {
-		return Failf("worker journal inspection returned no usable summary")
+		return false, Failf("worker journal inspection returned no usable summary")
 	}
 	if dispatched != 0 {
 		*actions = append(*actions, fmt.Sprintf(
 			"worker restart deferred: %d dispatched attempt(s) in the journal", dispatched))
-		return nil
+		return false, nil
+	}
+	// An attempt waiting to settle is still owned by this worker, and a summary
+	// that does not count such attempts cannot prove there are none.
+	if _, present := document["settlePending"]; !present {
+		*actions = append(*actions,
+			"worker restart deferred: the journal summary does not count settle-pending attempts")
+		return false, nil
+	}
+	settlePending, counted := stewardJournalCount(document, "settlePending")
+	if !counted {
+		return false, Failf("worker journal inspection returned no usable summary")
+	}
+	if settlePending != 0 {
+		*actions = append(*actions, fmt.Sprintf(
+			"worker restart deferred: %d settle-pending attempt(s) in the journal", settlePending))
+		return false, nil
 	}
 	if c.DryRun {
 		*actions = append(*actions,
 			"would restart "+stewardWorkerUnit+" onto the pinned steward")
-		return nil
+		return true, nil
 	}
 	if _, err := c.Must([]string{"systemctl", "--user", "restart", stewardWorkerUnit},
 		0, "", "restart persistent worker"); err != nil {
-		return err
+		return false, err
 	}
 	if !c.UnitActive(stewardWorkerUnit) {
-		return Failf("persistent worker is inactive after restart")
+		return false, Failf("persistent worker is inactive after restart")
 	}
 	*actions = append(*actions, "restarted "+stewardWorkerUnit+" onto the pinned steward")
-	return nil
+	return true, nil
 }
 
-// stewardDispatchedCount reads how many attempts the worker journal still owns.
-func stewardDispatchedCount(output string) (int, bool) {
-	document, err := canonjson.DecodeObject([]byte(output))
-	if err != nil {
-		return 0, false
-	}
-	switch typed := document["dispatched"].(type) {
+// stewardJournalCount reads one attempt count from the worker journal summary.
+func stewardJournalCount(document map[string]any, field string) (int, bool) {
+	switch typed := document[field].(type) {
 	case json.Number:
 		number, err := typed.Float64()
 		if err != nil {
