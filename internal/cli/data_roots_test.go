@@ -30,7 +30,11 @@ func inspectionTestGit(t *testing.T, root string, args ...string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(binary, append([]string{"--no-replace-objects", "-C", root}, args...)...)
+	// Keep fixture setup synchronous: commit/checkout must not launch Git
+	// maintenance that races the subsequent complete metadata fingerprint.
+	command := exec.Command(binary, append([]string{"--no-replace-objects",
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "gc.autoDetach=false",
+		"-C", root}, args...)...)
 	command.Env = append(inspectionEnvironment(), "GIT_AUTHOR_NAME=A1", "GIT_AUTHOR_EMAIL=a1@example.invalid", "GIT_COMMITTER_NAME=A1", "GIT_COMMITTER_EMAIL=a1@example.invalid")
 	out, err := command.CombinedOutput()
 	if err != nil {
