@@ -12,8 +12,9 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
-// pinnedRelease is the published release with a program pin added.
-func pinnedRelease(t *testing.T) release.Release {
+// editedRelease is a validated copy of the published release after change.
+// The published manifest is never edited.
+func editedRelease(t *testing.T, change func(components map[string]any)) release.Release {
 	t.Helper()
 	encoded, err := canonjson.MarshalFile(fleetRelease(t).Manifest)
 	if err != nil {
@@ -23,8 +24,33 @@ func pinnedRelease(t *testing.T) release.Release {
 	if err != nil {
 		t.Fatal(err)
 	}
+	change(manifest["components"].(map[string]any))
+	value, err := release.Validate(manifest)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	return value
+}
+
+// unpinnedRelease is the published release without a program pin, whether or
+// not the published release carries one.
+func unpinnedRelease(t *testing.T) release.Release {
+	t.Helper()
+	return editedRelease(t, func(components map[string]any) {
+		delete(components, release.ProgramComponent)
+	})
+}
+
+// pinnedRelease is the published release with a known program pin, replacing
+// any pin the published release carries.
+func pinnedRelease(t *testing.T) release.Release {
+	t.Helper()
+	return editedRelease(t, pinComponent)
+}
+
+func pinComponent(components map[string]any) {
 	size := json.Number("9437184")
-	manifest["components"].(map[string]any)[release.ProgramComponent] = map[string]any{
+	components[release.ProgramComponent] = map[string]any{
 		"kind": "upkeeper-binary", "repository": release.ProgramRepository, "tag": "v0.1.31",
 		"source_commit": strings.Repeat("b", 40), "toolchain": "go1.24.13",
 		"assets": map[string]any{
@@ -32,11 +58,6 @@ func pinnedRelease(t *testing.T) release.Release {
 			"linux-arm64": map[string]any{"asset": "upkeeper-linux-arm64", "sha256": strings.Repeat("2", 64), "size": size},
 		},
 	}
-	value, err := release.Validate(manifest)
-	if err != nil {
-		t.Fatalf("validate: %v", err)
-	}
-	return value
 }
 
 func TestTheProgramFenceIsThePinnedCommitExceptForARollback(t *testing.T) {
@@ -50,7 +71,11 @@ func TestTheProgramFenceIsThePinnedCommitExceptForARollback(t *testing.T) {
 	if got := converge.ProgramFence(pinned, "rollback"); got != "" {
 		t.Errorf("a rollback requires program %q", got)
 	}
-	if got := converge.ProgramFence(fleetRelease(t), "pull"); got != "" {
+	unpinned := unpinnedRelease(t)
+	if pin, err := unpinned.ProgramPin(); err != nil || pin != nil {
+		t.Fatalf("the unpinned release has pin %v (%v)", pin, err)
+	}
+	if got := converge.ProgramFence(unpinned, "pull"); got != "" {
 		t.Errorf("a release without a pin requires program %q", got)
 	}
 }
