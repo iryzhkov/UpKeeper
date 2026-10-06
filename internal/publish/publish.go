@@ -91,6 +91,7 @@ func Release(root string, options Options) (map[string]any, error) {
 	}
 
 	var captured release.Release
+	var authoredManifest []byte
 	var previous release.Release
 	var historicalErr error
 	if options.Authored {
@@ -107,7 +108,7 @@ func Release(root string, options Options) (map[string]any, error) {
 		if head != options.ExpectedHead {
 			return nil, failure.Push("authored publication HEAD changed: got %s, want %s", head, options.ExpectedHead)
 		}
-		captured, err = release.Load(root)
+		captured, authoredManifest, err = release.LoadWithBytes(root)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +177,7 @@ func Release(root string, options Options) (map[string]any, error) {
 	}
 	var head, branch string
 	if options.Authored {
-		head, branch, err = commitAuthored(root, options, runner, captured, paths, summary)
+		head, branch, err = commitAuthored(root, options, runner, captured, authoredManifest, paths, summary)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +255,7 @@ func releaseCommitMessage(controller string, summary []string) string {
 	return message
 }
 
-func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, paths, summary []string) (string, string, error) {
+func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, expectedManifest []byte, paths, summary []string) (string, string, error) {
 	branchRef, err := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		return "", "", failure.Push("cannot publish authored release from a detached HEAD")
@@ -329,10 +330,6 @@ func commitAuthored(root string, options Options, runner procx.Runner, captured 
 			return failure.Push("authored publication branch changed: got %s, want %s", currentRef, branchRef)
 		}
 		return nil
-	}
-	expectedManifest, err := captured.CanonicalBytes()
-	if err != nil {
-		return "", "", err
 	}
 	verifyRegular := func(path string) error {
 		stage, stageErr := run("", "ls-files", "--stage", "--", path)

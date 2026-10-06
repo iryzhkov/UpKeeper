@@ -24,36 +24,44 @@ var historicalRevisionPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/@{
 // that every companion file it names still matches the digest it was published
 // with. A manifest whose companion files drifted is not a release.
 func Load(root string) (Release, error) {
+	value, _, err := LoadWithBytes(root)
+	return value, err
+}
+
+// LoadWithBytes validates the same manifest snapshot whose original bytes it
+// returns. Authored publication uses these bytes to fence staging without
+// imposing canonical serialization or reading the manifest a second time.
+func LoadWithBytes(root string) (Release, []byte, error) {
 	path := filepath.Join(root, File)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Release{}, failure.Validation("cannot load %s: %v", File, err)
+		return Release{}, nil, failure.Validation("cannot load %s: %v", File, err)
 	}
 	document, err := canonjson.Decode(data)
 	if err != nil {
-		return Release{}, failure.Validation("cannot load %s: %v", File, err)
+		return Release{}, nil, failure.Validation("cannot load %s: %v", File, err)
 	}
 	manifest, ok := document.(map[string]any)
 	if !ok {
-		return Release{}, failure.Validation("%s must contain an object", File)
+		return Release{}, nil, failure.Validation("%s must contain an object", File)
 	}
 	validated, err := Validate(manifest)
 	if err != nil {
-		return Release{}, err
+		return Release{}, nil, err
 	}
 	for _, entry := range validated.Files() {
 		store, _ := entry["store"].(string)
 		expected, _ := entry["sha256"].(string)
 		payload, err := os.ReadFile(filepath.Join(root, AgentConfigDir, store))
 		if err != nil {
-			return Release{}, failure.Validation("stored agent file missing: %s", store)
+			return Release{}, nil, failure.Validation("stored agent file missing: %s", store)
 		}
 		if digestOf(payload) != expected {
-			return Release{}, failure.Validation(
+			return Release{}, nil, failure.Validation(
 				"stored agent file does not match its manifest digest: %s", store)
 		}
 	}
-	return validated, nil
+	return validated, data, nil
 }
 
 // Write publishes the manifest's canonical bytes into a checkout.
