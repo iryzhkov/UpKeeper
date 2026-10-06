@@ -57,6 +57,9 @@ type Options struct {
 	Reachability    func(spec inventory.HostSpec) map[string]any
 	Process         procx.Runner
 	RunID           string
+	// ReconcileT3 names the retained controlled T3 transaction an explicit
+	// pull --reconcile-t3-transaction asks the agent to reconcile.
+	ReconcileT3 string
 }
 
 // Controller names the inventory host this process is running on, or
@@ -197,6 +200,8 @@ func Fleet(
 			ObserveOnly:    options.ObserveOnly,
 			AllowDowngrade: options.Command == "rollback",
 			DryRun:         options.DryRun,
+			// Only the explicit pull flag sets this; scheduled runs never do.
+			ReconcileT3Transaction: options.ReconcileT3,
 			Host: agent.HostRef{
 				Name: name, OSID: spec.OSID, SetupCheckout: spec.SetupCheckout,
 			},

@@ -47,6 +47,10 @@ type Payload struct {
 	Manifest       map[string]any    `json:"manifest"`
 	StoredFiles    map[string]string `json:"stored_files"`
 	Lock           map[string]any    `json:"lock"`
+	// ReconcileT3Transaction names one retained controlled T3 transaction left
+	// at files-restored for the explicit, guarded reconciliation pull
+	// --reconcile-t3-transaction asks for. Empty in every other run.
+	ReconcileT3Transaction string `json:"reconcile_t3_transaction,omitempty"`
 }
 
 // StepFailed is a component step that did not complete. The host stops here.

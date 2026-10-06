@@ -69,6 +69,29 @@ func TestProjectUpdateTracksPresenceSeparatelyFromEmpty(t *testing.T) {
 	}
 }
 
+// Reconciling a retained T3 transaction names one transaction on one host and
+// nothing else; every broader or ambiguous form is a usage error.
+func TestReconcileT3TransactionIsNarrow(t *testing.T) {
+	parsed := parseOrFail(t, "pull", "--hosts", "normandy", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-3563961840", "--dry-run")
+	if parsed.reconcileT3 != ".upkeeper-t3-3563961840" || !parsed.dryRun {
+		t.Fatalf("reconciliation flag = %#v", parsed)
+	}
+	for _, argv := range [][]string{
+		{"pull", "--all", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+		{"pull", "--self", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+		{"pull", "--hosts", "normandy", "homelab", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+		{"pull", "--hosts", "normandy", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+		{"pull", "--hosts", "normandy", "--components", "t3", "t3-steward", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+		{"pull", "--hosts", "normandy", "--components", "t3", "--reconcile-t3-transaction", "../t3"},
+		{"pull", "--hosts", "normandy", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-1/x"},
+		{"rollback", "--to", "abcdef1", "--hosts", "normandy", "--components", "t3", "--reconcile-t3-transaction", ".upkeeper-t3-1"},
+	} {
+		if _, err := parse(argv, release.ComponentOrder); err == nil {
+			t.Fatalf("accepted %v", argv)
+		}
+	}
+}
+
 func TestDefaults(t *testing.T) {
 	if parsed := parseOrFail(t, "doctor"); parsed.probeTimeout != 20 {
 		t.Errorf("doctor timeout defaults to %d", parsed.probeTimeout)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -207,6 +208,7 @@ func t3ArtifactHost(t *testing.T, failQualification, failRestart bool, idleAfter
 	spec := map[string]any{"kind": "npm-package", "package": "t3", "service": "t3code.service", "version": "0.0.45", "artifact": raw, "compatibility": map[string]any{"min": "0.0.38", "max": "0.0.45", "steward_version": "0.11.0"}}
 	runner := &adapterTestRunner{}
 	c := adapterTestContext(t, runner)
+	c.Sleep = func(time.Duration) {} // Bounded readiness samples never wait in tests.
 	c.Components["t3-steward"] = stewardTestSpec(false)
 	prefix := c.Path(".local/t3-prefix")
 	packagePath := filepath.Join(prefix, "lib/node_modules/t3")

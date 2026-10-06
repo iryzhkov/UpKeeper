@@ -427,6 +427,13 @@ func t3VerifyInstalledCLI(c *Context, version string) error {
 func t3Apply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
+	if name := c.Payload.ReconcileT3Transaction; name != "" {
+		// An explicit reconciliation run does nothing else to T3.
+		if len(c.Selected) != 1 || c.Selected[0] != "t3" {
+			return "", Failf("T3 transaction reconciliation runs only with the t3 component alone")
+		}
+		return t3ReconcileRetained(c, spec, name, actions)
+	}
 	_, controlled := spec["artifact"] // Identity transitions precede every version-only fast path.
 	prefix := adapterSpecString(before, "npm_prefix")
 	if controlled || release.T3ControlledEvidence(c.Home, prefix) {
