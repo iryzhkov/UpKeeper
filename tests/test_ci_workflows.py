@@ -180,6 +180,88 @@ def test_release_gate_prints_its_decision(monkeypatch, capsys, runs, code, decis
     assert "headBranch" in listing[listing.index("--json") + 1]
 
 
+def fake_listing(monkeypatch, gate, respond):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "iryzhkov/UpKeeper")
+    monkeypatch.setattr(gate.time, "sleep", lambda _: pytest.fail("the gate waited"))
+
+    def fake_check_output(argv, **_):
+        if argv[0] == "git":
+            return "abc\n"
+        return respond(int(argv[argv.index("--limit") + 1]))
+
+    monkeypatch.setattr(gate.subprocess, "check_output", fake_check_output)
+
+
+def test_release_gate_refuses_a_history_cut_at_the_retrieval_cap(monkeypatch, capsys):
+    # gh returns only the newest runs up to --limit. A failure older than the
+    # cap is invisible, so a full page proves nothing about the history.
+    gate = load_script("check-release-ci")
+    history = [run(index, "success") for index in range(5000, 0, -1)]
+    history.append(run(0, "failure", ref="v0.1.33"))
+    fake_listing(monkeypatch, gate, lambda limit: json.dumps(history[:limit]))
+    assert gate.main() == 1
+    captured = capsys.readouterr()
+    assert "ci.yml release gate decision for abc: fail" in captured.out
+    assert "incomplete" in captured.out + captured.err
+
+
+def test_release_gate_accepts_a_history_below_the_retrieval_cap(monkeypatch):
+    gate = load_script("check-release-ci")
+    fake_listing(monkeypatch, gate, lambda limit: json.dumps(
+        [run(index, "success") for index in range(limit - 1, 0, -1)]))
+    assert gate.main() == 0
+
+
+@pytest.mark.parametrize("response", [
+    '{"runs": []}', '["run"]', "[null]", '[{"headSha": "abc", "event": "push", "status": 1}]',
+])
+def test_release_gate_refuses_a_malformed_listing(monkeypatch, response):
+    gate = load_script("check-release-ci")
+    fake_listing(monkeypatch, gate, lambda _: response)
+    assert gate.main() == 1
+
+
+def without(entry, *fields, **values):
+    entry = {key: value for key, value in entry.items() if key not in fields}
+    entry.update(values)
+    return entry
+
+
+@pytest.mark.parametrize("failed,success", [
+    # Absent ref and time on both runs: None == None is not the same ref.
+    (without(run(2, "failure"), "headBranch", "createdAt"),
+     without(run(3, "success"), "headBranch")),
+    (without(run(2, "failure"), "headBranch"), without(run(3, "success"), "headBranch")),
+    (without(run(2, "failure"), headBranch=None), without(run(3, "success"), headBranch=None)),
+    (without(run(2, "failure"), headBranch=""), without(run(3, "success"), headBranch="")),
+    # A failure without a usable time cannot be shown to be older.
+    (without(run(2, "failure"), "createdAt"), run(3, "success")),
+    (without(run(2, "failure"), createdAt=None), run(3, "success")),
+    (without(run(2, "failure"), createdAt=""), run(3, "success")),
+    (without(run(2, "failure"), createdAt="yesterday"), run(3, "success")),
+    (without(run(2, "failure"), createdAt="2026-10-06T15:02:00"), run(3, "success")),
+    # Nor can a success without a usable time be shown to be later.
+    (run(2, "failure"), without(run(3, "success"), "createdAt")),
+    (run(2, "failure"), without(run(3, "success"), createdAt="9999")),
+    (run(2, "failure"), without(run(3, "success"), createdAt=20261006)),
+])
+def test_release_gate_never_supersedes_a_failure_on_incomplete_evidence(failed, success):
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide([success, failed], "abc")
+    assert decision == "fail", reasons
+    assert not gate.passed([success, failed], "abc")
+
+
+def test_release_gate_orders_runs_by_time_not_by_text():
+    gate = load_script("check-release-ci")
+    failed = without(run(2, "failure"), createdAt="2026-10-06T16:00:00Z")
+    success = without(run(3, "success"), createdAt="2026-10-06T17:30:00+02:00")
+    # 15:30Z is earlier than 16:00Z although the text sorts after it.
+    assert gate.decide([success, failed], "abc")[0] == "fail"
+    success["createdAt"] = "2026-10-06T18:30:00+02:00"
+    assert gate.decide([success, failed], "abc")[0] == "pass"
+
+
 @pytest.mark.parametrize("private", [False, True], ids=["public", "private"])
 def test_release_authorizes_before_build_and_publish_with_optional_attestation(private):
     release = workflow("release.yml")

@@ -5,6 +5,11 @@ Every completed push run for the commit must have succeeded, or each failed run
 must be superseded by a later successful run on the same ref. A run that is
 still queued or in progress could still fail, so the gate waits for it. The
 decision and the runs it rests on are printed to the release log.
+
+The gate fails closed on evidence it cannot trust: a listing that fills the
+retrieval cap may omit older failed runs, a malformed listing proves nothing,
+and a failure is superseded only when both runs carry a usable ref and a
+parsable creation time.
 """
 
 import json
@@ -12,8 +17,30 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 
 RUN_FIELDS = "databaseId,headSha,status,conclusion,event,headBranch,createdAt"
+
+# gh lists the newest runs first, at most this many. A listing of this size may
+# have cut older runs off, so it cannot authorize a release.
+RUN_LIMIT = 1000
+
+
+def ref_of(run: dict) -> str | None:
+    ref = run.get("headBranch")
+    return ref if isinstance(ref, str) and ref else None
+
+
+def created_at(run: dict) -> datetime | None:
+    """The run's creation time, or None unless it is an ISO 8601 time with a zone."""
+    value = run.get("createdAt")
+    if not isinstance(value, str) or "T" not in value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def describe(run: dict) -> str:
@@ -22,9 +49,16 @@ def describe(run: dict) -> str:
             f"created {run.get('createdAt')}: {state}")
 
 
-def decide(runs: list, commit: str) -> tuple[str, list[str]]:
+def decide(runs: object, commit: str) -> tuple[str, list[str]]:
     """Return "pass", "fail" or "wait", with one reason line per run considered."""
+    if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
+        return "fail", ["the run listing is malformed"]
     candidates = [r for r in runs if r.get("headSha") == commit and r.get("event") == "push"]
+    malformed = [r for r in candidates if not isinstance(r.get("status"), str)
+                 or (r.get("status") == "completed"
+                     and not isinstance(r.get("conclusion"), (str, type(None))))]
+    if malformed:
+        return "fail", [describe(r) + "; malformed status or conclusion" for r in malformed]
     if not candidates:
         return "wait", ["no ci.yml push run for this commit yet"]
     reasons = []
@@ -38,8 +72,14 @@ def decide(runs: list, commit: str) -> tuple[str, list[str]]:
         if run.get("conclusion") == "success":
             reasons.append(describe(run))
             continue
-        later = [s for s in successes if s.get("headBranch") == run.get("headBranch")
-                 and str(s.get("createdAt", "")) > str(run.get("createdAt", ""))]
+        ref, created = ref_of(run), created_at(run)
+        if ref is None or created is None:
+            reasons.append(describe(run) + "; no usable ref or creation time, so it cannot "
+                           "be superseded")
+            unsuperseded.append(run)
+            continue
+        later = [s for s in successes if ref_of(s) == ref
+                 and (successor := created_at(s)) is not None and successor > created]
         if later:
             reasons.append(describe(run) + f"; superseded by run {later[0].get('databaseId')}")
         else:
@@ -63,19 +103,29 @@ def main() -> int:
     while time.monotonic() < deadline:
         output = subprocess.check_output(
             ["gh", "run", "list", "--repo", repository, "--workflow", "ci.yml",
-             "--commit", commit, "--event", "push", "--limit", "100",
+             "--commit", commit, "--event", "push", "--limit", str(RUN_LIMIT),
              "--json", RUN_FIELDS],
             text=True, timeout=60,
         )
-        decision, reasons = decide(json.loads(output), commit)
+        try:
+            runs = json.loads(output)
+        except ValueError:
+            runs = None
+        if isinstance(runs, list) and len(runs) >= RUN_LIMIT:
+            decision, reasons = "fail", [
+                f"the listing reached the retrieval cap of {RUN_LIMIT} runs, so the run "
+                "history is incomplete and an older failed run may be missing"]
+        else:
+            decision, reasons = decide(runs, commit)
         if decision != "wait":
             print(f"ci.yml release gate decision for {commit}: {decision}", flush=True)
             for reason in reasons:
                 print(f"  {reason}", flush=True)
             if decision == "pass":
                 return 0
-            print(f"ci.yml gate refused for {commit}: a failed push run was not "
-                  "superseded by a later successful run on the same ref", file=sys.stderr)
+            print(f"ci.yml gate refused for {commit}: the push runs do not prove that "
+                  "every failed run was superseded by a later successful run on the same "
+                  "ref", file=sys.stderr)
             return 1
         print(f"Waiting for ci.yml push gate for {commit}: {'; '.join(reasons)}", flush=True)
         time.sleep(15)
