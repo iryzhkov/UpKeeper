@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -230,11 +231,13 @@ func toolingApply(c *Context, spec, before map[string]any, actions *[]string) (s
 }
 
 func stageTooling(c *Context, dir string, t *release.Tooling) error {
-	if _, err := c.Must([]string{"bash", "-c", "command -v bash curl jq python3 ssh readlink secret-tool >/dev/null"}, 15*time.Second, c.Home, "CLI prerequisites"); err != nil {
-		return err
-	}
+	// A staged release is only verified. The CLI check is for staging, as the
+	// preflight's staging-only prerequisites are.
 	if _, err := os.Stat(filepath.Join(dir, ".complete")); err == nil {
 		return verifyToolFiles(c, dir, t)
+	}
+	if _, err := c.Must([]string{"bash", "-c", "command -v bash curl jq python3 ssh readlink secret-tool >/dev/null"}, 15*time.Second, c.Home, "CLI prerequisites"); err != nil {
+		return err
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if err := setAsideOwnFailedStage(c, dir); err != nil {
@@ -347,8 +350,9 @@ func setAsideOwnFailedStage(c *Context, dir string) error {
 	if markerInfo, err := os.Lstat(path); err != nil || !markerInfo.Mode().IsRegular() || markerInfo.Size() > 4096 {
 		return refuse()
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	// Read without blocking, so a marker swapped for a FIFO cannot hang.
+	data, ok := readSmallRegularFile(path, 4096)
+	if !ok {
 		return refuse()
 	}
 	var owner toolingStageOwner
@@ -405,13 +409,26 @@ func pruneFailedStages(failed string) error {
 	}
 	names := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() && ownFailedStage(failed, entry.Name()) {
+		if !entry.IsDir() {
+			continue
+		}
+		// A stage a pruning was interrupted in is finished first. It still has
+		// its marker, which is always the last thing removed.
+		if name, found := strings.CutPrefix(entry.Name(), failedStagePruning); found {
+			if ownFailedStage(filepath.Join(failed, entry.Name()), name) {
+				if err := removeMarkerLast(filepath.Join(failed, entry.Name())); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if ownFailedStage(filepath.Join(failed, entry.Name()), entry.Name()) {
 			names = append(names, entry.Name())
 		}
 	}
 	sort.Strings(names)
 	for len(names) > toolingFailedStageLimit {
-		if err := os.RemoveAll(filepath.Join(failed, names[0])); err != nil {
+		if err := removeFailedStage(failed, names[0]); err != nil {
 			return err
 		}
 		names = names[1:]
@@ -419,18 +436,71 @@ func pruneFailedStages(failed string) error {
 	return nil
 }
 
-// ownFailedStage reports whether failed/name is a stage setAsideOwnFailedStage
-// moved there: its marker is a small regular file that says UpKeeper created
-// it, for the release identity its name abbreviates, and, when the marker
-// records when it began, at the time its name gives. A marker that cannot be
-// read, does not parse, or says anything else makes the directory unknown,
-// and an unknown directory is never counted or deleted.
-func ownFailedStage(failed, name string) bool {
+// failedStagePruning prefixes the name of a failed stage while it is removed.
+const failedStagePruning = ".pruning-"
+
+// removeFailedStage removes one validated failed stage. The stage is first
+// renamed to a private name and validated again there, so a directory that
+// something else put at its name after it was validated is renamed back
+// rather than removed.
+func removeFailedStage(failed, name string) error {
+	path := filepath.Join(failed, name)
+	pruning := filepath.Join(failed, failedStagePruning+name)
+	if err := fsatomic.RenameNoReplace(path, pruning); err != nil {
+		// Gone already, or a directory of unknown origin holds the private
+		// name: either way there is nothing this prune may remove.
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	if !ownFailedStage(pruning, name) {
+		// Not the stage that was validated. If its name has been taken again
+		// meanwhile, it stays under the private name, which is never removed
+		// without a valid marker either.
+		_ = fsatomic.RenameNoReplace(pruning, path)
+		return nil
+	}
+	return removeMarkerLast(pruning)
+}
+
+// removeMarkerLast removes a stage directory with its ownership marker last,
+// so a removal that stops part way leaves a directory a later prune still
+// recognises and finishes.
+func removeMarkerLast(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == toolingStageMarker {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, toolingStageMarker)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.Remove(dir)
+}
+
+// ownFailedStage reports whether dir is a stage setAsideOwnFailedStage moved
+// into failed-stages under name: its marker is a small regular file that says
+// UpKeeper created it, for the release identity name abbreviates, and, when
+// the marker records when it began, at the time name gives. A marker that
+// cannot be read, does not parse, or says anything else makes the directory
+// unknown, and an unknown directory is never counted or deleted.
+func ownFailedStage(dir, name string) bool {
 	parts := failedStageName.FindStringSubmatch(name)
 	if parts == nil {
 		return false
 	}
-	path := filepath.Join(failed, name, toolingStageMarker)
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		return false
+	}
+	path := filepath.Join(dir, toolingStageMarker)
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
 		return false
 	}

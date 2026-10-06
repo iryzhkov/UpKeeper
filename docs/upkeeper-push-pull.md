@@ -300,8 +300,8 @@ On the first converge of a fresh host, expect:
   in a private stage, renamed into place without ever replacing something that is already
   there, and its unit is seeded and started;
 - t3-steward to install its verified binary although no T3 exists yet: no T3 at all is a
-  safe pair transition (only when npm answers that no global t3 package is installed; an
-  npm that is missing, times out or cannot read its package tree refuses the transition), because nothing is running that the steward could be incompatible
+  safe pair transition (only when npm answers that no global t3 package is installed, or its
+  global prefix has no `lib` directory yet; an npm that is missing, times out or cannot read its package tree refuses the transition), because nothing is running that the steward could be incompatible
   with and the candidate has proved that the release's T3 is in its range. When the host has
   no `t3-steward.service`, the binary is installed and verified without a restart and the
   action says so; install the service with `t3-steward install-service` once T3 serves;

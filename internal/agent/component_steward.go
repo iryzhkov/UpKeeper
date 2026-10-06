@@ -410,14 +410,23 @@ func t3PackageAbsent(c *Context) bool {
 		Argv: []string{"npm", "ls", "-g", "--depth=0", "--json", "t3"},
 		Env:  c.Env, Timeout: 30 * time.Second,
 	})
-	if result.Err != nil || result.TimedOut || (result.Code != 0 && result.Code != 1) {
+	if result.Err != nil || result.TimedOut {
 		return false
 	}
 	var document map[string]json.RawMessage
 	if json.Unmarshal([]byte(result.Stdout), &document) != nil || document == nil {
 		return false
 	}
-	if _, failed := document["error"]; failed {
+	if raw, failed := document["error"]; failed {
+		// npm cannot list a global prefix whose lib directory does not exist
+		// yet. Such a prefix holds no package at all, which is proved by
+		// looking at it, never by the wording of the error.
+		var report struct {
+			Code string `json:"code"`
+		}
+		return json.Unmarshal(raw, &report) == nil && report.Code == "ENOENT" && t3GlobalLibMissing(c)
+	}
+	if result.Code != 0 && result.Code != 1 {
 		return false
 	}
 	raw, listed := document["dependencies"]
@@ -430,6 +439,21 @@ func t3PackageAbsent(c *Context) bool {
 	}
 	_, present := dependencies["t3"]
 	return !present
+}
+
+// t3GlobalLibMissing reports whether npm's global prefix is an absolute path
+// whose lib directory certainly does not exist.
+func t3GlobalLibMissing(c *Context) bool {
+	result := c.Runner(procx.Command{Argv: []string{"npm", "prefix", "-g"}, Env: c.Env, Timeout: 30 * time.Second})
+	if result.Err != nil || result.TimedOut || result.Code != 0 {
+		return false
+	}
+	prefix := strings.TrimSpace(result.Stdout)
+	if !filepath.IsAbs(prefix) || strings.ContainsAny(prefix, "\n\r") {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(prefix, "lib"))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // stewardUnitPresent reports whether the host has a steward service unit at
