@@ -18,8 +18,10 @@ release tags (`v0.1.x`).
   `self-pull --after-update COMMIT`, which converges. Failures leave `current`
   unchanged or restore the previous generation. `upkeeper self install
   --expect-sha256`, `self rollback` and `self status` manage the generations by
-  hand. The published-manifest gate proves the pin was built from the commit's
-  own program, `go.sum` now counts as program, remote agents are invoked as
+  hand. A pin whose program is not the gated checkout's is stale and is
+  refused whole, before anything is fetched; code-repository CI does not hold
+  a commit to its pin, and that invariant moves to the configuration
+  repository's CI (M2b). `go.sum` now counts as program, remote agents are invoked as
   `__agent --expect-program COMMIT` and refuse a program they were not built
   from (an agent from before the fence rejects the option and does no
   work), and `status` and the

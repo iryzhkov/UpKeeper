@@ -100,12 +100,25 @@ var newSelfUpdate = func() (*selfUpdate, error) {
 // Nothing here converges a component: a refusal leaves the host on the
 // program it was running.
 func (s *selfUpdate) updateProgram(root, refreshed string, pin *release.ProgramPin) (bool, error) {
-	// The gate already proved this; it is proved again here because this is
-	// the moment a host acts on it.
+	// Code-repository CI cannot hold a program commit to the pin, which can
+	// only name a binary built from that commit afterwards, so a pin may be
+	// stale: it names an older program than the gated one. The pin is checked
+	// here, before anything is fetched, adopted or switched, and a stale one
+	// is refused whole. The next release that pins a binary built from this
+	// program resolves it; the configuration repository's CI is to prevent it
+	// (M2b).
 	if err := s.verify(root, pin.SourceCommit, refreshed); err != nil {
+		if errors.Is(err, selfconv.ErrProgramDiffers) {
+			return false, failure.Value(
+				"the release pins upkeeper %s built from %s, whose program is not the gated "+
+					"program at %s: the pin is stale until a release pins a binary built from "+
+					"this program, and this host keeps its current binary",
+				pin.Tag, pin.SourceCommit, refreshed)
+		}
 		return false, failure.Value(
-			"the release pins upkeeper %s built from %s, which is not the gated program: %s",
-			pin.Tag, pin.SourceCommit, err.Error())
+			"the release pins upkeeper %s built from %s, which cannot be checked against "+
+				"the gated program at %s (%s); this host keeps its current binary",
+			pin.Tag, pin.SourceCommit, refreshed, err.Error())
 	}
 	result, err := s.install(pin)
 	if err != nil {

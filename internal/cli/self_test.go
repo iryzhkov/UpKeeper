@@ -178,7 +178,10 @@ func TestUpdateProgramRefusals(t *testing.T) {
 		steps    []string
 	}{
 		{"a pin that is not the gated program", fakeUpdate{pin: testPin(), verifyErr: map[string]error{
-			strings.Repeat("b", 40): errors.New("differs")}}, "not the gated program",
+			strings.Repeat("b", 40): failure.Wrap(selfconv.ErrProgramDiffers, failure.KindValue, "differs")}},
+			"the pin is stale", []string{"verify " + strings.Repeat("b", 40)}},
+		{"a pin that cannot be compared", fakeUpdate{pin: testPin(), verifyErr: map[string]error{
+			strings.Repeat("b", 40): errors.New("not in this checkout")}}, "cannot be checked against the gated program",
 			[]string{"verify " + strings.Repeat("b", 40)}},
 		{"an install that refuses", fakeUpdate{pin: testPin(), installErr: failure.Value("has sha256 x")},
 			"self-update to upkeeper v0.1.31 refused: has sha256 x",
@@ -469,6 +472,103 @@ func TestAnOperatorRollbackBeforeThePostUpdateCheckIsKept(t *testing.T) {
 	}
 	if slices.Contains(fake.steps, "converge "+commit) {
 		t.Errorf("a refused binary converged: %v", fake.steps)
+	}
+}
+
+// A pin whose program is not the gated checkout's is stale: code-repository
+// CI does not hold a program commit to its release pin, because that pin can
+// only name a binary built from the commit afterwards. A host that meets one
+// refuses it whole. Nothing is downloaded, adopted or switched, a rollback
+// hold already in place stays exactly as it was, and the refusal says the pin
+// is stale and the host keeps its binary. The same program built from
+// another commit still converges.
+func TestAStalePinIsRefusedWithoutAPartialUpdate(t *testing.T) {
+	refreshed := strings.Repeat("c", 40)
+	differs := failure.Wrap(selfconv.ErrProgramDiffers, failure.KindValue, "program differs")
+	for _, test := range []struct {
+		name     string
+		verified error
+		held     bool
+	}{
+		{"a changed program", differs, false},
+		{"a changed program on a host that holds a rollback", differs, true},
+		{"the same program from another commit", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests++
+				http.NotFound(writer, request)
+			}))
+			t.Cleanup(server.Close)
+			home := t.TempDir()
+			binary := filepath.Join(home, ".local/bin/upkeeper")
+			original := []byte("#!/bin/sh\necho 'upkeeper v0.1.30 (commit " + strings.Repeat("a", 40) + ")'\n")
+			if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(binary, original, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			installer := &selfupdate.Installer{
+				Layout: selfupdate.Layout{Home: home}, Client: server.Client(), BaseURL: server.URL,
+				Target: "linux-amd64",
+			}
+			hold := []byte("rolled back from x: operator\n")
+			if test.held {
+				if err := os.MkdirAll(installer.Layout.Root(), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(installer.Layout.Hold(), hold, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pin := testPin()
+			pin.Assets["linux-amd64"] = release.ProgramAsset{
+				Asset: "upkeeper-linux-amd64", SHA256: strings.Repeat("1", 64), Size: 100}
+			// The pin's program is an older one than the checkout's.
+			fake := &fakeUpdate{pin: pin, binary: strings.Repeat("a", 40),
+				verifyErr: map[string]error{pin.SourceCommit: failure.Wrap(selfconv.ErrProgramDiffers,
+					failure.KindValue, "program differs")}}
+			seam := fake.seam()
+			seam.install = installer.Apply
+			seam.rollback = installer.UndoSwitch
+			previous := newSelfUpdate
+			t.Cleanup(func() { newSelfUpdate = previous })
+			newSelfUpdate = func() (*selfUpdate, error) { return seam, nil }
+
+			var notice bytes.Buffer
+			replaced, err := programUpdate("/checkout", "homelab", refreshed, test.verified, &notice)
+			if replaced {
+				t.Fatal("a stale pin replaced the binary")
+			}
+			if test.verified != nil {
+				if err == nil || !failure.IsExpected(err) {
+					t.Fatalf("a stale pin produced %v, not an exit-30 refusal", err)
+				}
+				for _, phrase := range []string{"stale", pin.SourceCommit, refreshed, "keeps its current binary"} {
+					if !strings.Contains(err.Error(), phrase) {
+						t.Errorf("the refusal does not say %q: %v", phrase, err)
+					}
+				}
+			} else if err != nil || !strings.Contains(notice.String(), "stale") {
+				t.Errorf("the same program did not converge past a stale pin: %v, notice %q", err, notice.String())
+			}
+			if slices.Contains(fake.steps, "install v0.1.31") || requests != 0 {
+				t.Errorf("a stale pin reached the installer: steps %v, %d requests", fake.steps, requests)
+			}
+			if content, err := os.ReadFile(binary); err != nil || !bytes.Equal(content, original) {
+				t.Error("a stale pin changed ~/.local/bin/upkeeper")
+			}
+			if _, err := os.Stat(installer.Layout.Generations()); err == nil {
+				t.Error("a stale pin installed or adopted a generation")
+			}
+			if content, err := os.ReadFile(installer.Layout.Hold()); test.held && !bytes.Equal(content, hold) {
+				t.Errorf("the rollback hold changed: %q, %v", content, err)
+			} else if !test.held && err == nil {
+				t.Error("a stale pin wrote a rollback hold")
+			}
+		})
 	}
 }
 

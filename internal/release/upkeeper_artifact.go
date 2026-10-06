@@ -163,8 +163,10 @@ func (r Release) ProgramPin() (*ProgramPin, error) {
 // CheckProgramPin proves that the pinned binary was built from the program a
 // commit holds: no path in ProgramPaths may differ between the pin's source
 // commit and the commit under test. A release whose pin names another program
-// would have every host install a binary that refuses the release it came
-// with, so the published-manifest gate runs this before anything is pushed.
+// is stale: hosts refuse it rather than install it. Code-repository CI does
+// not run this, because a commit that changes the program can only be pinned
+// by a later commit; it is for the configuration repository's CI (M2b) and
+// for authoring a pin.
 func CheckProgramPin(root, sourceCommit, commit string, runner procx.Runner) error {
 	if runner == nil {
 		runner = procx.Run

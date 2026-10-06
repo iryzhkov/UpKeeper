@@ -206,13 +206,23 @@ A release may pin UpKeeper's own binary in an optional `upkeeper` component:
 
 Releases without it load, converge and roll back as before. The component is
 not in the convergence order and `--components` cannot select it: the agent
-never converges it. On every commit that changes `desired/release.json`, the
-published-manifest gate (the first CI job) proves that the pin's
-`source_commit` holds the same program as the commit under test, by requiring
-`git diff --quiet <source_commit> HEAD -- go.mod go.sum cmd internal`. A commit
-that changes only the program is not held to it, because its binary is tagged
-and built from it afterwards; on such a commit hosts refuse the stale pin, as
-below, until a release commit pins the new binary.
+never converges it.
+
+Code-repository CI does not require the pin's `source_commit` to hold the
+program of the commit under test. While release data lives in the code
+repository that check is circular: a commit that changes the program can only
+be pinned by a later release commit, after its binary is tagged and built, so
+the commit itself would always fail. The plan's CI invariant (plan section 4,
+"New CI invariant") therefore moves to the configuration repository's CI in
+milestone M2b, where a configuration commit may only pin a released UpKeeper
+whose program it declares compatible; `release.CheckProgramPin` implements the
+comparison for it. Until M2b, a pin can be stale: it names a binary whose
+program (`git diff --quiet <source_commit> <checkout> -- go.mod go.sum cmd
+internal`) is not the gated checkout's. A host refuses a stale pin whole, as
+it refused a changed program before self-update: exit 30, a message that says
+the pin is stale and the host keeps its binary, and nothing downloaded,
+adopted or switched, with any hold left as it was. The next release that pins
+a binary built from the current program lets hosts update themselves.
 
 When `self-pull`'s program check finds an identified, clean binary whose
 program differs from the refreshed checkout, and the release at that checkout
