@@ -115,8 +115,9 @@ func TestCatalogContextHeldLock(t *testing.T) {
 			s.mu.Lock()
 
 			const wait = 30 * time.Millisecond
-			ctx, cancel := context.WithTimeout(context.Background(), wait)
+			// Measure before creating the timeout so setup time is included.
 			start := time.Now()
+			ctx, cancel := context.WithTimeout(context.Background(), wait)
 			empty, e := f.call(ctx, s)
 			elapsed := time.Since(start)
 			cancel()
