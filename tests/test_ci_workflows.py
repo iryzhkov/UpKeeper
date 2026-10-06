@@ -1,6 +1,7 @@
 """Local/hosted gate parity and exact-commit release authorization."""
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -113,12 +114,70 @@ def test_release_gate_requires_exact_commit_success(status, conclusion, sha, eve
     assert not gate.passed([], "abc")
 
 
+def run(run_id, conclusion, ref="main", status="completed", sha="abc", event="push"):
+    return {"databaseId": run_id, "headSha": sha, "status": status, "conclusion": conclusion,
+            "event": event, "headBranch": ref,
+            "createdAt": f"2026-10-06T15:{run_id:02d}:00Z"}
+
+
 def test_release_gate_does_not_use_an_older_success():
     gate = load_script("check-release-ci")
-    assert not gate.passed([
-        {"headSha": "abc", "status": "completed", "conclusion": "failure", "event": "push"},
-        {"headSha": "abc", "status": "completed", "conclusion": "success", "event": "push"},
-    ], "abc")
+    # gh lists the newest run first.
+    assert not gate.passed([run(2, "failure"), run(1, "success")], "abc")
+
+
+@pytest.mark.parametrize("runs,expected", [
+    # A failed run superseded by a later success on the same ref.
+    ([run(3, "success"), run(2, "failure")], "pass"),
+    ([run(5, "success"), run(4, "cancelled"), run(3, "success", ref="v0.1.33"),
+      run(2, "failure")], "pass"),
+    # Every completed run succeeded, on every ref.
+    ([run(3, "success", ref="v0.1.33"), run(2, "success")], "pass"),
+    # A later success on another ref does not supersede a failure.
+    ([run(3, "success", ref="v0.1.33"), run(2, "failure")], "fail"),
+    # A failure after the last success on its ref is not superseded.
+    ([run(4, "failure", ref="v0.1.33"), run(3, "success"), run(2, "success", ref="v0.1.33")],
+     "fail"),
+    ([run(2, "failure")], "fail"),
+    # A run still in progress could still fail, so the gate waits for it.
+    ([run(3, None, status="in_progress"), run(2, "success")], "wait"),
+    ([run(3, None, status="queued", ref="v0.1.33"), run(2, "failure")], "wait"),
+    ([], "wait"),
+    # Runs for another commit or another event are not the tagged commit's gate.
+    ([run(3, "success", sha="other"), run(2, "success", event="pull_request")], "wait"),
+    ([run(3, "failure", sha="other"), run(2, "success")], "pass"),
+])
+def test_release_gate_requires_every_failed_run_to_be_superseded(runs, expected):
+    gate = load_script("check-release-ci")
+    decision, reasons = gate.decide(runs, "abc")
+    assert decision == expected, reasons
+    assert reasons
+
+
+@pytest.mark.parametrize("runs,code,decision", [
+    ([run(3, "success"), run(2, "failure")], 0, "pass"),
+    ([run(3, "success", ref="v0.1.33"), run(2, "failure")], 1, "fail"),
+])
+def test_release_gate_prints_its_decision(monkeypatch, capsys, runs, code, decision):
+    gate = load_script("check-release-ci")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "iryzhkov/UpKeeper")
+    calls = []
+
+    def fake_check_output(argv, **_):
+        calls.append(argv)
+        if argv[0] == "git":
+            return "abc\n"
+        return json.dumps(runs)
+
+    monkeypatch.setattr(gate.subprocess, "check_output", fake_check_output)
+    assert gate.main() == code
+    output = capsys.readouterr().out
+    assert f"ci.yml release gate decision for abc: {decision}" in output
+    for listed in runs:
+        assert f"run {listed['databaseId']}" in output
+    listing = next(argv for argv in calls if argv[0] == "gh")
+    assert listing[listing.index("--limit") + 1] != "1"
+    assert "headBranch" in listing[listing.index("--json") + 1]
 
 
 @pytest.mark.parametrize("private", [False, True], ids=["public", "private"])
