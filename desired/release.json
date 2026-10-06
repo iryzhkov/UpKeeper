@@ -2731,6 +2731,25 @@
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
       "version": "0.11.0-rc.113"
     },
+    "upkeeper": {
+      "assets": {
+        "linux-amd64": {
+          "asset": "upkeeper-linux-amd64",
+          "sha256": "0ddc08e02f4515c78c83d5843ca5af52665d1913a713eeee2e19545c06df124b",
+          "size": 13706143
+        },
+        "linux-arm64": {
+          "asset": "upkeeper-linux-arm64",
+          "sha256": "77ba9074f497b58b980330f6f853a5e9889c5a1dc4b03823c6a965e8d5702df1",
+          "size": 12623728
+        }
+      },
+      "kind": "upkeeper-binary",
+      "repository": "iryzhkov/UpKeeper",
+      "source_commit": "724cd4e34cf4ac5e21bde9b129278c9e2c627d89",
+      "tag": "v0.1.33",
+      "toolchain": "go1.26.8"
+    },
     "worker-configuration": {
       "hosts": {
         "agent-a": {
