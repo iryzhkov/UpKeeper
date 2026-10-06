@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -629,7 +630,7 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 	if err := huyangSeedUnit(unit, relative); err != nil {
 		return "", err
 	}
-	if err := huyangStart(c, spec, checkout, service); err != nil {
+	if err := huyangStart(c, spec, checkout, service, false); err != nil {
 		// Keep the candidate bytes and the unit file for diagnosis; the
 		// scheduler's host hold is what prevents a blind retry.
 		if _, stopErr := c.Must(
@@ -703,14 +704,22 @@ func huyangResumeBootstrap(
 		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: build, seed and enable "+service)
 		return "updated", nil
 	}
+	origin, err := os.Stat(checkout)
+	if err != nil {
+		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
 	if _, err := c.Must(huyangBuildCommand(spec), 600*time.Second, checkout, "Huyang build"); err != nil {
 		return "", err
 	}
 	*actions = append(*actions, "built "+adapterShortCommit(commit))
 	// The build can take minutes, and the checkout and the unit stay the
-	// operator's meanwhile: both are checked again, and the unit must be
-	// exactly what it was before the build, before anything is seeded or
-	// started.
+	// operator's meanwhile: both are checked again, the checkout must still be
+	// the directory that was built (its build output is ignored by git, so
+	// another clone on the pin looks the same), and the unit must be exactly
+	// what it was before the build, before anything is seeded or started.
+	if now, err := os.Stat(checkout); err != nil || !os.SameFile(origin, now) {
+		return "", huyangResumeRefused(c, checkout, "replaced while it built")
+	}
 	if err := huyangResumeCheckout(c, checkout, commit); err != nil {
 		return "", err
 	}
@@ -732,7 +741,7 @@ func huyangResumeBootstrap(
 			return "", err
 		}
 	}
-	if err := huyangStart(c, spec, checkout, service); err != nil {
+	if err := huyangStart(c, spec, checkout, service, true); err != nil {
 		// As after a failed bootstrap: an unproven service is not left enabled
 		// at boot, and the marker stays for the next run.
 		if _, stopErr := c.Must(
@@ -771,18 +780,23 @@ func huyangResumeUnit(c *Context, unit, service, want string) (*[]byte, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
+	if err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
 		return nil, Failf("an interrupted Huyang bootstrap found %s masked, empty or not a regular file; "+
 			"inspect it. Only the next run's bootstrap enables %s at boot: remove the file to let it "+
 			"finish, or enable the service yourself before removing %s",
 			unit, service, c.Path(huyangBootstrapPending))
 	}
-	raw, err := os.ReadFile(unit)
+	// A unit longer than the template cannot be the start of it, so no more
+	// than one byte past the template is ever read.
+	var raw []byte
+	if err == nil {
+		raw, err = huyangReadAtMost(unit, len(want)+1)
+	}
 	if err != nil {
-		return nil, err
+		return nil, Failf("an interrupted Huyang bootstrap could not read %s (%v); inspect it. "+
+			"Only the next run's bootstrap enables %s at boot: make it readable or remove it to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, err, service, c.Path(huyangBootstrapPending))
 	}
 	if len(raw) == 0 || !strings.HasPrefix(want, string(raw)) {
 		return nil, Failf("an interrupted Huyang bootstrap found %s changed; inspect it. "+
@@ -791,6 +805,16 @@ func huyangResumeUnit(c *Context, unit, service, want string) (*[]byte, error) {
 			unit, service, c.Path(huyangBootstrapPending))
 	}
 	return &raw, nil
+}
+
+// huyangReadAtMost reads up to limit bytes from the start of path.
+func huyangReadAtMost(path string, limit int) ([]byte, error) {
+	handle, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	return io.ReadAll(io.LimitReader(handle, int64(limit)))
 }
 
 // huyangResumeRefused explains why an interrupted bootstrap was not finished.
@@ -804,7 +828,10 @@ func huyangResumeRefused(c *Context, checkout, why string) error {
 }
 
 // huyangStart brings a freshly seeded unit up and proves it answers the probe.
-func huyangStart(c *Context, spec map[string]any, checkout, service string) error {
+// With restart, a unit that was already running (a crash after it was enabled,
+// or a reboot since) is restarted, because enable --now leaves a running unit
+// serving the binary it started with.
+func huyangStart(c *Context, spec map[string]any, checkout, service string, restart bool) error {
 	if _, err := c.Must([]string{"systemctl", "--user", "daemon-reload"},
 		0, "", "Huyang unit reload"); err != nil {
 		return err
@@ -812,6 +839,12 @@ func huyangStart(c *Context, spec map[string]any, checkout, service string) erro
 	if _, err := c.Must([]string{"systemctl", "--user", "enable", "--now", service},
 		60*time.Second, "", "Huyang service start"); err != nil {
 		return err
+	}
+	if restart {
+		if _, err := c.Must([]string{"systemctl", "--user", "restart", service},
+			60*time.Second, "", "Huyang service restart"); err != nil {
+			return err
+		}
 	}
 	probe, err := huyangWaitProbe(c, checkout, huyangProbeTools(spec))
 	if err != nil {

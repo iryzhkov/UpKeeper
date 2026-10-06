@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/procx"
@@ -200,5 +201,84 @@ func TestRound3ReviewRecoveryRevalidatesAfterBuild(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A crash after enable --now, or a reboot, leaves the seeded service running
+// the binary of the earlier pin while the marker stays. enable --now does not
+// restart a running unit, so recovery must restart it to serve what it built.
+func TestRound3SelfReviewRecoveryRestartsARunningService(t *testing.T) {
+	c, r := huyangCrashWorld(t, fmt.Sprintf(huyangUnitTemplate, ".local/share/huyang"))
+	spec := c.Spec("huyang")
+	spec["commit"] = huyangLocal
+	adapterTestWrite(t, huyangSocket(c), "")
+	serving, built := "old-pin binary", ""
+	inner := r.handle
+	r.handle = func(cmd procx.Command) procx.Result {
+		switch {
+		case adapterTestMatches(cmd.Argv, "rev-parse", "HEAD"):
+			return procx.Result{Stdout: huyangLocal}
+		case adapterTestMatches(cmd.Argv, "is-active"):
+			return procx.Result{Stdout: "active"}
+		case adapterTestMatches(cmd.Argv, "make", "build"):
+			built = "new-pin binary"
+		case adapterTestMatches(cmd.Argv, "systemctl", "restart"), adapterTestMatches(cmd.Argv, "systemctl", "stop"):
+			serving = built
+		case adapterTestMatches(cmd.Argv, "enable", "--now"):
+			return procx.Result{}
+		}
+		return inner(cmd)
+	}
+	observed := map[string]any{"commit": huyangLocal, "dirty": false, "service_active": true, "socket": true}
+	state, err := huyangApplyCheckout(c, spec, observed, &[]string{})
+	if err != nil || serving != built {
+		t.Fatalf("recovery reported %s (err=%v) while %s still serves (built %s); calls=%v",
+			state, err, serving, built, r.calls)
+	}
+}
+
+// The checkout is replaced during the build by another clone on the same
+// commit: clean and on the pin, but its git-ignored binary is not the one
+// recovery built.
+func TestRound3SelfReviewRecoveryRefusesACheckoutSwappedDuringTheBuild(t *testing.T) {
+	c, r := huyangCrashWorld(t, fmt.Sprintf(huyangUnitTemplate, ".local/share/huyang"))
+	checkout := c.Path(".local/share/huyang")
+	inner := r.handle
+	r.handle = func(cmd procx.Command) procx.Result {
+		if adapterTestMatches(cmd.Argv, "make", "build") {
+			adapterTestWrite(t, checkout+"/bin/huyang", "built by recovery\n")
+			if err := os.Rename(checkout, checkout+".old"); err != nil {
+				t.Fatal(err)
+			}
+			adapterTestWrite(t, checkout+"/.git/HEAD", "x\n")
+			adapterTestWrite(t, checkout+"/bin/huyang", "stale\n")
+		}
+		return inner(cmd)
+	}
+	observed := map[string]any{"commit": huyangPinned, "dirty": false, "service_active": false, "socket": false}
+	state, err := huyangApplyCheckout(c, c.Spec("huyang"), observed, &[]string{})
+	if err == nil || r.ran("enable", "--now") || !pathExists(c.Path(huyangBootstrapPending)) {
+		t.Fatalf("swapped checkout accepted: state=%s err=%v calls=%v", state, err, r.calls)
+	}
+}
+
+// An unreadable unit is refused like any other unit recovery cannot vouch
+// for: with the marker kept and the operator told what to do.
+func TestRound3SelfReviewAnUnreadableUnitIsExplained(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	c, r := huyangCrashWorld(t, "[Service]\n")
+	unit := c.Path(".config/systemd/user/huyang.service")
+	if err := os.Chmod(unit, 0); err != nil {
+		t.Fatal(err)
+	}
+	observed := map[string]any{"commit": huyangPinned, "dirty": false, "service_active": false, "socket": false}
+	_, err := huyangApplyCheckout(c, c.Spec("huyang"), observed, &[]string{})
+	if err == nil || !strings.Contains(err.Error(), "inspect it") || !strings.Contains(err.Error(), huyangBootstrapPending) {
+		t.Fatalf("unreadable unit error lacks guidance: %v", err)
+	}
+	if r.ran("enable", "--now") || !pathExists(c.Path(huyangBootstrapPending)) {
+		t.Fatalf("unreadable unit accepted: calls=%v", r.calls)
 	}
 }
