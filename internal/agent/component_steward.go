@@ -395,14 +395,15 @@ func t3NotInstalled(c *Context, t3Spec, observed map[string]any) bool {
 }
 
 // stewardUnitPresent reports whether the host has a steward service unit at
-// all. systemctl cat fails only when no unit file exists anywhere systemd
-// looks, so an answer that cannot be had counts as present.
+// all. Only systemd saying it has no file for the unit counts as absent; any
+// other failure, such as an unreachable user bus, counts as present, so the
+// install restarts and fails loudly rather than skipping the restart.
 func stewardUnitPresent(c *Context, service string) bool {
 	if pathExists(c.Path(userUnitDir, service)) {
 		return true
 	}
 	result := c.Run([]string{"systemctl", "--user", "cat", service}, 10*time.Second, "")
-	return result.OK || result.TimedOut
+	return result.OK || !strings.Contains(result.Output, "No files found for "+service)
 }
 
 // stewardRunningT3InRange refuses a pair transition the running T3 cannot take.

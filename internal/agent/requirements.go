@@ -3,9 +3,11 @@ package agent
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
@@ -89,7 +91,7 @@ func requirementsBlock(c *Context, name string, spec map[string]any, actions *[]
 		packages := []string{}
 		for _, item := range missing {
 			names = append(names, item.Name)
-			if item.Package(family) != "" && prereq.InstallCommand(family, []string{item.Package(family)}) != nil {
+			if item.Minimum == "" && prereq.InstallCommand(family, []string{item.Package(family)}) != nil {
 				packages = append(packages, item.Package(family))
 			} else {
 				remedies = append(remedies, item.Name+": "+item.Remedy(family))
@@ -134,7 +136,7 @@ func missingPrerequisites(c *Context, name string, spec map[string]any) []prereq
 			}
 			continue
 		}
-		if len(item.Check) > 0 && needed(item) && !item.Present(c.Env, c.Runner) {
+		if (len(item.Check) > 0 || len(item.Version) > 0) && needed(item) && !item.Present(c.Env, c.Runner) {
 			missing = append(missing, item)
 		}
 	}
@@ -172,10 +174,19 @@ func installPrerequisites(
 		packages = append(packages, item.Package(family))
 	}
 	install := prereq.InstallCommand(family, packages)
-	if install == nil || install[0] != "sudo" {
+	if install == nil {
+		// Nothing missing has a package here; the remedies say what to do.
+		return missing, ""
+	}
+	if install[0] != "sudo" {
 		return missing, "host opted in to OS package installation, but UpKeeper installs packages only with apt-get or pacman"
 	}
-	if !c.Run([]string{"sudo", "-n", "true"}, 15*time.Second, "").OK {
+	if sudo := c.Runner(procx.Command{Argv: []string{"sudo", "-n", "true"}, Env: c.Env, Timeout: 15 * time.Second}); !sudo.OK() {
+		// A program that could not be started at all is not there.
+		if sudo.Err != nil && !sudo.TimedOut {
+			return missing, "host opted in to OS package installation, but sudo is not installed; " +
+				"install the packages as root, or install sudo and allow it without a password"
+		}
 		return missing, "host opted in to OS package installation, but sudo needs a password; " +
 			"install the packages by hand or configure passwordless sudo"
 	}
@@ -233,10 +244,8 @@ func ovMemoryCredentialPresent(c *Context) bool {
 	if rest, found := strings.CutPrefix(keyFile, "~/"); found {
 		keyFile = c.Path(rest)
 	}
-	if info, err := os.Stat(keyFile); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-		if data, err := os.ReadFile(keyFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
-			return true
-		}
+	if data, ok := readSmallRegularFile(keyFile, 64<<10); ok && len(bytes.TrimSpace(data)) > 0 {
+		return true
 	}
 	if procx.LookupIn("secret-tool", env) == "" {
 		return false
@@ -254,22 +263,59 @@ func configHasKey(c *Context, path string) bool {
 	if rest, found := strings.CutPrefix(path, "~/"); found {
 		path = c.Path(rest)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) > 1<<20 {
+	data, ok := readSmallRegularFile(path, 1<<20)
+	if !ok {
 		return false
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := bufio.NewScanner(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "[") {
 			return false
 		}
 		key, value, found := strings.Cut(line, "=")
-		if !found || strings.TrimSpace(key) != "api_key" {
+		if !found || strings.Trim(strings.TrimSpace(key), `"'`) != "api_key" {
 			continue
 		}
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		return value != ""
+		return tomlStringValue(strings.TrimSpace(value)) != ""
 	}
 	return false
+}
+
+// tomlStringValue is the content of a TOML string value, without its quotes
+// or a trailing comment.
+func tomlStringValue(value string) string {
+	if value != "" && (value[0] == '"' || value[0] == '\'') {
+		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+			return value[1 : 1+end]
+		}
+		return ""
+	}
+	if comment := strings.IndexByte(value, '#'); comment >= 0 {
+		value = value[:comment]
+	}
+	return strings.TrimSpace(value)
+}
+
+// readSmallRegularFile reads a regular file of at most limit bytes. A FIFO, a
+// device or a directory is never opened for reading, so a check cannot hang or
+// read without bound; ok is false for anything else.
+func readSmallRegularFile(path string, limit int64) ([]byte, bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, false
+	}
+	handle, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer handle.Close()
+	if opened, err := handle.Stat(); err != nil || !opened.Mode().IsRegular() {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(handle, limit+1))
+	if err != nil || int64(len(data)) > limit {
+		return nil, false
+	}
+	return data, true
 }

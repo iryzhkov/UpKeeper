@@ -473,6 +473,9 @@ func huyangApplyCheckout(
 	if commit == "" {
 		return huyangBootstrap(c, spec, actions)
 	}
+	if pathExists(c.Path(huyangBootstrapPending)) {
+		return huyangResumeBootstrap(c, spec, checkout, commit, actions)
+	}
 	if dirty, _ := before["dirty"].(bool); dirty {
 		return "", Failf("%s has local changes; refusing to move it", checkout)
 	}
@@ -592,11 +595,23 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 			return "", err
 		}
 	}
+	// From here a crash leaves a checkout without a started service; the
+	// marker makes the next run finish the bootstrap instead of mistaking the
+	// checkout for an installed Huyang.
+	if err := os.MkdirAll(filepath.Dir(c.Path(huyangBootstrapPending)), 0o700); err != nil {
+		return "", err
+	}
+	if err := fsatomic.WritePrivateFile(c.Path(huyangBootstrapPending), []byte(relative+"\n")); err != nil {
+		return "", err
+	}
 	// The rename is the exclusive claim: even an empty pre-existing directory
 	// at the live path belongs to whoever made it, so it is never replaced.
 	// Claiming the path with a directory first cannot work, because nothing
 	// can then be renamed onto that directory.
 	if err := fsatomic.RenameNoReplace(candidate, checkout); err != nil {
+		// Nothing of this bootstrap is at the live path, so there is nothing
+		// for a later run to finish.
+		_ = os.Remove(c.Path(huyangBootstrapPending))
 		if errors.Is(err, fs.ErrExist) {
 			return "", errors.New(checkout + " appeared during the bootstrap; preserving it and the built candidate at " + candidate)
 		}
@@ -605,21 +620,7 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 	if err := os.Remove(stage); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
-		return "", err
-	}
-	handle, err := os.OpenFile(unit, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return "", err
-	}
-	if _, err := handle.WriteString(fmt.Sprintf(huyangUnitTemplate, relative)); err != nil {
-		_ = handle.Close()
-		return "", err
-	}
-	if err := handle.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(unit, 0o644); err != nil {
+	if err := huyangSeedUnit(unit, relative); err != nil {
 		return "", err
 	}
 	if err := huyangStart(c, spec, checkout, service); err != nil {
@@ -633,7 +634,82 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 		}
 		return "", err
 	}
+	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
 	*actions = append(*actions, fmt.Sprintf("installed Huyang %s; enabled %s",
+		adapterShortCommit(commit), service))
+	return "updated", nil
+}
+
+// huyangBootstrapPending marks a bootstrap that has put the checkout in place
+// but not yet seeded and started its unit. It is written before the checkout
+// is renamed into place and removed once the service answers.
+const huyangBootstrapPending = ".local/state/dev-fleet/unit-migrations/huyang-bootstrap.pending"
+
+// huyangSeedUnit writes the bootstrap unit, never over an existing file.
+func huyangSeedUnit(unit, relative string) error {
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		return err
+	}
+	handle, err := os.OpenFile(unit, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := handle.WriteString(fmt.Sprintf(huyangUnitTemplate, relative)); err != nil {
+		_ = handle.Close()
+		return err
+	}
+	if err := handle.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(unit, 0o644)
+}
+
+// huyangResumeBootstrap finishes a bootstrap a crash interrupted after the
+// checkout was in place: it seeds the unit if the crash came first, or
+// rewrites one the crash left half written, then enables and proves the
+// service. A checkout that moved since, or a unit that is not the seeded one,
+// is the operator's to look at.
+func huyangResumeBootstrap(
+	c *Context, spec map[string]any, checkout, commit string, actions *[]string,
+) (string, error) {
+	relative := adapterSpecString(spec, "path")
+	service := adapterSpecString(spec, "service")
+	unit := c.Path(".config/systemd/user", service)
+	if commit != adapterSpecString(spec, "commit") {
+		return "", Failf("an interrupted Huyang bootstrap left %s on %s, not the pinned commit; "+
+			"inspect it, then remove %s", checkout, adapterShortCommit(commit), c.Path(huyangBootstrapPending))
+	}
+	want := fmt.Sprintf(huyangUnitTemplate, relative)
+	if raw, err := os.ReadFile(unit); err == nil && string(raw) != want {
+		if !strings.HasPrefix(want, string(raw)) {
+			return "", Failf("an interrupted Huyang bootstrap found %s changed; inspect it, then remove %s",
+				unit, c.Path(huyangBootstrapPending))
+		}
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if c.DryRun {
+		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: seed and enable "+service)
+		return "updated", nil
+	}
+	if raw, err := os.ReadFile(unit); err != nil || string(raw) != want {
+		// Absent, or a prefix of the template the crash cut short.
+		if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		if err := huyangSeedUnit(unit, relative); err != nil {
+			return "", err
+		}
+	}
+	if err := huyangStart(c, spec, checkout, service); err != nil {
+		return "", err
+	}
+	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	*actions = append(*actions, fmt.Sprintf("finished the interrupted Huyang bootstrap at %s; enabled %s",
 		adapterShortCommit(commit), service))
 	return "updated", nil
 }

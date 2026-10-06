@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -191,10 +192,14 @@ func pathOf(env []string) (string, bool) {
 	return search, present
 }
 
-// executable reports whether path is a regular file somebody may execute.
+// executable reports whether path is a regular file this process may execute.
+// Like exec.LookPath, a file only somebody else may run does not end the search.
 func executable(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return false
+	}
+	return syscall.Access(path, 0x1) == nil
 }
 
 // GitEnvironment returns an environment in which Git may never prompt and SSH

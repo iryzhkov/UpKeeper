@@ -10,7 +10,9 @@ package prereq
 
 import (
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +43,10 @@ type Prerequisite struct {
 	// Staging is true for a prerequisite that only building or staging a new
 	// version needs, so that a host already converged is not asked for it.
 	Staging bool
+	// Version, when set, asks Command for its version, and Minimum is the
+	// oldest major.minor that is enough.
+	Version []string
+	Minimum string
 }
 
 // Catalogue is every component's prerequisites, in convergence order. The
@@ -66,7 +72,11 @@ var Catalogue = map[string][]Prerequisite{
 	},
 	"huyang": {
 		git,
+		// Go 1.21 and later fetch the toolchain a go.mod names, which is how a
+		// distribution's older Go builds a newer Huyang. Debian 12's is 1.19.
 		{Name: "go", Command: "go", Packages: map[string]string{Debian: "golang-go", Arch: "go", Darwin: "go"},
+			Version: []string{"go", "env", "GOVERSION"}, Minimum: "1.21",
+			Manual:  "install Go 1.21 or newer from https://go.dev/dl or with mise use -g go",
 			Staging: true},
 		{Name: "make", Command: "make", Packages: map[string]string{Debian: "make", Arch: "make"},
 			Manual: "install the Xcode command line tools: xcode-select --install", Staging: true},
@@ -149,6 +159,10 @@ func PackageList(packages []string) []string {
 // family.
 func (p Prerequisite) Remedy(family string) string {
 	if install := InstallCommand(family, []string{p.Package(family)}); install != nil {
+		if p.Minimum != "" && p.Manual != "" {
+			return strings.Join(install, " ") + " if it provides " + p.Name + " " + p.Minimum +
+				" or newer, otherwise " + p.Manual
+		}
 		return strings.Join(install, " ")
 	}
 	if p.Manual != "" {
@@ -163,13 +177,41 @@ func (p Prerequisite) Present(env []string, runner procx.Runner) bool {
 	if p.Command != "" && procx.LookupIn(p.Command, env) == "" {
 		return false
 	}
-	if len(p.Check) == 0 {
-		return true
-	}
 	if runner == nil {
 		runner = procx.Run
 	}
+	if len(p.Version) > 0 {
+		result := runner(procx.Command{Argv: p.Version, Env: env, Timeout: 30 * time.Second})
+		if !result.OK() || !AtLeast(result.FirstLine(), p.Minimum) {
+			return false
+		}
+	}
+	if len(p.Check) == 0 {
+		return true
+	}
 	return runner(procx.Command{Argv: p.Check, Env: env, Timeout: 30 * time.Second}).OK()
+}
+
+// versionNumbers matches the first major.minor in a version report, such as
+// "go1.24.4" or "Python 3.13.5".
+var versionNumbers = regexp.MustCompile(`([0-9]+)\.([0-9]+)`)
+
+// AtLeast reports whether the first major.minor in reported is minimum or
+// newer. A report without one is not.
+func AtLeast(reported, minimum string) bool {
+	have := versionNumbers.FindStringSubmatch(reported)
+	want := versionNumbers.FindStringSubmatch(minimum)
+	if have == nil || want == nil {
+		return false
+	}
+	for index := 1; index <= 2; index++ {
+		left, _ := strconv.Atoi(have[index])
+		right, _ := strconv.Atoi(want[index])
+		if left != right {
+			return left > right
+		}
+	}
+	return true
 }
 
 // AgentPath is the PATH the agent runs every command with: the fleet's tool

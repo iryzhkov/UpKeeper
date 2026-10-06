@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -243,20 +244,7 @@ func stageTooling(c *Context, dir string, t *release.Tooling) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return err
 	}
-	// The directory and its ownership marker come first, so that a stage this
-	// attempt leaves incomplete is provably UpKeeper's own and the next run can
-	// retry it.
-	if err := os.Mkdir(dir, 0700); err != nil {
-		return err
-	}
-	marker, err := json.Marshal(toolingStageOwner{
-		CreatedBy: "upkeeper", Identity: filepath.Base(dir), RunID: c.RunID,
-		StartedAt: c.now().UTC().Format(toolingStageTime),
-	})
-	if err != nil {
-		return err
-	}
-	if err := agentenv.AtomicWrite(filepath.Join(dir, toolingStageMarker), marker, 0600); err != nil {
+	if err := claimToolingStage(c, dir); err != nil {
 		return err
 	}
 	// Failed staging directories remain inspectable, never become current, and
@@ -297,6 +285,37 @@ func stageTooling(c *Context, dir string, t *release.Tooling) error {
 // toolingStageMarker records in a stage directory that UpKeeper created it,
 // for which release and when. It is written before anything else.
 const toolingStageMarker = ".upkeeper-stage"
+
+// claimToolingStage creates the stage directory with its ownership marker
+// already inside: the marker is written into a private directory that is then
+// renamed into place, so no crash can leave a stage at dir that does not
+// prove it is UpKeeper's own.
+func claimToolingStage(c *Context, dir string) error {
+	marker, err := json.Marshal(toolingStageOwner{
+		CreatedBy: "upkeeper", Identity: filepath.Base(dir), RunID: c.RunID,
+		StartedAt: c.now().UTC().Format(toolingStageTime),
+	})
+	if err != nil {
+		return err
+	}
+	private, err := os.MkdirTemp(filepath.Dir(dir), ".stage-")
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(private, 0700); err != nil {
+		_ = os.RemoveAll(private)
+		return err
+	}
+	if err := agentenv.AtomicWrite(filepath.Join(private, toolingStageMarker), marker, 0600); err != nil {
+		_ = os.RemoveAll(private)
+		return err
+	}
+	if err := fsatomic.RenameNoReplace(private, dir); err != nil {
+		_ = os.RemoveAll(private)
+		return err
+	}
+	return nil
+}
 
 // toolingFailedStageLimit is how many failed stages are kept for diagnosis.
 const toolingFailedStageLimit = 3
@@ -345,10 +364,18 @@ func setAsideOwnFailedStage(c *Context, dir string) error {
 	if err := os.MkdirAll(failed, 0700); err != nil {
 		return err
 	}
+	// Stages are moved into, and pruned from, a directory UpKeeper made. A
+	// symlink there would send both somewhere else entirely.
+	if info, err := os.Lstat(failed); err != nil || !info.IsDir() {
+		return Failf("%s is not a directory UpKeeper made; preserved %s", failed, dir)
+	}
 	name := started.UTC().Format(toolingStageTime) + "-" + shortIdentity(owner.Identity)
 	target := filepath.Join(failed, name)
 	for n := 2; pathExists(target); n++ {
-		target = filepath.Join(failed, fmt.Sprintf("%s-%d", name, n))
+		if n > 999 {
+			return Failf("too many failed stages named %s; preserved %s", name, dir)
+		}
+		target = filepath.Join(failed, fmt.Sprintf("%s-%03d", name, n))
 	}
 	if err := fsatomic.RenameNoReplace(dir, target); err != nil {
 		return err
@@ -363,9 +390,14 @@ func shortIdentity(identity string) string {
 	return identity
 }
 
+// failedStageName is the name setAsideOwnFailedStage gives a failed stage:
+// when the attempt began, the release identity, and a counter for attempts
+// that began in the same second. Such names sort by time.
+var failedStageName = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{1,12}(-[0-9]{3})?$`)
+
 // pruneFailedStages keeps the newest toolingFailedStageLimit failed stages.
-// Every entry there was moved in by setAsideOwnFailedStage, and the names sort
-// by the time each attempt began.
+// Only a directory setAsideOwnFailedStage moved there counts, recognised by
+// its name and its marker; anything else in the directory is left alone.
 func pruneFailedStages(failed string) error {
 	entries, err := os.ReadDir(failed)
 	if err != nil {
@@ -373,9 +405,14 @@ func pruneFailedStages(failed string) error {
 	}
 	names := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
+		if !entry.IsDir() || !failedStageName.MatchString(entry.Name()) {
+			continue
 		}
+		if info, err := os.Lstat(filepath.Join(failed, entry.Name(), toolingStageMarker)); err != nil ||
+			!info.Mode().IsRegular() {
+			continue
+		}
+		names = append(names, entry.Name())
 	}
 	sort.Strings(names)
 	for len(names) > toolingFailedStageLimit {

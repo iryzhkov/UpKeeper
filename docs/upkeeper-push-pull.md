@@ -256,7 +256,10 @@ copy. Everything else, Huyang included, is installed by the first `pull`.
    | omarchy-setup | git | git | git |
    | agent-tooling | mise, bash, curl, jq, python3, ssh, readlink, secret-tool | (mise from mise.run), bash, curl, jq, python3, openssh-client, coreutils, libsecret-tools | mise, bash, curl, jq, python, openssh, coreutils, libsecret |
    | agent-tooling, when it stages a release | Python's venv and ensurepip | python3-venv | python |
-   | huyang | git; go and make when it builds | git, golang-go, make | git, go, make |
+   | huyang | git; go 1.21 or newer and make when it builds | git, golang-go, make | git, go, make |
+
+   Go 1.21 and later fetch the toolchain Huyang's `go.mod` names. Debian 12's golang-go is
+   1.19 and is reported as a blocker; install a newer Go from go.dev or with mise there.
 
    mise also has to provide the node, codex, claude and opencode tools in its global
    configuration, as on every other host.
@@ -305,9 +308,13 @@ Every command the agent runs is looked up on its own explicit `PATH` (the mise s
 `~/.local/bin`, `~/go/bin`, `/usr/local/go/bin`, then the session's), so a hand-written
 `PATH` block in `~/.bashrc` is no longer needed on any host.
 
+If the Huyang bootstrap is interrupted after the built checkout is in place, the next run
+finishes it (seeds the unit if needed, enables and probes the service) instead of mistaking
+the checkout for an installed Huyang.
+
 If the agent-tooling stage fails part-way, the next run moves that incomplete stage to
-`~/.local/share/upkeeper-tools/failed-stages/` (the newest three are kept for diagnosis)
-and stages again. Only a stage carrying UpKeeper's own `.upkeeper-stage` marker for the same
+`~/.local/share/upkeeper-tools/failed-stages/` (the newest three UpKeeper put there are kept
+for diagnosis; anything else in that directory is left alone) and stages again. Only a stage carrying UpKeeper's own `.upkeeper-stage` marker for the same
 release is moved; any other incomplete directory is preserved and refused until somebody
 has looked at it. Stages left by an UpKeeper older than this marker are refused once and
 have to be moved aside by hand.

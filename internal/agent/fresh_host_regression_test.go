@@ -39,12 +39,19 @@ var freshTestCommands = []string{
 	"git", "go", "make",
 }
 
-// freshTestContext is an Execute-ready context for a host named agent-a.
+// freshTestContext is an Execute-ready context for a host named agent-a. Its
+// Go reports a version new enough to build Huyang.
 func freshTestContext(
-	t *testing.T, home, bin string, runner procx.Runner, selected []string,
+	t *testing.T, home, bin string, inner procx.Runner, selected []string,
 	components map[string]any,
 ) *Context {
 	t.Helper()
+	runner := func(command procx.Command) procx.Result {
+		if strings.Join(command.Argv, " ") == "go env GOVERSION" {
+			return procx.Result{Stdout: "go1.24.4\n"}
+		}
+		return inner(command)
+	}
 	return &Context{
 		Payload: Payload{
 			RunID: "20261006T000000Z-fresh",

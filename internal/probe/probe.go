@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -218,6 +219,9 @@ func collect(home string, runner procx.Runner) map[string]any {
 // the SSH session's, because that is where the agent will look.
 func prerequisites(home string, release map[string]string, runner procx.Runner) map[string]any {
 	family := prereq.Family(release["ID"])
+	if family == "" && goruntime.GOOS == "darwin" {
+		family = prereq.Darwin
+	}
 	if family == "" {
 		for _, like := range strings.Fields(release["ID_LIKE"]) {
 			if family = prereq.Family(like); family != "" {
