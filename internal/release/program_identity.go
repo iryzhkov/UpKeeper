@@ -49,7 +49,9 @@ var programEmbedDirective = regexp.MustCompile(`^[ \t]*//go:embed(?:[ \t]+(.*))?
 // A directive this function cannot parse makes every path in its package's
 // tree count.
 func ProgramDiffers(git ProgramGit, from, to string) (bool, error) {
-	names := git("diff", "--name-only", "--no-renames", "-z", "--exit-code", from, to, "--")
+	// The repository's configuration must not hide a changed submodule.
+	names := git("diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z",
+		"--exit-code", from, to, "--")
 	if names.Err != nil || (names.Code != 0 && names.Code != 1) {
 		return false, ErrProgramIncomparable
 	}
@@ -162,7 +164,7 @@ var programForeignSources = map[string]bool{
 // file marked binary cannot hide a directive, and the output format does not
 // depend on the user's grep configuration. found is false when nothing matched.
 func programGrep(git ProgramGit, commit string, options ...string) (string, bool, error) {
-	arguments := append([]string{"grep", "--text", "--no-color", "--no-line-number", "-z"},
+	arguments := append([]string{"grep", "--text", "--no-color", "--no-line-number", "--no-column", "-z"},
 		options...)
 	arguments = append(arguments, commit, "--", ":(glob)**/*.go", ":(exclude,glob)**/*_test.go")
 	result := git(arguments...)
@@ -230,6 +232,10 @@ type programEmbed struct {
 // its parent directories embeds it, whatever Go's rules for hidden files.
 func (e programEmbed) matches(name string) bool {
 	prefix := e.dir + "/"
+	if e.dir == "." {
+		// The module's root package.
+		prefix = ""
+	}
 	if !strings.HasPrefix(name, prefix) {
 		return false
 	}

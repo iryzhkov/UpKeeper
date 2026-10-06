@@ -3,6 +3,7 @@ package release_test
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -422,7 +423,7 @@ func TestAnAssemblyIncludeOfATestNamedFileIsPartOfTheProgram(t *testing.T) {
 // any file a Go source.
 func TestCompiledInputsOutsideTheProgramPathsArePartOfTheProgram(t *testing.T) {
 	command := func(importPath, name string) string {
-		return "package main\n\nimport (\n\t\"fmt\"\n\n\t\"x/" + importPath + "\"\n)\n\n" +
+		return "package main\n\nimport (\n\t\"fmt\"\n\n\t\"" + path.Join("x", importPath) + "\"\n)\n\n" +
 			"func main() { fmt.Print(" + name + ".Value) }\n"
 	}
 	for _, test := range []struct {
@@ -439,6 +440,11 @@ func TestCompiledInputsOutsideTheProgramPathsArePartOfTheProgram(t *testing.T) {
 			"helper/helper.go":        "package helper\n\nimport _ \"embed\"\n\n//go:embed assets/value.txt\nvar Value string\n",
 			"helper/assets/value.txt": "1",
 		}, "helper/assets/value.txt"},
+		{"a file the module's root package embeds", map[string]string{
+			"cmd/main.go":      command("", "x"),
+			"value.go":         "package x\n\nimport _ \"embed\"\n\n//go:embed assets/value.txt\nvar Value string\n",
+			"assets/value.txt": "1",
+		}, "assets/value.txt"},
 		{"a file a symbolic link makes a Go source", map[string]string{
 			"cmd/main.go":        command("cmd/value", "value"),
 			"cmd/value/value.go": symlinkTo + "../../data/value.txt",
@@ -498,6 +504,51 @@ func TestTestOnlyChangesAnywhereKeepTheProgramIdentity(t *testing.T) {
 			t.Errorf("%s changed the program: %v", what, err)
 		}
 	}
+}
+
+// The repository's own git configuration must not change what the comparison
+// sees: one that hides submodule changes from git diff must not hide a changed
+// submodule, and one that adds columns to git grep must not make a fixture
+// beside an embedding package count.
+func TestGitConfigurationDoesNotChangeTheProgramIdentity(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module x\n", "go.sum": "", "cmd/main.go": "package main\n",
+		"internal/a/a.go":                  "package a\n\nimport _ \"embed\"\n\n//go:embed testdata/x.txt\nvar Data string\n",
+		"internal/a/testdata/x.txt":        "x\n",
+		"internal/a/testdata/fixture.json": "{}\n",
+	}
+	root, commits := gitRepository(t, files,
+		map[string]string{"internal/a/testdata/fixture.json": "{\"changed\": true}\n"})
+	fixtureGit(t, root, "config", "grep.column", "true")
+	if err := release.CheckProgramPin(root, commits[0], commits[1], nil); err != nil {
+		t.Errorf("a fixture nothing embeds changed the program under grep.column: %v", err)
+	}
+
+	root, commits = gitRepository(t, files)
+	fixtureGit(t, root, "config", "diff.ignoreSubmodules", "all")
+	for _, object := range []string{strings.Repeat("1", 40), strings.Repeat("2", 40)} {
+		fixtureGit(t, root, "update-index", "--add", "--cacheinfo", "160000,"+object+",third_party/module")
+		fixtureGit(t, root, "commit", "--quiet", "-m", "move the submodule")
+		commits = append(commits, fixtureGit(t, root, "rev-parse", "HEAD"))
+	}
+	if err := release.CheckProgramPin(root, commits[1], commits[2], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a moved submodule kept the program under diff.ignoreSubmodules: %v", err)
+	}
+}
+
+// fixtureGit runs git in a gitRepository fixture and returns its output.
+func fixtureGit(t *testing.T, root string, arguments ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{
+		"-C", root, "-c", "commit.gpgsign=false", "-c", "user.name=test", "-c", "user.email=test@invalid",
+	}, arguments...)...)
+	command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 // goRun runs the fixture's command when a Go toolchain is available, proving
