@@ -43,6 +43,18 @@ def created_at(run: dict) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
+def attributable(run: object) -> bool:
+    """Whether the entry names its commit and event well enough to filter it out.
+
+    An empty, blank or space-padded value cannot prove that the run belongs to
+    another commit or event, so such an entry is malformed, never unrelated.
+    """
+    if not isinstance(run, dict):
+        return False
+    return all(isinstance(value, str) and value != "" and value == value.strip()
+               for value in (run.get("headSha"), run.get("event")))
+
+
 def describe(run: dict) -> str:
     state = run.get("conclusion") or run.get("status")
     return (f"run {run.get('databaseId')} on {run.get('headBranch')} "
@@ -51,10 +63,9 @@ def describe(run: dict) -> str:
 
 def decide(runs: object, commit: str) -> tuple[str, list[str]]:
     """Return "pass", "fail" or "wait", with one reason line per run considered."""
-    if not isinstance(runs, list) or not all(
-            isinstance(r, dict) and isinstance(r.get("headSha"), str)
-            and isinstance(r.get("event"), str) for r in runs):
-        return "fail", ["the run listing is malformed: every entry needs a headSha and an event"]
+    if not isinstance(runs, list) or not all(attributable(r) for r in runs):
+        return "fail", ["the run listing is malformed: every entry needs a non-empty headSha "
+                        "and event"]
     candidates = [r for r in runs if r.get("headSha") == commit and r.get("event") == "push"]
     malformed = [r for r in candidates if not isinstance(r.get("status"), str)
                  or (r.get("status") == "completed"

@@ -256,6 +256,11 @@ def test_release_gate_never_supersedes_a_failure_on_incomplete_evidence(failed, 
     without(run(2, "failure"), "headSha"), without(run(2, "failure"), headSha=None),
     without(run(2, "failure"), "event"), without(run(2, "failure"), event=None),
     without(run(2, "failure"), headSha=1),
+    # An empty, blank or padded value names no commit or event either, so it
+    # cannot show that the failure belongs to another one.
+    run(2, "failure", ref="release", sha=""), run(2, "failure", ref="release", event=""),
+    run(2, "failure", sha="  "), run(2, "failure", event=" "),
+    run(2, "failure", sha="abc "), run(2, "failure", event=" push"),
 ])
 def test_release_gate_refuses_an_entry_it_cannot_attribute(incomplete):
     # gh filters on the commit and the event, so every entry carries both. An
@@ -263,6 +268,14 @@ def test_release_gate_refuses_an_entry_it_cannot_attribute(incomplete):
     gate = load_script("check-release-ci")
     decision, reasons = gate.decide([run(3, "success"), incomplete], "abc")
     assert decision == "fail", reasons
+
+
+def test_release_gate_still_ignores_runs_it_can_attribute_elsewhere():
+    gate = load_script("check-release-ci")
+    unrelated = [run(2, "failure", ref="release", sha="def"),
+                 run(4, "failure", event="pull_request")]
+    decision, reasons = gate.decide([run(3, "success"), *unrelated], "abc")
+    assert decision == "pass", reasons
 
 
 def test_release_gate_orders_runs_by_time_not_by_text():
