@@ -27,8 +27,16 @@ func TestTheAfterUpdateOptionIsHiddenAndExact(t *testing.T) {
 	}
 	commit := strings.Repeat("b", 40)
 	parsed := parseOrFail(t, "self-pull", "--after-update", commit)
-	if parsed.afterUpdate != commit {
-		t.Errorf("afterUpdate %q", parsed.afterUpdate)
+	if parsed.afterUpdate != commit || parsed.updateTransaction != "" {
+		t.Errorf("afterUpdate %q transaction %q", parsed.afterUpdate, parsed.updateTransaction)
+	}
+	if transactionFlag != selfupdate.TransactionFlag {
+		t.Fatalf("the parser accepts %s and a self-update passes %s", transactionFlag, selfupdate.TransactionFlag)
+	}
+	transaction := strings.Repeat("7", 32)
+	parsed = parseOrFail(t, "self-pull", "--after-update", commit, "--update-transaction", transaction)
+	if parsed.updateTransaction != transaction {
+		t.Errorf("updateTransaction %q", parsed.updateTransaction)
 	}
 	for _, argv := range [][]string{
 		{"self-pull", "--after-update", "abc1234"},
@@ -37,12 +45,16 @@ func TestTheAfterUpdateOptionIsHiddenAndExact(t *testing.T) {
 		{"self-pull", "--after-update", commit, "--dry-run"},
 		{"self-pull", "--converge", "--after-update", commit},
 		{"scheduled-pull", "--after-update", commit},
+		{"self-pull", "--update-transaction", strings.Repeat("7", 32)},
+		{"self-pull", "--after-update", commit, "--update-transaction", "7777"},
+		{"self-pull", "--after-update", commit, "--update-transaction", strings.Repeat("G", 32)},
 	} {
 		if _, err := parse(argv, release.ComponentOrder); err == nil {
 			t.Errorf("%v was accepted", argv)
 		}
 	}
-	if strings.Contains(helpText("upkeeper", "self-pull"), "after-update") {
+	if help := helpText("upkeeper", "self-pull"); strings.Contains(help, "after-update") ||
+		strings.Contains(help, "update-transaction") {
 		t.Error("the self-pull help documents the hidden option")
 	}
 }
@@ -101,7 +113,7 @@ func (f *fakeUpdate) seam() *selfUpdate {
 			f.steps = append(f.steps, "install "+pin.Tag)
 			return f.result, f.installErr
 		},
-		rollback: func(reason string) (selfupdate.Result, error) {
+		rollback: func(transaction, reason string) (selfupdate.Result, error) {
 			f.steps = append(f.steps, "rollback")
 			return selfupdate.Result{Generation: "previous-generation"}, nil
 		},
@@ -247,7 +259,7 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 	binary := strings.Repeat("b", 40)
 
 	moved := &fakeUpdate{head: strings.Repeat("d", 40), binary: binary}
-	if _, _, err := moved.seam().afterUpdate("/checkout", commit); err == nil ||
+	if _, _, err := moved.seam().afterUpdate("/checkout", commit, ""); err == nil ||
 		!strings.Contains(err.Error(), "moved") {
 		t.Errorf("a moved checkout produced %v", err)
 	}
@@ -256,7 +268,7 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 	}
 
 	wrong := &fakeUpdate{head: commit, binary: binary, verifyErr: map[string]error{binary: errors.New("differs")}}
-	if _, _, err := wrong.seam().afterUpdate("/checkout", commit); err == nil ||
+	if _, _, err := wrong.seam().afterUpdate("/checkout", commit, strings.Repeat("7", 32)); err == nil ||
 		!strings.Contains(err.Error(), "rolled back to generation previous-generation") {
 		t.Errorf("a wrong program produced %v", err)
 	}
@@ -265,7 +277,7 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 	}
 
 	right := &fakeUpdate{head: commit, binary: binary}
-	if _, code, err := right.seam().afterUpdate("/checkout", commit); err != nil || code != 0 {
+	if _, code, err := right.seam().afterUpdate("/checkout", commit, ""); err != nil || code != 0 {
 		t.Fatalf("the updated binary did not converge: %d %v", code, err)
 	}
 	if !slices.Equal(right.steps, []string{"verify " + binary, "converge"}) {
@@ -311,7 +323,7 @@ func TestAChangedProgramSelfUpdatesAndReexecutes(t *testing.T) {
 	fake := &fakeUpdate{pin: pin}
 	seam := fake.seam()
 	seam.install = installer.Apply
-	seam.rollback = installer.Rollback
+	seam.rollback = installer.UndoSwitch
 	previous := newSelfUpdate
 	t.Cleanup(func() { newSelfUpdate = previous })
 	newSelfUpdate = func() (*selfUpdate, error) { return seam, nil }
@@ -322,11 +334,108 @@ func TestAChangedProgramSelfUpdatesAndReexecutes(t *testing.T) {
 		t.Fatalf("replaced=%v err=%v steps=%v", replaced, err, fake.steps)
 	}
 	generation := filepath.Join(home, ".local/lib/upkeeper/generations", digest, "upkeeper")
-	if !slices.Equal(fake.execArgv, []string{generation, "self-pull", "--after-update", commit}) {
+	if len(fake.execArgv) != 6 ||
+		!slices.Equal(fake.execArgv[:5], []string{generation, "self-pull", "--after-update", commit, "--update-transaction"}) ||
+		!transactionPattern.MatchString(fake.execArgv[5]) {
 		t.Errorf("re-exec argv %v", fake.execArgv)
 	}
 	if selfupdate.ActiveGeneration(home) != digest {
 		t.Errorf("active generation %q", selfupdate.ActiveGeneration(home))
+	}
+}
+
+// realUpdate is a host on an adopted program A, a release server for program
+// B, and a seam whose installation steps are the real installer's.
+func realUpdate(t *testing.T) (*selfupdate.Installer, *fakeUpdate, *selfUpdate, *release.ProgramPin, string) {
+	t.Helper()
+	body := []byte("#!/bin/sh\necho 'upkeeper v0.1.31 (commit " + strings.Repeat("b", 40) + ")'\n")
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write(body)
+	}))
+	t.Cleanup(server.Close)
+	home := t.TempDir()
+	binary := filepath.Join(home, ".local/bin/upkeeper")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'upkeeper v0.1.30 (commit "+
+		strings.Repeat("a", 40)+")'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installer := &selfupdate.Installer{
+		Layout: selfupdate.Layout{Home: home}, Client: server.Client(), BaseURL: server.URL,
+		Target: "linux-amd64",
+	}
+	pin := testPin()
+	pin.Assets["linux-amd64"] = release.ProgramAsset{Asset: "upkeeper-linux-amd64", SHA256: digest, Size: int64(len(body))}
+	fake := &fakeUpdate{pin: pin, binary: strings.Repeat("a", 40)}
+	seam := fake.seam()
+	seam.install = installer.Apply
+	seam.rollback = installer.UndoSwitch
+	return installer, fake, seam, pin, digest
+}
+
+// An operator who rolls back while a self-update's re-exec is pending has
+// the last word: when that re-exec then fails, the automatic rollback finds
+// the installation changed since its own switch and leaves it alone, rather
+// than swapping current and previous again and reactivating the generation
+// the operator rejected.
+func TestAnOperatorRollbackDuringTheReexecIsKept(t *testing.T) {
+	installer, fake, seam, pin, digest := realUpdate(t)
+	var chosen string
+	seam.exec = func(path string, argv []string, env []string) error {
+		fake.execArgv = argv
+		restored, err := installer.Rollback("operator while the re-exec is pending")
+		if err != nil {
+			t.Fatalf("operator rollback: %v", err)
+		}
+		chosen = restored.Generation
+		return errors.New("exec failed")
+	}
+	replaced, err := seam.updateProgram("/checkout", strings.Repeat("c", 40), pin)
+	if replaced || err == nil {
+		t.Fatalf("a failed re-exec was not refused: replaced=%v err=%v", replaced, err)
+	}
+	if !failure.IsExpected(err) {
+		t.Errorf("the refusal would exit 1 rather than 30: %v", err)
+	}
+	if chosen == "" || chosen == digest {
+		t.Fatalf("the operator's rollback restored %q", chosen)
+	}
+	if current := installer.Layout.CurrentGeneration(); current != chosen {
+		t.Fatalf("current is %s; the operator chose %s and the update had switched to %s", current, chosen, digest)
+	}
+	if !strings.Contains(err.Error(), "changed") {
+		t.Errorf("the refusal does not say the installation changed: %v", err)
+	}
+}
+
+// The same holds for the re-executed binary's own program check: an operator
+// rollback between the switch and that check is not undone by it.
+func TestAnOperatorRollbackBeforeThePostUpdateCheckIsKept(t *testing.T) {
+	installer, fake, seam, pin, digest := realUpdate(t)
+	commit := strings.Repeat("c", 40)
+	result, err := installer.Apply(pin)
+	if err != nil || result.Generation != digest {
+		t.Fatalf("apply %+v, %v", result, err)
+	}
+	restored, err := installer.Rollback("operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.head = commit
+	fake.binary = strings.Repeat("b", 40)
+	fake.verifyErr = map[string]error{fake.binary: errors.New("differs")}
+	if _, _, err := seam.afterUpdate("/checkout", commit, result.Transaction); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Errorf("the post-update check produced %v", err)
+	}
+	if current := installer.Layout.CurrentGeneration(); current != restored.Generation {
+		t.Fatalf("current is %s; the operator chose %s", current, restored.Generation)
+	}
+	if slices.Contains(fake.steps, "converge") {
+		t.Errorf("a refused binary converged: %v", fake.steps)
 	}
 }
 

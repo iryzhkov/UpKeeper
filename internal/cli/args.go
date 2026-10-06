@@ -9,6 +9,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -63,6 +64,8 @@ type arguments struct {
 	// afterUpdate is the hidden self-pull option a freshly installed binary
 	// is re-executed with: the commit whose program it was installed for.
 	afterUpdate string
+	// updateTransaction names the switch that installed it, when there was one.
+	updateTransaction string
 
 	// self
 	selfAction       string
@@ -618,9 +621,22 @@ func parseScheduled(parsed *arguments, argv []string) error {
 			}
 			parsed.afterUpdate = value
 			index = next
+		case token == transactionFlag && parsed.command == "self-pull":
+			value, next, err := takeValue(argv, index, transactionFlag)
+			if err != nil {
+				return err
+			}
+			if !transactionPattern.MatchString(value) {
+				return usagef("argument %s: expected 32 lowercase hex digits", transactionFlag)
+			}
+			parsed.updateTransaction = value
+			index = next
 		default:
 			return unrecognized(token)
 		}
+	}
+	if parsed.updateTransaction != "" && parsed.afterUpdate == "" {
+		return usagef("argument %s: only allowed with %s", transactionFlag, afterUpdateFlag)
 	}
 	// The re-executed binary converges exactly the refreshed checkout; it
 	// neither refreshes again nor previews.
@@ -633,6 +649,12 @@ func parseScheduled(parsed *arguments, argv []string) error {
 // afterUpdateFlag is undocumented on purpose: only a self-update passes it,
 // spelled as selfupdate.AfterUpdateFlag.
 const afterUpdateFlag = "--after-update"
+
+// transactionFlag names the switch the self-update made, spelled as
+// selfupdate.TransactionFlag; it is as undocumented as afterUpdateFlag.
+const transactionFlag = "--update-transaction"
+
+var transactionPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func fullCommit(value string) bool {
 	if len(value) != 40 {

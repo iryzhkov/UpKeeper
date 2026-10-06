@@ -84,18 +84,28 @@ var Exec ExecFunc = syscall.Exec
 // AfterUpdateFlag is the hidden self-pull option a re-executed binary is given.
 const AfterUpdateFlag = "--after-update"
 
+// TransactionFlag is the hidden self-pull option that names the switch the
+// update made, so that the re-executed binary can undo exactly that switch.
+const TransactionFlag = "--update-transaction"
+
 // ReexecArguments is the command line a freshly installed binary is started
 // with: a self-pull that skips the refresh, because the checkout was refreshed
-// already, and must find HEAD at exactly the commit that was gated.
-func ReexecArguments(path, commit string) []string {
-	return []string{path, "self-pull", AfterUpdateFlag, commit}
+// already, and must find HEAD at exactly the commit that was gated. The
+// transaction is passed when the update switched current, and omitted when
+// the generation was current already.
+func ReexecArguments(path, commit, transaction string) []string {
+	argv := []string{path, "self-pull", AfterUpdateFlag, commit}
+	if transaction != "" {
+		argv = append(argv, TransactionFlag, transaction)
+	}
+	return argv
 }
 
 // Reexec replaces this process with the installed generation. It returns only
 // when the replacement could not start.
-func Reexec(exec ExecFunc, path, commit string) error {
+func Reexec(exec ExecFunc, path, commit, transaction string) error {
 	if exec == nil {
 		exec = Exec
 	}
-	return exec(path, ReexecArguments(path, commit), os.Environ())
+	return exec(path, ReexecArguments(path, commit, transaction), os.Environ())
 }

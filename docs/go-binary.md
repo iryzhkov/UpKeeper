@@ -242,14 +242,19 @@ runs while the host has a scheduled hold marker.
    previous ones are never removed. Every switch is appended to
    `~/.local/lib/upkeeper/journal.jsonl`.
 5. The process execs the new generation as
-   `self-pull --after-update <commit>`. That run refuses a checkout that moved,
+   `self-pull --after-update <commit> --update-transaction <id>`, where the
+   transaction names the switch just made; every switch replaces
+   `~/.local/lib/upkeeper/switch.json` with a fresh one before moving a link. That run refuses a checkout that moved,
    checks its own program against the checkout, and converges. The report and
    the run record carry a `self_update` entry.
 
 Any refusal before the switch leaves `current` unchanged and the host on the
 binary it was running, with the same exit 30 the refusal had before. If the
 exec fails, or the new binary's program check fails, the previous generation
-is restored before any component work. An interrupted switch is repaired on
+is restored before any component work, but only if that update's switch is
+still the last change to the installation: the installation lock is released
+before the exec, and an operator's `self rollback` or `self install` in that
+moment is kept rather than swapped back, with the refusal saying so. An interrupted switch is repaired on
 the next run: stray temporary links and staging are removed, and a `current`
 that names no complete generation is pointed back at `previous`.
 

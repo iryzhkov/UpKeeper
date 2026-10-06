@@ -12,6 +12,7 @@
 //	~/.local/lib/upkeeper/current  -> generations/<name>  relative symlink
 //	~/.local/lib/upkeeper/previous -> generations/<name>  relative symlink
 //	~/.local/bin/upkeeper -> ../lib/upkeeper/current/upkeeper
+//	~/.local/lib/upkeeper/switch.json                     the last switch
 //
 // Every link is replaced by creating a fresh symlink beside it, renaming it
 // over the old one and syncing the directory, so a crash at any point leaves
@@ -74,6 +75,10 @@ func (l Layout) Journal() string { return filepath.Join(l.Root(), "journal.jsonl
 // Hold, while it exists, stops Apply: a rollback writes it, so that the next
 // scheduled self-pull does not reinstall what was just rolled back.
 func (l Layout) Hold() string { return filepath.Join(l.Root(), "held") }
+
+// Switch records the last switch, so that the rollback of a failed update
+// can tell whether anything changed the installation after it.
+func (l Layout) Switch() string { return filepath.Join(l.Root(), "switch.json") }
 
 // Lock serializes every change to the installation.
 func (l Layout) Lock() string { return filepath.Join(l.Root(), ".lock") }

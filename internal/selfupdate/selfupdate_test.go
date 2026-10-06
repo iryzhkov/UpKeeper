@@ -863,10 +863,75 @@ func TestReexecPassesAfterUpdate(t *testing.T) {
 	}
 	commit := strings.Repeat("b", 40)
 	path := "/home/x/.local/lib/upkeeper/generations/" + strings.Repeat("1", 64) + "/upkeeper"
-	if err := Reexec(recorder, path, commit); err == nil {
+	transaction := strings.Repeat("7", 32)
+	if err := Reexec(recorder, path, commit, transaction); err == nil {
 		t.Fatal("a failed exec was not reported")
 	}
-	if gotPath != path || !slices.Equal(gotArgv, []string{path, "self-pull", "--after-update", commit}) {
+	if gotPath != path || !slices.Equal(gotArgv,
+		[]string{path, "self-pull", "--after-update", commit, "--update-transaction", transaction}) {
 		t.Errorf("exec %s %v", gotPath, gotArgv)
+	}
+	// An update that found its generation current already switched nothing.
+	if err := Reexec(recorder, path, commit, ""); err == nil ||
+		!slices.Equal(gotArgv, []string{path, "self-pull", "--after-update", commit}) {
+		t.Errorf("exec without a switch %v", gotArgv)
+	}
+}
+
+// The rollback of a failed update undoes its own switch, and refuses once
+// anything else has changed the installation: an operator's rollback, a
+// second rollback that restores the same pair, or another install.
+func TestUndoSwitchUndoesOnlyItsOwnSwitch(t *testing.T) {
+	first, second, third := newProgram("v0.1.30", "a"), newProgram("v0.1.31", "b"), newProgram("v0.1.32", "c")
+	cases := []struct {
+		name    string
+		between func(t *testing.T, target *Installer, store *artifacts)
+		current program
+	}{
+		{"nothing in between", func(*testing.T, *Installer, *artifacts) {}, first},
+		{"an operator rollback", func(t *testing.T, target *Installer, _ *artifacts) {
+			if _, err := target.Rollback("operator"); err != nil {
+				t.Fatal(err)
+			}
+		}, first},
+		{"two operator rollbacks", func(t *testing.T, target *Installer, _ *artifacts) {
+			for range 2 {
+				if _, err := target.Rollback("operator"); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, second},
+		{"another install", func(t *testing.T, target *Installer, store *artifacts) {
+			managedOn(t, store, target, third)
+		}, third},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			store, server := serve(t)
+			target := installer(t, server)
+			managedOn(t, store, target, first)
+			store.publish(second)
+			update, err := target.Apply(second.pin())
+			if err != nil || update.Transaction == "" {
+				t.Fatalf("apply %+v, %v", update, err)
+			}
+			test.between(t, target, store)
+			_, err = target.UndoSwitch(update.Transaction, "re-exec failed")
+			if test.name == "nothing in between" {
+				if err != nil {
+					t.Fatalf("undo: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "changed after this update") {
+				t.Fatalf("undo after %s produced %v", test.name, err)
+			} else if !failure.IsExpected(err) {
+				t.Errorf("the refusal would exit 1: %v", err)
+			}
+			if got := runBinary(t, target.Layout); got != versionOf(test.current) {
+				t.Errorf("the host runs %q, want %q", got, versionOf(test.current))
+			}
+		})
+	}
+	if _, err := (&Installer{Layout: Layout{Home: t.TempDir()}}).UndoSwitch("", "x"); err == nil {
+		t.Error("an update that switched nothing rolled something back")
 	}
 }

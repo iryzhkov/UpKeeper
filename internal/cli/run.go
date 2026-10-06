@@ -514,7 +514,7 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		if err != nil {
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
-		document, code, err := updater.afterUpdate(root, parsed.afterUpdate)
+		document, code, err := updater.afterUpdate(root, parsed.afterUpdate, parsed.updateTransaction)
 		if err != nil {
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}

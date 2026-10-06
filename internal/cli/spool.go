@@ -323,7 +323,7 @@ var spoolFlags = []string{
 	"expect-release-sha256", "expect-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "repository",
-	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "workers",
+	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "update-transaction", "workers",
 }
 
 func spoolDeclaredFlags() map[string]struct{} {

@@ -1,6 +1,8 @@
 package selfupdate
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +51,10 @@ type Result struct {
 	Switched bool
 	// Adopted names the generation an unmanaged binary was adopted into.
 	Adopted string
+	// Transaction identifies the switch this call made, or "" when current did
+	// not move. UndoSwitch takes it, so that an automatic rollback undoes this
+	// switch and nothing that happened to the installation after it.
+	Transaction string
 }
 
 // Map renders a result for a report.
@@ -56,6 +62,7 @@ func (r Result) Map() map[string]any {
 	return map[string]any{
 		"generation": r.Generation, "previous": nullable(r.Previous), "path": r.Path,
 		"switched": r.Switched, "adopted": nullable(r.Adopted),
+		"transaction": nullable(r.Transaction),
 	}
 }
 
@@ -147,11 +154,11 @@ func (i *Installer) Apply(pin *release.ProgramPin) (Result, error) {
 			return err
 		}
 		result.Adopted = adopted
-		switched, err := i.switchTo(name, "apply "+pin.Tag)
+		transaction, err := i.switchTo(name, "apply "+pin.Tag)
 		if err != nil {
 			return err
 		}
-		result.Switched = switched
+		result.Switched, result.Transaction = transaction != "", transaction
 		result = i.describe(result)
 		return nil
 	})
@@ -197,11 +204,11 @@ func (i *Installer) InstallFile(path, expectSHA256, versionLine string) (Result,
 				return err
 			}
 		}
-		switched, err := i.switchTo(digest, "self install")
+		transaction, err := i.switchTo(digest, "self install")
 		if err != nil {
 			return err
 		}
-		result.Switched = switched
+		result.Switched, result.Transaction = transaction != "", transaction
 		// An explicit install is the operator's answer to a held update.
 		if err := os.Remove(i.Layout.Hold()); err == nil {
 			i.journal(map[string]any{"event": "release-hold", "reason": "self install"})
@@ -220,31 +227,85 @@ func (i *Installer) Rollback(reason string) (Result, error) {
 		if err := i.recover(); err != nil {
 			return err
 		}
-		// A binary somebody put in place by hand is not a generation; linking
-		// over it would destroy it rather than roll anything back.
-		if target, err := os.Readlink(i.Layout.Binary()); err != nil || target != binaryLink {
-			return failure.Value("%s is not managed by generations; nothing to roll back",
-				i.Layout.Binary())
-		}
-		previous := i.Layout.PreviousGeneration()
-		if previous == "" || !i.Layout.validGeneration(previous) ||
-			previous == i.Layout.CurrentGeneration() {
-			return failure.Value("there is no previous upkeeper generation to roll back to")
-		}
-		// The hold goes first: a crash after it and before the switch holds
-		// updates on the old binary, which is the conservative outcome.
-		if err := fsatomic.WriteFile(i.Layout.Hold(),
-			[]byte("rolled back from "+i.Layout.CurrentGeneration()+": "+reason+"\n"), 0o600); err != nil {
-			return failure.Value("cannot record the rollback hold: %v", err)
-		}
-		switched, err := i.switchTo(previous, "rollback: "+reason)
-		result.Switched = switched
-		if err == nil {
-			result = i.describe(result)
-		}
+		var err error
+		result, err = i.rollback(reason)
 		return err
 	})
 	return result, err
+}
+
+// UndoSwitch is the rollback a failed self-update makes. It undoes exactly
+// the switch its transaction names, and only while that switch is still the
+// last change to the installation: current and previous are where it left
+// them. Anything since, such as an operator's `self rollback` or install in
+// the moment between the switch and the re-exec, was somebody's later
+// decision, and is kept rather than reversed.
+func (i *Installer) UndoSwitch(transaction, reason string) (Result, error) {
+	if transaction == "" {
+		return Result{}, failure.Value(
+			"this update switched no generation, so it has nothing of its own to roll back")
+	}
+	var result Result
+	err := i.locked(func() error {
+		if err := i.recover(); err != nil {
+			return err
+		}
+		record, _ := i.lastSwitch()
+		current, previous := i.Layout.CurrentGeneration(), i.Layout.PreviousGeneration()
+		if record.ID != transaction || current != record.To || previous != record.Previous {
+			return failure.Value(
+				"the installation changed after this update switched to %s; current is %s and "+
+					"previous is %s, and that later change is kept: nothing rolled back",
+				displayGeneration(record.To, record.ID == transaction), displayName(current),
+				displayName(previous))
+		}
+		var err error
+		result, err = i.rollback(reason)
+		return err
+	})
+	return result, err
+}
+
+// rollback is Rollback for a caller that holds the lock and has recovered.
+func (i *Installer) rollback(reason string) (Result, error) {
+	var result Result
+	// A binary somebody put in place by hand is not a generation; linking
+	// over it would destroy it rather than roll anything back.
+	if target, err := os.Readlink(i.Layout.Binary()); err != nil || target != binaryLink {
+		return result, failure.Value("%s is not managed by generations; nothing to roll back",
+			i.Layout.Binary())
+	}
+	previous := i.Layout.PreviousGeneration()
+	if previous == "" || !i.Layout.validGeneration(previous) ||
+		previous == i.Layout.CurrentGeneration() {
+		return result, failure.Value("there is no previous upkeeper generation to roll back to")
+	}
+	// The hold goes first: a crash after it and before the switch holds
+	// updates on the old binary, which is the conservative outcome.
+	if err := fsatomic.WriteFile(i.Layout.Hold(),
+		[]byte("rolled back from "+i.Layout.CurrentGeneration()+": "+reason+"\n"), 0o600); err != nil {
+		return result, failure.Value("cannot record the rollback hold: %v", err)
+	}
+	transaction, err := i.switchTo(previous, "rollback: "+reason)
+	result.Switched, result.Transaction = transaction != "", transaction
+	if err == nil {
+		result = i.describe(result)
+	}
+	return result, err
+}
+
+func displayGeneration(name string, known bool) string {
+	if !known {
+		return "a generation"
+	}
+	return displayName(name)
+}
+
+func displayName(name string) string {
+	if name == "" {
+		return "none"
+	}
+	return name
 }
 
 // held reports the rollback hold, which stops Apply until an operator acts.
@@ -401,28 +462,79 @@ func (i *Installer) publishGeneration(directory, name string) error {
 }
 
 // switchTo makes a generation current and the one it replaces previous, then
-// makes sure ~/.local/bin/upkeeper runs current, then prunes.
-func (i *Installer) switchTo(name, reason string) (bool, error) {
+// makes sure ~/.local/bin/upkeeper runs current, then prunes. It returns the
+// transaction of the switch, or "" when current already named the generation.
+//
+// The switch record is written before either link moves. A crash between the
+// two leaves a record whose current is not the one on disk, which UndoSwitch
+// treats as a later change: it refuses rather than guesses.
+func (i *Installer) switchTo(name, reason string) (string, error) {
 	old := i.Layout.CurrentGeneration()
 	if old == name {
-		return false, i.linkBinary()
+		return "", i.linkBinary()
 	}
-	if old != "" && i.Layout.validGeneration(old) {
+	keepOld := old != "" && i.Layout.validGeneration(old)
+	previous := i.Layout.PreviousGeneration()
+	if keepOld {
+		previous = old
+	}
+	transaction, err := i.recordSwitch(switchRecord{From: old, To: name, Previous: previous})
+	if err != nil {
+		return "", err
+	}
+	if keepOld {
 		if err := i.replaceLink(i.Layout.Previous(), filepath.Join("generations", old), "previous"); err != nil {
-			return false, err
+			return "", err
 		}
 	}
 	if err := i.replaceLink(i.Layout.Current(), filepath.Join("generations", name), "current"); err != nil {
-		return false, err
+		return "", err
 	}
 	now := i.now()
 	_ = os.Chtimes(i.Layout.Generation(name), now, now)
-	i.journal(map[string]any{"event": "switch", "from": nullable(old), "to": name, "reason": reason})
+	i.journal(map[string]any{"event": "switch", "from": nullable(old), "to": name, "reason": reason,
+		"transaction": transaction})
 	if err := i.linkBinary(); err != nil {
-		return true, err
+		return transaction, err
 	}
 	i.prune()
-	return true, nil
+	return transaction, nil
+}
+
+// switchRecord is the last switch made to the installation.
+type switchRecord struct {
+	ID       string `json:"id"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Previous string `json:"previous"`
+}
+
+// recordSwitch names a switch about to be made with a fresh transaction and
+// replaces the record of the last one with it.
+func (i *Installer) recordSwitch(record switchRecord) (string, error) {
+	buffer := make([]byte, 16)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", failure.Value("cannot name the switch: %v", err)
+	}
+	record.ID = hex.EncodeToString(buffer)
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	if err := fsatomic.WriteFile(i.Layout.Switch(), append(encoded, '\n'), 0o600); err != nil {
+		return "", failure.Value("cannot record the switch: %v", err)
+	}
+	return record.ID, nil
+}
+
+// lastSwitch reads the record of the last switch, if there is one.
+func (i *Installer) lastSwitch() (switchRecord, bool) {
+	var record switchRecord
+	content, err := os.ReadFile(i.Layout.Switch())
+	if err != nil || json.Unmarshal(content, &record) != nil {
+		return switchRecord{}, false
+	}
+	return record, true
 }
 
 // replaceLink points a symlink at a new target without a moment in which the

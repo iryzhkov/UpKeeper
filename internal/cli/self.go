@@ -29,9 +29,11 @@ type selfUpdate struct {
 	// binaryCommit is the source commit of the running binary.
 	binaryCommit func() string
 	install      func(pin *release.ProgramPin) (selfupdate.Result, error)
-	rollback     func(reason string) (selfupdate.Result, error)
-	generation   func() string
-	exec         selfupdate.ExecFunc
+	// rollback is Installer.UndoSwitch: it undoes the one switch its
+	// transaction names, and nothing that changed the installation since.
+	rollback   func(transaction, reason string) (selfupdate.Result, error)
+	generation func() string
+	exec       selfupdate.ExecFunc
 	// converge is selfconv.ConvergeSelfAfterUpdate.
 	converge func(root string, details map[string]any) (map[string]any, int, error)
 	// scheduledHold names this host's scheduled hold marker when it exists.
@@ -62,7 +64,7 @@ var newSelfUpdate = func() (*selfUpdate, error) {
 		},
 		binaryCommit: buildinfo.SourceCommit,
 		install:      installer.Apply,
-		rollback:     installer.Rollback,
+		rollback:     installer.UndoSwitch,
 		generation:   func() string { return selfupdate.ActiveGeneration(home) },
 		exec:         selfupdate.Exec,
 		converge: func(root string, details map[string]any) (map[string]any, int, error) {
@@ -104,14 +106,16 @@ func (s *selfUpdate) updateProgram(root, refreshed string, pin *release.ProgramP
 			"self-update to upkeeper %s refused: %s; this host keeps its current binary",
 			pin.Tag, err.Error())
 	}
-	err = selfupdate.Reexec(s.exec, result.Path, refreshed)
+	err = selfupdate.Reexec(s.exec, result.Path, refreshed, result.Transaction)
 	if err == nil {
 		return true, nil
 	}
 	if !result.Switched {
 		return false, failure.Value("cannot start upkeeper %s at %s: %v", pin.Tag, result.Path, err)
 	}
-	restored, rollbackErr := s.rollback("re-exec failed: " + err.Error())
+	// The installation lock was released when the switch finished, so an
+	// operator may have acted since; the rollback undoes this switch only.
+	restored, rollbackErr := s.rollback(result.Transaction, "re-exec failed: "+err.Error())
 	if rollbackErr != nil {
 		return false, failure.Value(
 			"cannot start upkeeper %s at %s: %v; rolling back also failed: %v",
@@ -125,8 +129,9 @@ func (s *selfUpdate) updateProgram(root, refreshed string, pin *release.ProgramP
 // nothing: the checkout must still be at exactly the commit it was installed
 // for, and its program must now be this binary's. If it is not, the update did
 // not do what it was for and the previous generation is restored before any
-// component is touched.
-func (s *selfUpdate) afterUpdate(root, commit string) (map[string]any, int, error) {
+// component is touched, provided the switch the transaction names is still
+// the installation's last change.
+func (s *selfUpdate) afterUpdate(root, commit, transaction string) (map[string]any, int, error) {
 	revision, err := s.checkout(root)
 	if err != nil {
 		return nil, 0, err
@@ -137,7 +142,7 @@ func (s *selfUpdate) afterUpdate(root, commit string) (map[string]any, int, erro
 				"the next self-pull converges it", commit, revision)
 	}
 	if err := s.verify(root, s.binaryCommit(), commit); err != nil {
-		restored, rollbackErr := s.rollback("post-update program check failed")
+		restored, rollbackErr := s.rollback(transaction, "post-update program check failed")
 		if rollbackErr != nil {
 			return nil, 0, failure.Value(
 				"the installed binary is not the gated program: %s; rolling back also failed: %v",
