@@ -27,6 +27,343 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 )
 
+func TestCatalogBaselineGitNoLazyFetchLocalPromisor(t *testing.T) {
+	outer := baselineTestOuter(t)
+	donor := baselineTestOriginal(t, outer)
+	root := baselineTestOriginal(t, outer)
+	r := baselineLineages()[0].Original
+	p := filepath.Join(root, "objects", r.Object[:2], r.Object[2:])
+	if e := os.Remove(p); e != nil {
+		t.Fatal(e)
+	}
+	baselineTestGit(t, root, nil, "config", "remote.origin.url", donor)
+	baselineTestGit(t, root, nil, "config", "remote.origin.promisor", "true")
+	baselineTestGit(t, root, nil, "config", "remote.origin.partialclonefilter", "blob:none")
+	before := baselineTestStoreBytes(t, root)
+	// Only the private fixed read-only wrapper is exercised here. No fabricated
+	// snapshot or public owner grant is created; the donor is entirely local.
+	op := &baselineOriginalOperation{custody: baselineCustody()}
+	defer op.custody.release()
+	if e := op.supported(context.Background(), root); e != nil {
+		t.Fatal("supported Git is mandatory", e)
+	}
+	if b, e := op.git(context.Background(), root, "cat-file", "blob", r.Object); e == nil || len(b) != 0 {
+		t.Fatal("missing promisor object fetched", e)
+	}
+	after := baselineTestStoreBytes(t, root)
+	if len(before) != len(after) {
+		t.Fatal("lazy fetch changed store names")
+	}
+	for p, b := range before {
+		if after[p] != b {
+			t.Fatal("lazy fetch changed store bytes", p)
+		}
+	}
+	if b, e := os.ReadFile(filepath.Join(donor, "objects", r.Object[:2], r.Object[2:])); e != nil || len(b) == 0 {
+		t.Fatal("genuine local donor object missing", e)
+	}
+}
+
+func TestCatalogBaselineMetadataBarrier(t *testing.T) {
+	outer := baselineTestOuter(t)
+	for _, kind := range []string{"include", "promisor", "unknown", "alternates", "replacement", "grafts", "root", "ancestor", "names", "config", "object"} {
+		t.Run(kind, func(t *testing.T) {
+			root := baselineTestOriginal(t, outer)
+			switch kind {
+			case "include":
+				baselineTestGit(t, root, nil, "config", "include.path", "/never-read")
+			case "promisor":
+				baselineTestGit(t, root, nil, "config", "remote.origin.promisor", "true")
+			case "unknown":
+				baselineTestGit(t, root, nil, "config", "protocol.https.allow", "always")
+			case "alternates":
+				snapshotTestWrite(t, filepath.Join(root, "objects/info/alternates"), []byte("/never-read\n"), 0644)
+			case "grafts":
+				snapshotTestWrite(t, filepath.Join(root, "info/grafts"), []byte(sharedUpstreamCommit+"\n"), 0644)
+			case "replacement":
+				baselineTestGit(t, root, nil, "update-ref", "refs/replace/"+sharedUpstreamCommit, sharedUpstreamCommit)
+			}
+			reads := 0
+			op := &baselineOriginalOperation{objectRead: func(string) { reads++ }}
+			op.beforeBarrier = func() {
+				switch kind {
+				case "root":
+					if e := os.Rename(root, root+".lost"); e != nil {
+						t.Fatal(e)
+					}
+				case "ancestor":
+					st, e := os.Stat(filepath.Dir(root))
+					if e != nil {
+						t.Fatal(e)
+					}
+					mode := os.FileMode(0700)
+					if st.Mode().Perm() == 0700 {
+						mode = 0755
+					}
+					if e := os.Chmod(filepath.Dir(root), mode); e != nil {
+						t.Fatal(e)
+					}
+				case "names":
+					snapshotTestWrite(t, filepath.Join(root, "new-name"), []byte("new"), 0644)
+				case "config":
+					baselineTestGit(t, root, nil, "config", "include.path", "/never-read")
+				case "object":
+					p := filepath.Join(root, "objects", sharedUpstreamCommit[:2], sharedUpstreamCommit[2:])
+					b, e := os.ReadFile(p)
+					if e != nil {
+						t.Fatal(e)
+					}
+					b[0] ^= 1
+					baselineTestRewrite(t, p, b, 0444)
+				}
+			}
+			fds := snapshotFDCount(t)
+			s, e := acquireCatalogOriginalImport(context.Background(), root, op)
+			if s != nil || e == nil || reads != 0 {
+				t.Fatal("pre-read refusal", s, e, reads)
+			}
+			if snapshotFDCount(t) != fds {
+				t.Fatal("metadata refusal leaked descriptors")
+			}
+		})
+	}
+	root := baselineTestOriginal(t, outer)
+	raw, typed := 0, 0
+	op := &baselineOriginalOperation{objectRead: func(kind string) {
+		if kind == "compressed" {
+			raw++
+		} else {
+			typed++
+		}
+	}}
+	op.afterStart = func(cmd *exec.Cmd, args []string) {
+		env := strings.Join(cmd.Env, "\n") + "\n"
+		for _, want := range []string{"GIT_ALLOW_PROTOCOL=\n", "GIT_NO_LAZY_FETCH=1\n", "GIT_PROTOCOL_FROM_USER=0\n"} {
+			if !strings.Contains(env, want) {
+				t.Fatal("missing intrinsic deny control", want)
+			}
+		}
+		if cmd.Path != "/usr/bin/git" || !strings.Contains(strings.Join(cmd.Args, " "), "protocol.allow=never") || !strings.Contains(strings.Join(cmd.Args, " "), "--no-lazy-fetch") {
+			t.Fatal("fixed Git isolation")
+		}
+	}
+	s, e := acquireCatalogOriginalImport(context.Background(), root, op)
+	if e != nil {
+		t.Fatal("healthy exact object acquisition", e)
+	}
+	defer s.Close()
+	if raw == 0 || typed == 0 {
+		t.Fatal("positive did not read real objects", raw, typed)
+	}
+	for _, r := range baselineLineages() {
+		if b := s.SourceBytes(r.Original.Path); digestOf(b) != r.Original.SHA || len(b) != r.Original.Bytes {
+			t.Fatal("positive exact bytes", r.Original.Path)
+		}
+	}
+}
+func TestCatalogBaselineOriginalPrivateRoot(t *testing.T) {
+	outer := baselineTestOuter(t)
+	for _, kind := range []string{"root0755", "unsafe-child", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := baselineTestOriginal(t, outer)
+			switch kind {
+			case "root0755":
+				if e := os.Chmod(root, 0755); e != nil {
+					t.Fatal(e)
+				}
+			case "unsafe-child":
+				if e := os.Chmod(filepath.Join(root, "objects"), 0777); e != nil {
+					t.Fatal(e)
+				}
+			case "hardlink":
+				p := filepath.Join(root, "objects", sharedUpstreamCommit[:2], sharedUpstreamCommit[2:])
+				if e := os.Link(p, p+".alias"); e != nil {
+					t.Fatal(e)
+				}
+			}
+			s, e := AcquireCatalogOriginalImportSnapshot(context.Background(), root)
+			if s != nil || e == nil {
+				t.Fatal("unsafe original accepted", kind)
+			}
+			if kind == "root0755" {
+				st, e := os.Stat(root)
+				if e != nil || st.Mode().Perm() != 0755 {
+					t.Fatal("caller root repaired")
+				}
+			}
+		})
+	}
+}
+func baselineTestStoreBytes(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	if e := filepath.WalkDir(root, func(p string, d os.DirEntry, e error) error {
+		if e != nil {
+			return e
+		}
+		st, e := os.Lstat(p)
+		if e != nil {
+			return e
+		}
+		value := st.Mode().String()
+		if st.Mode().IsRegular() {
+			b, e := os.ReadFile(p)
+			if e != nil {
+				return e
+			}
+			value += ":" + digestOf(b)
+		}
+		out[strings.TrimPrefix(p, root)] = value
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	return out
+}
+func TestCatalogBaselineInitialGitCancellation(t *testing.T) {
+	outer := baselineTestOuter(t)
+	for _, kind := range []string{"cancel", "deadline"} {
+		t.Run(kind, func(t *testing.T) {
+			root := baselineTestOriginal(t, outer)
+			before := baselineTestStoreBytes(t, root)
+			ctx, cancel := context.WithCancel(context.Background())
+			cause := error(context.Canceled)
+			if kind == "deadline" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+				cause = context.DeadlineExceeded
+			}
+			defer cancel()
+			reached, waited := false, false
+			op := &baselineOriginalOperation{}
+			op.afterStart = func(cmd *exec.Cmd, args []string) {
+				if args[0] != "cat-file" || reached {
+					return
+				}
+				reached = true
+				if kind == "cancel" {
+					cancel()
+				} else {
+					<-ctx.Done()
+				}
+			}
+			op.afterWait = func(cmd *exec.Cmd, args []string) {
+				if args[0] == "cat-file" && reached {
+					if cmd.ProcessState == nil {
+						t.Fatal("child not waited")
+					}
+					waited = true
+				}
+			}
+			fds := snapshotFDCount(t)
+			s, e := acquireCatalogOriginalImport(ctx, root, op)
+			if s != nil || !errors.Is(e, cause) || !reached || !waited {
+				t.Fatal("actual initial typed cancellation", s, e, reached, waited)
+			}
+			if snapshotFDCount(t) != fds {
+				t.Fatal("initial canceled child descriptor leak")
+			}
+			after := baselineTestStoreBytes(t, root)
+			if len(before) != len(after) {
+				t.Fatal("caller names changed")
+			}
+			for p, b := range before {
+				if after[p] != b {
+					t.Fatal("caller bytes/modes changed", p)
+				}
+			}
+		})
+	}
+}
+func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
+	for _, rootKind := range []string{"repository", "inputs"} {
+		for _, kind := range []string{"original", "generated", "history"} {
+			t.Run(rootKind+"/"+kind, func(t *testing.T) {
+				f := baselineTestAcquire(t)
+				root := f.catalog.resources[0].endpoint.path
+				if rootKind == "inputs" {
+					root = f.catalog.resources[1].endpoint.path
+				}
+				switch kind {
+				case "original":
+					f.original.Close()
+					target := filepath.Join(root, "nested-original.git")
+					if e := os.Rename(f.originalRoot, target); e != nil {
+						t.Fatal(e)
+					}
+					s, e := AcquireCatalogOriginalImportSnapshot(context.Background(), target)
+					if e != nil {
+						t.Fatal("genuine nested original", e)
+					}
+					defer s.Close()
+					f.original = s
+				case "generated":
+					f.generated.Close()
+					archive, review := filepath.Join(root, "nested-evidence"), filepath.Join(root, "nested-review")
+					b, e := os.ReadFile(f.archive)
+					if e != nil {
+						t.Fatal(e)
+					}
+					snapshotTestWrite(t, archive, b, 0400)
+					b, e = os.ReadFile(f.review)
+					if e != nil {
+						t.Fatal(e)
+					}
+					snapshotTestWrite(t, review, b, 0400)
+					s, e := AcquireCatalogGeneratedBaselineSnapshot(context.Background(), archive, review)
+					if e != nil {
+						t.Fatal("genuine nested evidence", e)
+					}
+					defer s.Close()
+					f.generated = s
+				case "history":
+					f.history.Close()
+					path := filepath.Join(root, "nested-history")
+					b, e := os.ReadFile(f.drafts)
+					if e != nil {
+						t.Fatal(e)
+					}
+					snapshotTestWrite(t, path, b, 0400)
+					s, e := AcquireCatalogHistoricalTemplateSnapshot(context.Background(), path)
+					if e != nil {
+						t.Fatal("genuine nested history", e)
+					}
+					defer s.Close()
+					f.history = s
+				}
+				a, e := f.audit(context.Background())
+				baselineTestZero(t, a, e)
+			})
+		}
+	}
+	for _, kind := range []string{"missing", "incomplete", "stale", "closed"} {
+		t.Run(kind, func(t *testing.T) {
+			f := baselineTestAcquire(t)
+			switch kind {
+			case "missing":
+				f.original.owner.resources = nil
+			case "incomplete":
+				f.generated.owner.resources[0].ancestors = nil
+			case "stale":
+				f.history.owner.resources[0].endpoint.ino++
+			case "closed":
+				f.original.Close()
+				if f.original.owner.resources != nil || f.original.owner.resourceCheck != nil {
+					t.Fatal("Close retained custody metadata")
+				}
+			}
+			a, e := f.audit(context.Background())
+			baselineTestZero(t, a, e)
+			if e := f.catalog.Verify(); e != nil {
+				t.Fatal("legacy catalog verification", e)
+			}
+			if c, tr := f.catalog.Identity(); c == "" || tr == "" {
+				t.Fatal("legacy identity")
+			}
+		})
+	}
+}
+
 func TestCatalogBaselineClosedArchiveGrammar(t *testing.T) {
 	outer := baselineTestOuter(t)
 	raw := outer["evidence/original-inputs/baseline-evidence.tar.gz"]
@@ -788,10 +1125,10 @@ func TestCatalogBaselineOneInheritedContextAllStages(t *testing.T) {
 	defer cancel()
 	want, _ := parent.Deadline()
 	var inherited context.Context
-	calls := 0
-	wrap := func(body func(context.Context) error) func(context.Context) error {
+	var stages []string
+	wrap := func(stage string, body func(context.Context) error) func(context.Context) error {
 		return func(ctx context.Context) error {
-			calls++
+			stages = append(stages, stage)
 			deadline, ok := ctx.Deadline()
 			if !ok || !deadline.Equal(want) {
 				return errors.New("composite renewed shorter deadline")
@@ -804,13 +1141,14 @@ func TestCatalogBaselineOneInheritedContextAllStages(t *testing.T) {
 			return body(ctx)
 		}
 	}
-	f.catalog.verify = wrap(f.catalog.verify)
-	f.original.owner.verify = wrap(f.original.owner.verify)
-	f.generated.owner.verify = wrap(f.generated.owner.verify)
-	f.history.owner.verify = wrap(f.history.owner.verify)
+	f.catalog.verify = wrap("catalog", f.catalog.verify)
+	f.original.owner.verify = wrap("original", f.original.owner.verify)
+	f.generated.owner.verify = wrap("generated", f.generated.owner.verify)
+	f.history.owner.verify = wrap("history", f.history.owner.verify)
 	a, e := f.audit(parent)
-	if e != nil || a.Encoding() == nil || calls != 11 {
-		t.Fatal("all five catalog and six new-owner verifications", e, calls)
+	wantStages := "catalog original generated history catalog catalog catalog catalog original generated history catalog original generated history"
+	if e != nil || a.Encoding() == nil || strings.Join(stages, " ") != wantStages {
+		t.Fatal("required custody/guidance/producer/comparison/post stages", e, stages)
 	}
 }
 func TestCatalogBaselineOriginalTypedAndPhysicalRefusals(t *testing.T) {

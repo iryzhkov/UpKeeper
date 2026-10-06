@@ -355,7 +355,15 @@ func AcquireCatalogGeneratedBaselineSnapshot(parent context.Context, archive, re
 	}
 	data["@archive"] = raw
 	data["@review"] = proof
-	s := &CatalogGeneratedBaselineSnapshot{owner: baselineOwner{initialized: true, data: data, verify: func(ctx context.Context) error { return baselineVerifyCustody(ctx, c) }, release: c.release}}
+	var resources []catalogResource
+	for _, path := range []string{archive, review} {
+		r, e := c.resource(path, false)
+		if e != nil {
+			return nil, e
+		}
+		resources = append(resources, r)
+	}
+	s := &CatalogGeneratedBaselineSnapshot{owner: baselineOwner{initialized: true, data: data, resources: resources, resourceCheck: baselineBindResources(resources), verify: func(ctx context.Context) error { return baselineVerifyCustody(ctx, c) }, release: c.release}}
 	if e := s.owner.verifyLocked(ctx); e != nil {
 		return nil, e
 	}
@@ -387,7 +395,12 @@ func AcquireCatalogHistoricalTemplateSnapshot(parent context.Context, archive st
 		return nil, errors.New("baseline complete historical/current template identity")
 	}
 	data["@archive"] = raw
-	s := &CatalogHistoricalTemplateSnapshot{owner: baselineOwner{initialized: true, data: data, verify: func(ctx context.Context) error { return baselineVerifyCustody(ctx, c) }, release: c.release}}
+	r, e := c.resource(archive, false)
+	if e != nil {
+		return nil, e
+	}
+	resources := []catalogResource{r}
+	s := &CatalogHistoricalTemplateSnapshot{owner: baselineOwner{initialized: true, data: data, resources: resources, resourceCheck: baselineBindResources(resources), verify: func(ctx context.Context) error { return baselineVerifyCustody(ctx, c) }, release: c.release}}
 	if e := s.owner.verifyLocked(ctx); e != nil {
 		return nil, e
 	}
@@ -397,19 +410,40 @@ func AcquireCatalogHistoricalTemplateSnapshot(parent context.Context, archive st
 
 // baselineGit has finite command/pipe bounds and synchronously kills and reaps
 // on overflow or cancellation. It never invokes archived programs or network.
-func baselineGit(parent context.Context, root string, args ...string) ([]byte, error) {
+func (op *baselineOriginalOperation) git(parent context.Context, root string, args ...string) ([]byte, error) {
+	if !baselineGitGrammar(args) {
+		return nil, errors.New("baseline Git command grammar")
+	}
+	if len(args) > 0 && args[0] == "cat-file" {
+		if err := op.verifyPhysical(parent); err != nil {
+			return nil, err
+		}
+		if op.objectRead != nil {
+			op.objectRead("typed")
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
-	argv := []string{"--no-replace-objects", "--literal-pathspecs", "--git-dir=" + root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.useReplaceRefs=false", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", "-c", "credential.helper="}
+	argv := []string{"--no-lazy-fetch", "--no-replace-objects", "--literal-pathspecs", "--git-dir=" + root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.useReplaceRefs=false", "-c", "protocol.allow=never", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", "-c", "credential.helper="}
 	cmd := exec.CommandContext(ctx, "/usr/bin/git", append(argv, args...)...)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_NO_REPLACE_OBJECTS=1", "GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_NO_REPLACE_OBJECTS=1", "GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_ALLOW_PROTOCOL=", "GIT_NO_LAZY_FETCH=1", "GIT_PROTOCOL_FROM_USER=0"}
 	out, stderr := &baselineOutput{limit: 1 << 20}, &baselineOutput{limit: 1 << 20}
 	kill := func() { cancel() }
 	out.overflow = kill
 	stderr.overflow = kill
 	cmd.Stdout = out
 	cmd.Stderr = stderr
-	if e := cmd.Run(); e != nil {
+	if e := cmd.Start(); e != nil {
+		return nil, catalogContextErr(parent, e)
+	}
+	if op.afterStart != nil {
+		op.afterStart(cmd, append([]string(nil), args...))
+	}
+	e := cmd.Wait()
+	if op.afterWait != nil {
+		op.afterWait(cmd, append([]string(nil), args...))
+	}
+	if e != nil {
 		return nil, catalogContextErr(parent, e)
 	}
 	if out.exceeded || stderr.exceeded || stderr.buffer.Len() != 0 {
@@ -433,29 +467,199 @@ func (b *baselineOutput) Write(p []byte) (int, error) {
 	}
 	return b.buffer.Write(p)
 }
+
+// Hooks are private to one initial acquisition. No executable/runner injection
+// or mutable global exists. Retained verification creates a fresh hook-free op.
+type baselineOriginalOperation struct {
+	custody       *snapshotCustody
+	contentChecks []func(context.Context) error
+	beforeBarrier func()
+	objectRead    func(string)
+	afterStart    func(*exec.Cmd, []string)
+	afterWait     func(*exec.Cmd, []string)
+}
+
+func (op *baselineOriginalOperation) verifyPhysical(ctx context.Context) error {
+	if err := baselineVerifyCustody(ctx, op.custody); err != nil {
+		return err
+	}
+	for _, check := range op.contentChecks {
+		if err := baselineVerifyCustody(ctx, op.custody); err != nil {
+			return err
+		}
+		if op.objectRead != nil {
+			op.objectRead("compressed")
+		}
+		if err := check(ctx); err != nil {
+			return catalogContextErr(ctx, err)
+		}
+	}
+	return baselineVerifyCustody(ctx, op.custody)
+}
+func baselineGitGrammar(args []string) bool {
+	if len(args) == 1 && args[0] == "--version" {
+		return true
+	}
+	if strings.Join(args, "\x00") == "config\x00--local\x00--no-includes\x00--list\x00-z" ||
+		strings.Join(args, "\x00") == "for-each-ref\x00--format=%(refname)\x00refs/replace/" ||
+		strings.Join(args, "\x00") == "rev-parse\x00--verify\x00HEAD" {
+		return true
+	}
+	if len(args) != 3 || args[0] != "cat-file" {
+		return false
+	}
+	if args[1] != "commit" && args[1] != "tree" && args[1] != "blob" {
+		return false
+	}
+	if len(args[2]) != 40 {
+		return false
+	}
+	for _, c := range args[2] {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// Version probe also passes --no-lazy-fetch: unsupported Git fails closed
+// before reading any store data. The qualified floor is Git 2.48.
+func (op *baselineOriginalOperation) supported(ctx context.Context, root string) error {
+	b, err := op.git(ctx, root, "--version")
+	if err != nil {
+		return err
+	}
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(string(b), "git version %d.%d.%d", &major, &minor, &patch); err != nil || major != 2 || minor < 48 {
+		return errors.New("baseline unsupported Git no-lazy-fetch version")
+	}
+	return nil
+}
+
+// Original stores retain their separate 512-name aggregate bound rather than
+// borrowing the tighter frozen catalog directory bound.
+func baselineOriginalNames(c *snapshotCustody, path string) ([]string, error) {
+	d := c.dirs[path]
+	if d == nil {
+		return nil, errors.New("baseline directory not held")
+	}
+	fd, err := syscall.Open("/proc/self/fd/"+strconv.Itoa(d.fd), syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "baseline held directory")
+	defer file.Close()
+	var st syscall.Stat_t
+	if syscall.Fstat(fd, &st) != nil || !sharedSame(st, d.stat) {
+		return nil, errors.New("baseline enumeration binding")
+	}
+	names, err := file.Readdirnames(513)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(names) > 512 || syscall.Fstat(fd, &st) != nil || !sharedSame(st, d.stat) {
+		return nil, errors.New("baseline enumeration bound/change")
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+type baselineMetadataFile struct {
+	path     string
+	fd, proc int
+	stat     syscall.Stat_t
+}
+
+func (f baselineMetadataFile) verify() error {
+	other, err := sharedHeld(f.path, false)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(other)
+	var held, current syscall.Stat_t
+	if syscall.Fstat(f.fd, &held) != nil || syscall.Fstat(other, &current) != nil || !sharedSame(f.stat, held) || !sharedSame(f.stat, current) || held.Nlink != 1 || current.Nlink != 1 {
+		return errors.New("baseline metadata file custody changed")
+	}
+	return nil
+}
+func (f baselineMetadataFile) read(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := f.verify(); err != nil {
+		return nil, err
+	}
+	fd, err := syscall.Openat(f.proc, strconv.Itoa(f.fd), syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "baseline held data")
+	defer file.Close()
+	var opened syscall.Stat_t
+	if syscall.Fstat(fd, &opened) != nil || !sharedSame(f.stat, opened) {
+		return nil, errors.New("baseline data descriptor binding")
+	}
+	raw, err := io.ReadAll(io.NewSectionReader(file, 0, f.stat.Size+1))
+	if err != nil {
+		return nil, err
+	}
+	if syscall.Fstat(fd, &opened) != nil || !sharedSame(f.stat, opened) {
+		return nil, errors.New("baseline data descriptor changed")
+	}
+	if int64(len(raw)) != f.stat.Size {
+		return nil, errors.New("baseline bounded file changed")
+	}
+	if err := f.verify(); err != nil {
+		return nil, err
+	}
+	return raw, ctx.Err()
+}
 func AcquireCatalogOriginalImportSnapshot(parent context.Context, root string) (*CatalogOriginalImportSnapshot, error) {
+	return acquireCatalogOriginalImport(parent, root, &baselineOriginalOperation{})
+}
+func acquireCatalogOriginalImport(parent context.Context, root string, op *baselineOriginalOperation) (_ *CatalogOriginalImportSnapshot, err error) {
 	ctx, cancel, e := baselineContext(parent)
 	if e != nil {
 		return nil, e
 	}
 	defer cancel()
+	defer func() {
+		if err != nil {
+			err = catalogContextErr(ctx, err)
+		}
+	}()
 	if !sharedPhysicalPath(root) {
 		return nil, errors.New("baseline original physical root")
 	}
 	c := baselineCustody()
+	op.custody = c
 	ok := false
 	defer func() {
 		if !ok {
 			c.release()
 		}
 	}()
-	// The reviewed acquisition is a bounded private bare store. Hold all physical
-	// names, including config, refs and object storage; no indirect storage allowed.
+	if e := c.directory(root, root, true); e != nil {
+		return nil, e
+	}
+	if e := op.supported(ctx, root); e != nil {
+		return nil, e
+	}
+	proc, e := syscall.Open("/proc/self/fd", sharedOPath|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if e != nil {
+		return nil, e
+	}
+	c.closes = append(c.closes, func() { syscall.Close(proc) })
+	var fs syscall.Statfs_t
+	var pst syscall.Stat_t
+	if syscall.Fstatfs(proc, &fs) != nil || fs.Type != 0x9fa0 || syscall.Fstat(proc, &pst) != nil || pst.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+		return nil, errors.New("baseline procfs unavailable")
+	}
 	count, total := 0, int64(0)
-	e = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	var files []baselineMetadataFile
+	// Enumerate names only through held descriptors, capturing no object data.
+	var walk func(string) error
+	walk = func(path string) error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
@@ -463,53 +667,157 @@ func AcquireCatalogOriginalImportSnapshot(parent context.Context, root string) (
 		if count > 512 {
 			return errors.New("baseline bare-store finite names")
 		}
-		st, e := os.Lstat(path)
+		fd, e := sharedHeld(path, true)
 		if e != nil {
 			return e
 		}
-		if st.IsDir() {
-			return c.directory(path, "", true)
+		syscall.Close(fd)
+		if e := c.directory(path, "", true); e != nil {
+			return e
 		}
-		if !st.Mode().IsRegular() {
-			return errors.New("baseline bare-store special/symlink")
+		if c.dirs[path].stat.Uid != uint32(os.Getuid()) {
+			return errors.New("baseline directory owner")
 		}
-		if st.Mode().Perm() != 0444 && st.Mode().Perm() != 0644 && st.Mode().Perm() != 0755 {
-			return errors.New("baseline bare-store mode")
+		names, e := baselineOriginalNames(c, path)
+		if e != nil {
+			return e
 		}
-		b, e := baselineHold(c, path, 1<<20, uint32(st.Mode().Perm()))
-		total += int64(len(b))
-		if total > 8<<20 {
-			return errors.New("baseline bare-store finite bytes")
+		captured := append([]string(nil), names...)
+		c.checks = append(c.checks, func() error {
+			now, e := baselineOriginalNames(c, path)
+			if e != nil {
+				return e
+			}
+			if strings.Join(now, "\x00") != strings.Join(captured, "\x00") {
+				return errors.New("baseline store names changed")
+			}
+			return nil
+		})
+		for _, name := range names {
+			p := filepath.Join(path, name)
+			if strings.HasPrefix(p, root+"/objects/pack/") && strings.HasSuffix(p, ".promisor") {
+				return errors.New("baseline promisor storage")
+			}
+			st, e := os.Lstat(p)
+			if e != nil {
+				return e
+			}
+			if st.IsDir() {
+				if e := walk(p); e != nil {
+					return e
+				}
+				continue
+			}
+			count++
+			if count > 512 || !st.Mode().IsRegular() {
+				return errors.New("baseline bare-store names/special")
+			}
+			fd, e := sharedHeld(p, false)
+			if e != nil {
+				return e
+			}
+			var stat syscall.Stat_t
+			if syscall.Fstat(fd, &stat) != nil || stat.Nlink != 1 || stat.Uid != uint32(os.Getuid()) ||
+				(stat.Mode&07777 != 0444 && stat.Mode&07777 != 0644 && stat.Mode&07777 != 0755) ||
+				stat.Size <= 0 || stat.Size > 1<<20 || stat.Blocks*512 < stat.Size {
+				syscall.Close(fd)
+				return errors.New("baseline metadata file mode/owner/links/size")
+			}
+			total += stat.Size
+			if total > 8<<20 {
+				syscall.Close(fd)
+				return errors.New("baseline bare-store finite bytes")
+			}
+			f := baselineMetadataFile{p, fd, proc, stat}
+			files = append(files, f)
+			c.closes = append(c.closes, func() { syscall.Close(fd) })
+			c.checks = append(c.checks, f.verify)
 		}
-		return e
-	})
+		return nil
+	}
+	if e := walk(root); e != nil {
+		return nil, e
+	}
+	if e := baselineVerifyCustody(ctx, c); e != nil {
+		return nil, e
+	}
+	if e := op.configuration(ctx, root); e != nil {
+		return nil, e
+	}
+	if op.beforeBarrier != nil {
+		op.beforeBarrier()
+	}
+	// Aggregate metadata/config/name barrier before ANY compressed/typed data.
+	if e := baselineVerifyCustody(ctx, c); e != nil {
+		return nil, e
+	}
+	for _, f := range files {
+		if e := baselineVerifyCustody(ctx, c); e != nil {
+			return nil, e
+		}
+		if strings.HasPrefix(f.path, root+"/objects/") && op.objectRead != nil {
+			op.objectRead("compressed")
+		}
+		b, e := f.read(ctx)
+		if e != nil {
+			return nil, e
+		}
+		want := digestOf(b)
+		op.contentChecks = append(op.contentChecks, func(current context.Context) error {
+			raw, e := f.read(current)
+			if e != nil {
+				return e
+			}
+			if digestOf(raw) != want {
+				return errors.New("baseline store bytes changed")
+			}
+			return nil
+		})
+	}
+	// Content checks receive the current operation context; the acquisition
+	// context and initial observation hooks are never retained.
+	contentChecks := append([]func(context.Context) error(nil), op.contentChecks...)
+	verify := func(current context.Context) error {
+		fresh := &baselineOriginalOperation{custody: c, contentChecks: contentChecks}
+		if e := fresh.verifyPhysical(current); e != nil {
+			return e
+		}
+		if e := fresh.configuration(current, root); e != nil {
+			return e
+		}
+		if e := fresh.verifyPhysical(current); e != nil {
+			return e
+		}
+		if e := fresh.objects(current, root, nil); e != nil {
+			return e
+		}
+		return fresh.verifyPhysical(current)
+	}
+	data := map[string][]byte{}
+	if e := baselineVerifyCustody(ctx, c); e != nil {
+		return nil, e
+	}
+	if e := op.objects(ctx, root, data); e != nil {
+		return nil, e
+	}
+	r, e := c.resource(root, true)
 	if e != nil {
 		return nil, e
 	}
-	verify := func(ctx context.Context) error {
-		if e := baselineVerifyCustody(ctx, c); e != nil {
-			return e
-		}
-		return baselineOriginalObjects(ctx, root, nil)
-	}
-	data := map[string][]byte{}
-	if e := baselineOriginalObjects(ctx, root, data); e != nil {
-		return nil, e
-	}
-	s := &CatalogOriginalImportSnapshot{owner: baselineOwner{initialized: true, data: data, verify: verify, release: c.release}}
+	s := &CatalogOriginalImportSnapshot{owner: baselineOwner{initialized: true, data: data, resources: []catalogResource{r}, resourceCheck: baselineBindResources([]catalogResource{r}), verify: verify, release: c.release}}
 	if e := s.owner.verifyLocked(ctx); e != nil {
 		return nil, e
 	}
 	ok = true
 	return s, nil
 }
-func baselineOriginalObjects(ctx context.Context, root string, data map[string][]byte) error {
+func (op *baselineOriginalOperation) configuration(ctx context.Context, root string) error {
 	for _, p := range []string{"commondir", "objects/info/alternates", "objects/info/http-alternates", "info/grafts"} {
 		if _, e := os.Lstat(filepath.Join(root, p)); !errors.Is(e, os.ErrNotExist) {
 			return errors.New("baseline indirect Git store")
 		}
 	}
-	config, e := baselineGit(ctx, root, "config", "--local", "--no-includes", "--list", "-z")
+	config, e := op.git(ctx, root, "config", "--local", "--no-includes", "--list", "-z")
 	if e != nil {
 		return e
 	}
@@ -552,17 +860,20 @@ func baselineOriginalObjects(ctx context.Context, root string, data map[string][
 	if origin != 1 || !bare {
 		return errors.New("baseline exact bare/origin")
 	}
-	refs, e := baselineGit(ctx, root, "for-each-ref", "--format=%(refname)", "refs/replace/")
+	refs, e := op.git(ctx, root, "for-each-ref", "--format=%(refname)", "refs/replace/")
 	if e != nil || len(refs) != 0 {
 		return errors.New("baseline replacements")
 	}
-	head, e := baselineGit(ctx, root, "rev-parse", "--verify", "HEAD")
+	return ctx.Err()
+}
+func (op *baselineOriginalOperation) objects(ctx context.Context, root string, data map[string][]byte) error {
+	head, e := op.git(ctx, root, "rev-parse", "--verify", "HEAD")
 	if e != nil || string(head) != sharedUpstreamCommit+"\n" {
-		return errors.New("baseline selected HEAD")
+		return catalogContextErr(ctx, errors.New("baseline selected HEAD"))
 	}
-	raw, e := baselineGit(ctx, root, "cat-file", "commit", sharedUpstreamCommit)
+	raw, e := op.git(ctx, root, "cat-file", "commit", sharedUpstreamCommit)
 	if e != nil || snapshotObjectID("commit", raw) != sharedUpstreamCommit || !bytes.HasPrefix(raw, []byte("tree "+sharedUpstreamTree+"\n")) {
-		return errors.New("baseline original typed commit")
+		return catalogContextErr(ctx, errors.New("baseline original typed commit"))
 	}
 	trees := map[string][]byte{}
 	var tree func(string) ([]byte, error)
@@ -570,9 +881,9 @@ func baselineOriginalObjects(ctx context.Context, root string, data map[string][
 		if b, ok := trees[id]; ok {
 			return b, nil
 		}
-		b, e := baselineGit(ctx, root, "cat-file", "tree", id)
+		b, e := op.git(ctx, root, "cat-file", "tree", id)
 		if e != nil || snapshotObjectID("tree", b) != id {
-			return nil, errors.New("baseline original typed tree")
+			return nil, catalogContextErr(ctx, errors.New("baseline original typed tree"))
 		}
 		trees[id] = b
 		return b, nil
@@ -602,9 +913,9 @@ func baselineOriginalObjects(ctx context.Context, root string, data map[string][
 				return errors.New("baseline original mode/blob")
 			}
 		}
-		b, e := baselineGit(ctx, root, "cat-file", "blob", r.Original.Object)
+		b, e := op.git(ctx, root, "cat-file", "blob", r.Original.Object)
 		if e != nil || snapshotObjectID("blob", b) != r.Original.Object || len(b) != r.Original.Bytes || digestOf(b) != r.Original.SHA {
-			return errors.New("baseline original typed blob bytes")
+			return catalogContextErr(ctx, errors.New("baseline original typed blob bytes"))
 		}
 		if data != nil {
 			data[r.Original.Path] = b

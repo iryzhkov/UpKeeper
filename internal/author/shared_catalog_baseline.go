@@ -4,20 +4,133 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync"
 )
+
+// catalogResource is private, immutable custody metadata, never serialized or
+// accepted through a parser or public setter. Acquisition binds it to held FDs.
+type catalogEndpoint struct {
+	path     string
+	dev, ino uint64
+}
+type catalogResource struct {
+	endpoint  catalogEndpoint
+	directory bool
+	ancestors []catalogEndpoint
+}
+
+// Bind an independent deep copy; caller-visible bytes cannot alter custody.
+// The existing verifier authenticates live descriptors before this comparison.
+func baselineBindResources(records []catalogResource) func([]catalogResource) error {
+	frozen := make([]catalogResource, len(records))
+	for i, r := range records {
+		frozen[i] = r
+		frozen[i].ancestors = append([]catalogEndpoint(nil), r.ancestors...)
+	}
+	return func(current []catalogResource) error {
+		if len(current) != len(frozen) {
+			return errors.New("baseline resource metadata changed")
+		}
+		for i, r := range current {
+			f := frozen[i]
+			if r.endpoint != f.endpoint || r.directory != f.directory || len(r.ancestors) != len(f.ancestors) {
+				return errors.New("baseline resource metadata changed")
+			}
+			for j, a := range r.ancestors {
+				if a != f.ancestors[j] {
+					return errors.New("baseline ancestor metadata changed")
+				}
+			}
+		}
+		return nil
+	}
+}
+func baselineResourceComplete(r catalogResource) bool {
+	p := r.endpoint.path
+	if p == "/" || !filepath.IsAbs(p) || filepath.Clean(p) != p || r.endpoint.ino == 0 {
+		return false
+	}
+	parent := filepath.Dir(p)
+	if r.directory {
+		parent = p
+	}
+	for parent != "/" {
+		found := false
+		for _, a := range r.ancestors {
+			if a.path == parent && a.ino != 0 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+		parent = filepath.Dir(parent)
+	}
+	if r.directory {
+		for _, a := range r.ancestors {
+			if a.path == p {
+				return a.dev == r.endpoint.dev && a.ino == r.endpoint.ino
+			}
+		}
+		return false
+	}
+	return true
+}
+func baselineResourceOverlap(a, b catalogResource) bool {
+	x, y := a.endpoint, b.endpoint
+	if x.dev == y.dev && x.ino == y.ino || x.path == y.path ||
+		strings.HasPrefix(x.path, y.path+"/") || strings.HasPrefix(y.path, x.path+"/") {
+		return true
+	}
+	for _, pair := range [][2]catalogResource{{a, b}, {b, a}} {
+		if !pair[0].directory {
+			continue
+		}
+		for _, ancestor := range pair[1].ancestors {
+			if pair[0].endpoint.dev == ancestor.dev && pair[0].endpoint.ino == ancestor.ino {
+				return true
+			}
+		}
+	}
+	return false
+}
+func baselineResourceGroups(groups ...[]catalogResource) error {
+	if len(groups) != 4 || len(groups[0]) != 2 || len(groups[1]) != 1 || len(groups[2]) != 2 || len(groups[3]) != 1 {
+		return errors.New("baseline incomplete resource metadata")
+	}
+	var all []catalogResource
+	for _, group := range groups {
+		for _, r := range group {
+			if !baselineResourceComplete(r) {
+				return errors.New("baseline incomplete endpoint/ancestor metadata")
+			}
+			for _, prior := range all {
+				if baselineResourceOverlap(r, prior) {
+					return errors.New("baseline resource alias/containment")
+				}
+			}
+			all = append(all, r)
+		}
+	}
+	return nil
+}
 
 // baselineOwner is custody for this finite diagnostic unit. It has no store,
 // preparation, execution or permission interface. Reads and decoding are finite
 // synchronous operations; the logical deadline is not a hard realtime bound.
 type baselineOwner struct {
-	mu          sync.Mutex
-	data        map[string][]byte
-	verify      func(context.Context) error
-	release     func() error
-	closed      bool
-	initialized bool
-	closeErr    error
+	resources     []catalogResource
+	resourceCheck func([]catalogResource) error
+	mu            sync.Mutex
+	data          map[string][]byte
+	verify        func(context.Context) error
+	release       func() error
+	closed        bool
+	initialized   bool
+	closeErr      error
 }
 
 func (o *baselineOwner) verifyLocked(ctx context.Context) error {
@@ -60,6 +173,8 @@ func (o *baselineOwner) closeOwner() error {
 		if o.release != nil {
 			o.closeErr = o.release()
 		}
+		o.resources = nil
+		o.resourceCheck = nil
 		o.data = nil
 		o.verify = nil
 		o.release = nil
@@ -196,6 +311,32 @@ func InspectCatalogBaselineSnapshot(parent context.Context, c *CatalogSnapshot, 
 		acquired++
 	}
 	fail := func(err error) (CatalogBaselineAudit, error) { return zero, catalogContextErr(ctx, err) }
+	// Authenticate all custody before any composite semantics, under all locks.
+	if err := c.verifyLocked(ctx); err != nil {
+		return fail(err)
+	}
+	for _, owner := range []*baselineOwner{&o.owner, &g.owner, &h.owner} {
+		if err := owner.verifyLocked(ctx); err != nil {
+			return fail(err)
+		}
+	}
+	if c.resourceCheck == nil {
+		return fail(errors.New("baseline catalog resource metadata missing"))
+	}
+	if err := c.resourceCheck(c.resources); err != nil {
+		return fail(err)
+	}
+	for _, owner := range []*baselineOwner{&o.owner, &g.owner, &h.owner} {
+		if owner.resourceCheck == nil {
+			return fail(errors.New("baseline owner resource metadata missing"))
+		}
+		if err := owner.resourceCheck(owner.resources); err != nil {
+			return fail(err)
+		}
+	}
+	if err := baselineResourceGroups(c.resources, o.owner.resources, g.owner.resources, h.owner.resources); err != nil {
+		return fail(err)
+	}
 	guidance, err := inspectCatalogGuidanceLocked(ctx, c)
 	if err != nil {
 		return fail(err)

@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+func TestCatalogBaselinePrivateResourcePredicates(t *testing.T) {
+	parent := catalogEndpoint{"/safe", 1, 10}
+	resource := func(path string, ino uint64, dir bool) catalogResource {
+		r := catalogResource{endpoint: catalogEndpoint{path, 1, ino}, directory: dir, ancestors: []catalogEndpoint{parent}}
+		if dir {
+			r.ancestors = append(r.ancestors, r.endpoint)
+		}
+		return r
+	}
+	a, b := resource("/safe/a", 11, true), resource("/safe/b", 12, false)
+	if baselineResourceOverlap(a, b) {
+		t.Fatal("common parent is not overlap")
+	}
+	alias := resource("/safe/alias", 11, false)
+	if !baselineResourceOverlap(a, alias) {
+		t.Fatal("distinct-name endpoint alias")
+	}
+	nested := resource("/elsewhere/file", 20, false)
+	nested.ancestors = append(nested.ancestors, a.endpoint)
+	if !baselineResourceOverlap(a, nested) || !baselineResourceOverlap(nested, a) {
+		t.Fatal("selected root in held ancestors")
+	}
+	if !baselineResourceOverlap(a, resource("/safe/a/file", 21, false)) {
+		t.Fatal("path containment")
+	}
+	frozen := baselineBindResources([]catalogResource{a})
+	a.ancestors[0].ino++
+	if frozen([]catalogResource{a}) == nil {
+		t.Fatal("metadata binding aliased mutable ancestors")
+	}
+	if baselineResourceComplete(catalogResource{}) {
+		t.Fatal("zero metadata complete")
+	}
+	// Synthetic records exercise this private predicate, not bind-mount custody.
+}
+
 func TestCatalogBaselineZeroAndNil(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
