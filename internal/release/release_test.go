@@ -92,6 +92,19 @@ func TestCurrentPublishedManifestValidatesAndIsCanonical(t *testing.T) {
 	if want := fmt.Sprintf("%x", sha256.Sum256(raw)); digest != want {
 		t.Fatalf("published release identity %s does not match file identity %s", digest, want)
 	}
+	// The program pin must name the program this commit holds, or every host
+	// would install a binary that refuses the release it arrived with. This
+	// runs here because this test is the manifest gate CI runs first.
+	pin, err := value.ProgramPin()
+	if err != nil {
+		t.Fatalf("program pin: %v", err)
+	}
+	if pin != nil {
+		if err := release.CheckProgramPin(
+			filepath.Join("..", ".."), pin.SourceCommit, "HEAD", nil); err != nil {
+			t.Fatalf("published program pin: %v", err)
+		}
+	}
 }
 
 func TestValidateRefusals(t *testing.T) {
