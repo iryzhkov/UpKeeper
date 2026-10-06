@@ -672,10 +672,12 @@ func huyangSeedUnit(unit, relative string) error {
 }
 
 // huyangResumeBootstrap finishes a bootstrap a crash interrupted after the
-// checkout was in place: it seeds the unit if the crash came first, or
-// rewrites one the crash left half written, then enables and proves the
-// service. A checkout that moved since, or a unit that is not the seeded one,
-// is the operator's to look at.
+// checkout was in place: it builds the checkout again, seeds the unit if the
+// crash came first, or rewrites one the crash left half written, then enables
+// and proves the service. The build output is ignored by git, so a clean
+// checkout on the pin says nothing about the binary the unit would start, and
+// the pin may have moved since the bootstrap built it. A checkout that moved
+// since, or a unit that is not the seeded one, is the operator's to look at.
 func huyangResumeBootstrap(
 	c *Context, spec map[string]any, checkout, commit string, actions *[]string,
 ) (string, error) {
@@ -714,9 +716,13 @@ func huyangResumeBootstrap(
 		return "", err
 	}
 	if c.DryRun {
-		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: seed and enable "+service)
+		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: build, seed and enable "+service)
 		return "updated", nil
 	}
+	if _, err := c.Must(huyangBuildCommand(spec), 600*time.Second, checkout, "Huyang build"); err != nil {
+		return "", err
+	}
+	*actions = append(*actions, "built "+adapterShortCommit(commit))
 	if raw, err := os.ReadFile(unit); err != nil || string(raw) != want {
 		// Absent, or a prefix of the template the crash cut short.
 		if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -727,6 +733,14 @@ func huyangResumeBootstrap(
 		}
 	}
 	if err := huyangStart(c, spec, checkout, service); err != nil {
+		// As after a failed bootstrap: an unproven service is not left enabled
+		// at boot, and the marker stays for the next run.
+		if _, stopErr := c.Must(
+			[]string{"systemctl", "--user", "disable", "--now", service},
+			60*time.Second, "", "stop failed Huyang bootstrap",
+		); stopErr != nil {
+			return "", Failf("%s; %s", err.Error(), stopErr.Error())
+		}
 		return "", err
 	}
 	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil && !errors.Is(err, fs.ErrNotExist) {

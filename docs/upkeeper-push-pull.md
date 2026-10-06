@@ -301,7 +301,8 @@ On the first converge of a fresh host, expect:
   there, and its unit is seeded and started;
 - t3-steward to install its verified binary although no T3 exists yet: no T3 at all is a
   safe pair transition (only when npm answers that no global t3 package is installed, or its
-  global prefix has no `lib` directory yet; an npm that is missing, times out or cannot read its package tree refuses the transition), because nothing is running that the steward could be incompatible
+  global prefix has no `lib` directory yet, and neither `lib/node_modules/t3` nor a linked
+  `bin/t3` exists under that prefix; an npm that is missing, times out or cannot read its package tree refuses the transition), because nothing is running that the steward could be incompatible
   with and the candidate has proved that the release's T3 is in its range. When the host has
   no `t3-steward.service`, the binary is installed and verified without a restart and the
   action says so; install the service with `t3-steward install-service` once T3 serves;
@@ -312,8 +313,10 @@ Every command the agent runs is looked up on its own explicit `PATH` (the mise s
 `PATH` block in `~/.bashrc` is no longer needed on any host.
 
 If the Huyang bootstrap is interrupted after the built checkout is in place, the next run
-finishes it (seeds the unit if needed, enables and probes the service) instead of mistaking
-the checkout for an installed Huyang.
+finishes it (builds the checkout again, seeds the unit if needed, enables and probes the
+service) instead of mistaking the checkout for an installed Huyang. It does so only while the
+checkout is on the pinned commit without local changes; otherwise it refuses and keeps the
+pending marker. A service that does not answer the probe is disabled again.
 
 If the agent-tooling stage fails part-way, the next run moves that incomplete stage to
 `~/.local/share/upkeeper-tools/failed-stages/` (the newest three UpKeeper put there are kept

@@ -422,11 +422,12 @@ func t3PackageAbsent(c *Context) bool {
 	if raw, failed := document["error"]; failed {
 		// npm cannot list a global prefix whose lib directory does not exist
 		// yet. Such a prefix holds no package at all, which is proved by
-		// looking at it, never by the wording of the error.
+		// looking at it, never by the wording of the error. A t3 command
+		// linked under its bin directory is still a trace of T3.
 		var report struct {
 			Code string `json:"code"`
 		}
-		return json.Unmarshal(raw, &report) == nil && report.Code == "ENOENT" && t3GlobalLibMissing(c)
+		return json.Unmarshal(raw, &report) == nil && report.Code == "ENOENT" && t3GlobalPathsMissing(c, "lib", "bin/t3")
 	}
 	if result.Code != 0 && result.Code != 1 {
 		return false
@@ -443,12 +444,6 @@ func t3PackageAbsent(c *Context) bool {
 	// The command npm links for the package is a trace of T3 too, even when
 	// the package it points at lives in another tree.
 	return t3GlobalPathsMissing(c, "lib/node_modules/t3", "bin/t3")
-}
-
-// t3GlobalLibMissing reports whether npm's global prefix is an absolute path
-// whose lib directory certainly does not exist.
-func t3GlobalLibMissing(c *Context) bool {
-	return t3GlobalPathsMissing(c, "lib")
 }
 
 // t3GlobalPathsMissing reports whether npm's global prefix is an absolute path
