@@ -28,6 +28,20 @@ func HoldDirectory() (string, error) {
 func ConvergeSelf(
 	root string, dryRun bool, runner procx.Runner,
 ) (map[string]any, int, error) {
+	return convergeSelf(root, dryRun, runner, nil)
+}
+
+// ConvergeSelfAfterUpdate is ConvergeSelf run by a freshly installed binary,
+// which records what the self-update did in the report and the run record.
+func ConvergeSelfAfterUpdate(
+	root string, runner procx.Runner, selfUpdate map[string]any,
+) (map[string]any, int, error) {
+	return convergeSelf(root, false, runner, selfUpdate)
+}
+
+func convergeSelf(
+	root string, dryRun bool, runner procx.Runner, selfUpdate map[string]any,
+) (map[string]any, int, error) {
 	revision, err := CheckoutRevision(root, runner)
 	if err != nil {
 		return nil, 0, err
@@ -65,6 +79,7 @@ func ConvergeSelf(
 		StoredFiles:    stored,
 		Runner:         hostRunner,
 		Process:        runner,
+		SelfUpdate:     selfUpdate,
 	})
 }
 
@@ -113,6 +128,8 @@ func ConvergeFleet(
 		SkipUnreachable: true,
 		Runner:          hostRunner,
 		Process:         runner,
+		// Remote hosts must run the program the release pins.
+		ExpectedProgramCommit: converge.ProgramFence(value, "scheduled-pull"),
 	})
 }
 

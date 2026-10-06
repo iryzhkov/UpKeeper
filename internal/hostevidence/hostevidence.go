@@ -20,6 +20,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/pytime"
 	"github.com/iryzhkov/UpKeeper/internal/runstore"
+	"github.com/iryzhkov/UpKeeper/internal/selfupdate"
 )
 
 const (
@@ -73,6 +74,10 @@ func Collect(home string, runner procx.Runner, now time.Time) map[string]any {
 		last = runs[0]
 	}
 	return map[string]any{
+		// Which program answered: the version and commit compiled into it and
+		// the generation ~/.local/bin/upkeeper runs, so that a controller can
+		// tell an old binary from a stale release without logging in.
+		"binary":             selfupdate.Identity(home),
 		"run_store":          filepath.Join(home, RunStoreDirectory),
 		"hold_directory":     filepath.Join(home, HoldDirectory),
 		"scheduled_runs":     runs,

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iryzhkov/UpKeeper/internal/buildinfo"
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
@@ -47,7 +48,15 @@ type Payload struct {
 	Manifest       map[string]any    `json:"manifest"`
 	StoredFiles    map[string]string `json:"stored_files"`
 	Lock           map[string]any    `json:"lock"`
+	// ExpectedProgramCommit is the source commit the controller requires this
+	// binary to be built from, or "" for no requirement. It is omitted when
+	// empty so that a payload without it is byte for byte what it always was.
+	ExpectedProgramCommit string `json:"expected_program_commit,omitempty"`
 }
+
+// programCommit is the source commit of the running binary; a variable so that
+// a test can play a binary built from another commit.
+var programCommit = buildinfo.SourceCommit
 
 // StepFailed is a component step that did not complete. The host stops here.
 type StepFailed struct{ Message string }
@@ -353,6 +362,22 @@ func Execute(context *Context) map[string]any {
 		"run_id":     context.RunID,
 		"dry_run":    context.DryRun,
 		"components": []any{},
+	}
+	// The program fence: a controller that names the program a release was
+	// gated with is never served by another one. An old binary applying a new
+	// manifest is exactly the mismatch the self-pull path refuses, and on this
+	// path nothing else would notice it. It is checked before the lock, so a
+	// refused payload has touched nothing.
+	if expected := context.Payload.ExpectedProgramCommit; expected != "" {
+		if running := programCommit(); running != expected {
+			result["result"] = "failed"
+			result["program"] = map[string]any{"expected_commit": expected, "running_commit": running}
+			result["error"] = fmt.Sprintf(
+				"this host runs upkeeper built from %s and the release requires %s; "+
+					"update it with `upkeeper self-pull` on the host, or install that "+
+					"release's binary, before converging it", running, expected)
+			return result
+		}
 	}
 	owner, err := context.acquireLock()
 	if err != nil {

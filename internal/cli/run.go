@@ -131,6 +131,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runScheduledPull(parsed, streams)
 	case "hold":
 		return runHold(parsed, streams)
+	case "self":
+		return runSelf(parsed, streams)
 	case "install-self-timer", "install-pull-timer":
 		return runInstallTimer(parsed, streams)
 	default:
@@ -371,6 +373,9 @@ func runConvergence(parsed *arguments, streams Streams) (int, error) {
 		SelfOnly:        parsed.selfOnly,
 		SkipUnreachable: parsed.skipUnreachable,
 		Process:         procx.Run,
+		// A remote host must run the program the release pins; see the
+		// agent's program fence.
+		ExpectedProgramCommit: converge.ProgramFence(value, parsed.command),
 	})
 	if err != nil {
 		return exitcode.Preflight, err
@@ -501,6 +506,24 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 	if _, err := selfconv.LocalHost(config); err != nil {
 		return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 	}
+	// A binary a self-update just installed converges the checkout it was
+	// installed for, and nothing else; see selfUpdate.afterUpdate.
+	if parsed.afterUpdate != "" {
+		updater, err := newSelfUpdate()
+		if err != nil {
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
+		}
+		document, code, err := updater.afterUpdate(root, parsed.afterUpdate)
+		if err != nil {
+			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
+		}
+		if err := printJSON(streams.Out, document); err != nil {
+			return 1, err
+		}
+		printScheduledSummary(streams.Err, parsed.command, document,
+			scheduledRecordPath(parsed, document), code)
+		return code, nil
+	}
 	if !parsed.dryRun && !parsed.convergeOnly {
 		refreshed, err := selfconv.Refresh(root, procx.Run)
 		if err != nil {
@@ -509,9 +532,15 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 		// Run the gated code, never an old program against a new manifest.
 		// The Python launcher was the checkout, so re-executing it after the
 		// refresh satisfied that by construction; a binary is not the checkout,
-		// so the identity is checked instead.
+		// so the identity is checked instead. A changed program is replaced by
+		// the binary the release pins, which is then re-executed in this
+		// process's place; anything else is refused as before.
 		if err := selfconv.VerifyProgram(
 			root, buildinfo.SourceCommit(), refreshed, procx.Run); err != nil {
+			replaced, err := programUpdate(root, refreshed, err)
+			if replaced {
+				return exitcode.Success, nil
+			}
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)
 		}
 	}

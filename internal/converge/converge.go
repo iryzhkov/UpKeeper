@@ -57,6 +57,13 @@ type Options struct {
 	Reachability    func(spec inventory.HostSpec) map[string]any
 	Process         procx.Runner
 	RunID           string
+	// SelfUpdate, when set, is what a self-update did before this run, and is
+	// carried into the report and the run record so that the receipt of the
+	// convergence also says which program applied it.
+	SelfUpdate map[string]any
+	// ExpectedProgramCommit, when set, is sent to every agent, which refuses
+	// the payload unless it runs a binary built from exactly that commit.
+	ExpectedProgramCommit string
 }
 
 // Controller names the inventory host this process is running on, or
@@ -200,9 +207,10 @@ func Fleet(
 			Host: agent.HostRef{
 				Name: name, OSID: spec.OSID, SetupCheckout: spec.SetupCheckout,
 			},
-			Components:  selected,
-			Manifest:    value.Manifest,
-			StoredFiles: stored,
+			Components:            selected,
+			Manifest:              value.Manifest,
+			StoredFiles:           stored,
+			ExpectedProgramCommit: options.ExpectedProgramCommit,
 			Lock: map[string]any{
 				"schema_version":          exitcode.SchemaVersion,
 				"run_id":                  runID,
@@ -245,6 +253,9 @@ func Fleet(
 		"exit_code":               exitCode,
 		"hosts":                   results,
 	}
+	if options.SelfUpdate != nil {
+		report["self_update"] = options.SelfUpdate
+	}
 	if !options.DryRun {
 		final := *record
 		final.Phase = "finished"
@@ -253,11 +264,32 @@ func Fleet(
 			final.Result = "exit-" + itoa(exitCode)
 		}
 		final.Details = map[string]any{"hosts": results}
+		if options.SelfUpdate != nil {
+			final.Details["self_update"] = options.SelfUpdate
+		}
 		if _, err := recordStore.Write(&final); err != nil {
 			return nil, 0, err
 		}
 	}
 	return report, exitCode, nil
+}
+
+// ProgramFence is the program commit a convergence requires of every remote
+// agent: the source commit of the binary the release pins, or nothing for a
+// release that pins none.
+//
+// A rollback sends none. It restores older release intent with whatever
+// program the hosts run now, and requiring the older binary would make a
+// rollback impossible exactly when it is needed.
+func ProgramFence(value release.Release, command string) string {
+	if command == "rollback" {
+		return ""
+	}
+	pin, err := value.ProgramPin()
+	if err != nil || pin == nil {
+		return ""
+	}
+	return pin.SourceCommit
 }
 
 // dispatchWithLock guarantees the lock is released exactly once, including when
@@ -379,6 +411,11 @@ func RunHost(
 		}
 	}
 	if isLocal {
+		// The program fence is for the SSH path, where the target runs its own
+		// binary. In process, the agent is this binary: whoever started it
+		// chose the program, and self-pull has already compared it with the
+		// gated checkout program by program rather than by commit.
+		payload.ExpectedProgramCommit = ""
 		return runLocal(spec, payload, process)
 	}
 	encoded, err := json.Marshal(payload)
