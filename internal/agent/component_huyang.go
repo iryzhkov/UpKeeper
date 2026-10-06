@@ -683,6 +683,14 @@ func huyangResumeBootstrap(
 		return "", Failf("an interrupted Huyang bootstrap left %s on %s, not the pinned commit; "+
 			"inspect it, then remove %s", checkout, adapterShortCommit(commit), c.Path(huyangBootstrapPending))
 	}
+	// The observation may be stale by now. Nothing is seeded or started, and no
+	// dry run promises either, unless the checkout is still on the pin and
+	// provably has no local changes.
+	dirty := c.GitDirty(checkout)
+	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
+		return "", Failf("an interrupted Huyang bootstrap found %s changed or unreadable; "+
+			"preserving local work. Inspect it, then remove %s", checkout, c.Path(huyangBootstrapPending))
+	}
 	want := fmt.Sprintf(huyangUnitTemplate, relative)
 	if raw, err := os.ReadFile(unit); err == nil && string(raw) != want {
 		if !strings.HasPrefix(want, string(raw)) {
@@ -704,13 +712,6 @@ func huyangResumeBootstrap(
 		if err := huyangSeedUnit(unit, relative); err != nil {
 			return "", err
 		}
-	}
-	// The observation may be stale by now. The service is started only for a
-	// checkout that is still on the pin and provably has no local changes.
-	dirty := c.GitDirty(checkout)
-	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
-		return "", Failf("an interrupted Huyang bootstrap found %s changed or unreadable; "+
-			"preserving local work. Inspect it, then remove %s", checkout, c.Path(huyangBootstrapPending))
 	}
 	if err := huyangStart(c, spec, checkout, service); err != nil {
 		return "", err

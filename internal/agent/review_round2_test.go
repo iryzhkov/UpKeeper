@@ -183,3 +183,82 @@ func TestReviewRound2BootstrapRecoveryRechecksTheCheckout(t *testing.T) {
 		})
 	}
 }
+
+// The prefix npm prints is looked at exactly as the system resolves it: a
+// space belongs to the name, and ".." after a symlink leads into the link's
+// target, not back to where the link lives.
+func TestSelfReviewRound2PrefixIsProbedAsTheSystemResolvesIt(t *testing.T) {
+	cases := map[string]func(t *testing.T, base string) (printed, installed string){
+		"trailing space in the name": func(t *testing.T, base string) (string, string) {
+			return filepath.Join(base, "pre "), filepath.Join(base, "pre ")
+		},
+		"dot-dot through a symlink": func(t *testing.T, base string) (string, string) {
+			real := filepath.Join(base, "real")
+			if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(base, "home"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(real, "sub"), filepath.Join(base, "home", "link")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(base, "home", "link") + "/..", real
+		},
+	}
+	for name, layout := range cases {
+		t.Run(name, func(t *testing.T) {
+			c, r := stewardPairPrepare(t, stewardPairHost{})
+			printed, installed := layout(t, t.TempDir())
+			adapterTestWrite(t, filepath.Join(installed, "lib/node_modules/t3/package.json"), `{"name":"t3","version":"0.0.38"}`)
+			stewardPairNPMPrefix(r, printed)
+			state, actions, err := stewardPairApply(t, c)
+			if err == nil {
+				t.Fatalf("T3 on disk accepted as absent: state=%s actions=%v", state, actions)
+			}
+		})
+	}
+}
+
+// A refused recovery leaves the host as it found it: no unit is seeded for a
+// checkout that changed since the observation.
+func TestSelfReviewRound2RefusedRecoverySeedsNoUnit(t *testing.T) {
+	c, r := huyangCrashWorld(t, "")
+	inner := r.handle
+	r.handle = func(command procx.Command) procx.Result {
+		if adapterTestMatches(command.Argv, "status", "--porcelain") {
+			return procx.Result{Stdout: " M main.go"}
+		}
+		return inner(command)
+	}
+	before := map[string]any{"commit": huyangPinned, "dirty": false, "service_active": false, "socket": false}
+	_, err := huyangApplyCheckout(c, c.Spec("huyang"), before, &[]string{})
+	if err == nil {
+		t.Fatal("changed interrupted checkout accepted")
+	}
+	if unit := c.Path(".config/systemd/user/huyang.service"); pathExists(unit) {
+		t.Fatalf("refused recovery (%v) still seeded %s", err, unit)
+	}
+}
+
+// A dry run of a recovery the real run would refuse does not report success.
+func TestSelfReviewRound2RecoveryDryRunMatchesTheRealRun(t *testing.T) {
+	run := func(dry bool) (string, error) {
+		c, r := huyangCrashWorld(t, "")
+		c.DryRun = dry
+		inner := r.handle
+		r.handle = func(command procx.Command) procx.Result {
+			if adapterTestMatches(command.Argv, "status", "--porcelain") {
+				return procx.Result{Code: 128, Stderr: "fatal: unsafe repository"}
+			}
+			return inner(command)
+		}
+		before := map[string]any{"commit": huyangPinned, "dirty": nil, "service_active": false, "socket": false}
+		return huyangApplyCheckout(c, c.Spec("huyang"), before, &[]string{})
+	}
+	dryState, dryErr := run(true)
+	realState, realErr := run(false)
+	if dryErr == nil || realErr == nil {
+		t.Fatalf("dry run state=%q err=%v; real run state=%q err=%v", dryState, dryErr, realState, realErr)
+	}
+}

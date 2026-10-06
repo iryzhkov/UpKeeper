@@ -458,8 +458,10 @@ func t3GlobalPathMissing(c *Context, below ...string) bool {
 	if result.Err != nil || result.TimedOut || result.Code != 0 {
 		return false
 	}
-	prefix := strings.TrimSpace(result.Stdout)
-	if !filepath.IsAbs(prefix) || strings.ContainsAny(prefix, "\n\r") {
+	// Only npm's line ending is removed: a space may be part of the name, and
+	// cleaning ".." away lexically would look past a symlink into another tree.
+	prefix := strings.TrimSuffix(strings.TrimSuffix(result.Stdout, "\n"), "\r")
+	if !filepath.IsAbs(prefix) || strings.ContainsAny(prefix, "\n\r") || filepath.Clean(prefix) != prefix {
 		return false
 	}
 	_, err := os.Lstat(filepath.Join(append([]string{prefix}, below...)...))
