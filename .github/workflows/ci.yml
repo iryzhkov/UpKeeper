@@ -2,13 +2,24 @@
 name: phase-1-gate
 
 on:
+  # Pushes to main only: a pull request's commits are already tested by its
+  # pull_request run, so a push trigger on every branch tested each one twice.
   push:
+    branches: [main]
   pull_request:
 
+# A newer commit on the same branch or pull request supersedes the older run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Jobs run on the self-hosted runners on agent-a (labels self-hosted, upkeeper;
+# three instances under /srv/agent/actions-runner-upkeeper-N), added 2026-10-06
+# because this private repository's CI was using up the hosted Actions minutes.
 jobs:
   # Validate the published manifest before dependent production Go checks.
   manifest-gate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -30,7 +41,7 @@ jobs:
   go-race:
     needs: manifest-gate
     name: go-race (${{ matrix.group }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, upkeeper]
     strategy:
       fail-fast: false
       matrix:
@@ -51,7 +62,7 @@ jobs:
 
   go-checks:
     needs: manifest-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -70,7 +81,7 @@ jobs:
   go-gate:
     needs: [manifest-gate, go-checks, go-race]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -82,13 +93,12 @@ jobs:
         run: make ci-go-gate
 
   gate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Set up Python 3.11
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: "3.11"
+      # No setup-python: it has no Python builds for the runner's Debian 13. The
+      # host python3 only bootstraps uv, and `uv sync --python 3.11` (make
+      # ci-python) provides the pinned interpreter itself.
       - name: Python and Ansible checks
         run: make ci-python

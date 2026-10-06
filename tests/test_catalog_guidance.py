@@ -463,7 +463,15 @@ def test_physical_guard_and_held_identity(helper, tmp_path, kind):
                 replacement.chmod(0o600)
                 replacement.replace(path)
             elif kind == "modify":
+                before = path.stat()
                 path.write_bytes(b"xyz")
+                # The guard compares metadata, not content. A same-size rewrite
+                # inside one kernel timestamp tick keeps mtime and ctime, which
+                # happens on a fast local disk (the agent-a CI runners). Advance
+                # mtime explicitly so the case tests detection of a modified
+                # file rather than the clock. The same-tick gap itself is
+                # recorded as a guard limitation to fix separately.
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
             held.check()
 
 
