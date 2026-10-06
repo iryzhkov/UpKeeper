@@ -68,6 +68,10 @@ func t3RetainedUpstreamApply(c *Context, spec map[string]any, actions *[]string)
 		return "", e
 	}
 	after, e := t3Observe(c, spec)
+	current, bindingErr := t3UnitBinding(c, service, prefix)
+	if bindingErr != nil || current != binding {
+		return "", errors.New("retained upstream files unchanged; service mapping changed after restart")
+	}
 	version := adapterSpecString(spec, "version")
 	if e != nil || after["artifact_installed"] != true || after["artifact_served"] != true ||
 		after["check_ok"] != true || after["service_active"] != true || after["installed"] != version || after["served"] != version {

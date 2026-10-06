@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,11 @@ func t3ArtifactObservation(c *Context, spec, observed map[string]any) {
 // descendant tree. Deleted/replaced inodes and a different prefix stay unknown.
 func t3ServedArtifact(c *Context, spec map[string]any, r *release.T3Retained) bool {
 	service := adapterSpecString(spec, "service")
+	binding, err := t3UnitBinding(c, service, r.Prefix)
+	var invocation struct{ EffectiveArgs []string }
+	if err != nil || json.Unmarshal([]byte(binding), &invocation) != nil || !t3SupportedServiceArgs(invocation.EffectiveArgs) {
+		return false
+	}
 	get := func() string {
 		result := c.Run([]string{"systemctl", "--user", "show", service, "-p", "MainPID", "--value"}, 10*time.Second, "")
 		pid := strings.TrimSpace(result.Output)
@@ -147,6 +153,10 @@ func t3ServedArtifact(c *Context, spec map[string]any, r *release.T3Retained) bo
 		if len(args) < 2 || !t3SupportedServiceArgs(args[1:]) {
 			continue
 		}
+		// Owned launchers and evidenced mise wrappers forward the server argv unchanged.
+		if !slices.Equal(args[1:], invocation.EffectiveArgs) {
+			return false
+		}
 		if found != "" {
 			return false
 		}
@@ -172,7 +182,8 @@ func t3ServedArtifact(c *Context, spec map[string]any, r *release.T3Retained) bo
 	link, e := os.Readlink(filepath.Join(t3ProcRoot, found, "exe"))
 	a, e2 := os.Stat(filepath.Join(t3ProcRoot, found, "exe"))
 	b, e3 := os.Stat(native)
-	return e == nil && e2 == nil && e3 == nil && link == native && os.SameFile(a, b) &&
+	currentBinding, bindingErr := t3UnitBinding(c, service, r.Prefix)
+	return bindingErr == nil && currentBinding == binding && e == nil && e2 == nil && e3 == nil && link == native && os.SameFile(a, b) &&
 		epoch == start(pid) && nativeEpoch == start(found) && get() == pid
 }
 
@@ -599,6 +610,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			return "deferred", nil
 		}
 		seedPrefix := adapterSpecString(fresh, "npm_prefix")
+		seedBinding := ""
 		seeded, e := seedT3Service(c, actions, func() error {
 			obs, err := t3Observe(c, spec)
 			if err != nil || obs["artifact_installed"] != true || adapterSpecString(obs, "npm_prefix") != seedPrefix {
@@ -607,7 +619,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			if !t3Idle(obs) || !t3BoundaryIdle(c) {
 				return errors.New("T3 seed start idle proof changed")
 			}
-			_, err = t3UnitBinding(c, service, seedPrefix)
+			seedBinding, err = t3UnitBinding(c, service, seedPrefix)
 			return err
 		})
 		if e != nil {
@@ -615,6 +627,10 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 		if seeded {
 			after, e := t3Observe(c, spec)
+			current, bindingErr := t3UnitBinding(c, service, seedPrefix)
+			if bindingErr != nil || current != seedBinding {
+				return "", Failf("seeded T3 service mapping changed")
+			}
 			if e != nil || after["artifact_installed"] != true || after["artifact_served"] != true || after["service_active"] != true || after["check_ok"] != true {
 				return "", Failf("seeded T3 identity did not verify")
 			}
@@ -805,6 +821,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 				return "", Failf("files restored; previous service health not verified; backup %s", tx.dir)
 			}
 		}
+		if e = checkBinding(); e != nil {
+			return "", fmt.Errorf("files restored; previous service mapping changed; backup %s: %w", tx.dir, e)
+		}
 		if e = journal("restored"); e != nil {
 			return "", fmt.Errorf("files and previous service restored; journal persistence failed; backup %s: %w", tx.dir, e)
 		}
@@ -871,6 +890,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	}
 	after, err := t3Observe(c, spec)
 	if err != nil {
+		return fail(err, true)
+	}
+	if err = checkBinding(); err != nil {
 		return fail(err, true)
 	}
 	active, _ := after["service_active"].(bool)

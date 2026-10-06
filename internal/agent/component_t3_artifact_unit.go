@@ -260,7 +260,8 @@ func t3UnitBinding(c *Context, service, prefix string) (string, error) {
 	binding, e := json.Marshal(struct {
 		Command        t3UnitCommand
 		Mise, Selected string
-	}{command, mise, selected})
+		EffectiveArgs  []string
+	}{command, mise, selected, args})
 	return string(binding), e
 }
 
