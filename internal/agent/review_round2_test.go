@@ -241,6 +241,101 @@ func TestSelfReviewRound2RefusedRecoverySeedsNoUnit(t *testing.T) {
 	}
 }
 
+// A refused recovery tells the operator to keep the pending marker, because
+// only the bootstrap enables Huyang at boot: following the advice and cleaning
+// the checkout lets the next run finish it, enable included.
+func TestSelfReviewRound2RefusedRecoveryKeepsTheWayToEnable(t *testing.T) {
+	for name, dirtyObserved := range map[string]bool{"dirty when observed": true, "dirty after observing": false} {
+		t.Run(name, func(t *testing.T) {
+			c, r := huyangCrashWorld(t, fmt.Sprintf(huyangUnitTemplate, ".local/share/huyang"))
+			spec := c.Spec("huyang")
+			dirty := dirtyObserved
+			inner := r.handle
+			r.handle = func(command procx.Command) procx.Result {
+				if adapterTestMatches(command.Argv, "status", "--porcelain") && dirty {
+					return procx.Result{Stdout: "?? scratch"}
+				}
+				return inner(command)
+			}
+			before, err := huyangObserve(c, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dirty = true
+			_, err = huyangApply(c, spec, before, &[]string{})
+			marker := c.Path(huyangBootstrapPending)
+			if err == nil || !strings.Contains(err.Error(), "Keep "+marker) || strings.Contains(err.Error(), "then remove") {
+				t.Fatalf("refusal does not keep the marker: %v", err)
+			}
+			if r.ran("enable", "--now") {
+				t.Fatal("refused recovery started the service")
+			}
+			dirty = false
+			before, err = huyangObserve(c, spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := huyangApply(c, spec, before, &[]string{})
+			if err != nil || state != "updated" || !r.ran("enable", "--now", "huyang.service") || pathExists(marker) {
+				t.Fatalf("clean rerun = %q, %v; calls %v", state, err, r.calls)
+			}
+		})
+	}
+}
+
+// A unit the operator masked or emptied reads as nothing, which is no proof of
+// a seeded unit cut short; recovery neither replaces nor starts it.
+func TestSelfReviewRound2RecoveryLeavesAMaskedOrEmptyUnitAlone(t *testing.T) {
+	for name, place := range map[string]func(t *testing.T, unit string){
+		"masked": func(t *testing.T, unit string) {
+			if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("/dev/null", unit); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"empty": func(t *testing.T, unit string) { adapterTestWrite(t, unit, "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, r := huyangCrashWorld(t, "")
+			unit := c.Path(".config/systemd/user/huyang.service")
+			place(t, unit)
+			before := map[string]any{"commit": huyangPinned, "dirty": false, "service_active": false, "socket": false}
+			state, err := huyangApplyCheckout(c, c.Spec("huyang"), before, &[]string{})
+			info, statErr := os.Lstat(unit)
+			if err == nil || r.ran("enable", "--now") || statErr != nil || info.Size() != 0 && info.Mode().IsRegular() {
+				t.Fatalf("operator's unit replaced or started: state=%s err=%v calls=%v", state, err, r.calls)
+			}
+			if name == "masked" {
+				if link, _ := os.Readlink(unit); link != "/dev/null" {
+					t.Fatalf("mask removed: link=%q", link)
+				}
+			}
+		})
+	}
+}
+
+// The command npm links for T3 is a trace of T3, even when the package it
+// points at lives outside the current prefix.
+func TestSelfReviewRound2AT3CommandLinkIsATrace(t *testing.T) {
+	c, r := stewardPairPrepare(t, stewardPairHost{})
+	prefix := filepath.Join(t.TempDir(), "prefix")
+	elsewhere := filepath.Join(t.TempDir(), "other/lib/node_modules/t3/bin/t3.js")
+	adapterTestWrite(t, elsewhere, "#!/usr/bin/env node\n")
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(prefix, "bin/t3")); err != nil {
+		t.Fatal(err)
+	}
+	stewardPairNPMPrefix(r, prefix)
+	state, actions, err := stewardPairApply(t, c)
+	if err == nil {
+		t.Fatalf("host with a t3 command accepted as having no T3: state=%s actions=%v", state, actions)
+	}
+}
+
 // A dry run of a recovery the real run would refuse does not report success.
 func TestSelfReviewRound2RecoveryDryRunMatchesTheRealRun(t *testing.T) {
 	run := func(dry bool) (string, error) {

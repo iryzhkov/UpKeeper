@@ -440,20 +440,22 @@ func t3PackageAbsent(c *Context) bool {
 			return false
 		}
 	}
-	return t3GlobalPathMissing(c, "lib", "node_modules", "t3")
+	// The command npm links for the package is a trace of T3 too, even when
+	// the package it points at lives in another tree.
+	return t3GlobalPathsMissing(c, "lib/node_modules/t3", "bin/t3")
 }
 
 // t3GlobalLibMissing reports whether npm's global prefix is an absolute path
 // whose lib directory certainly does not exist.
 func t3GlobalLibMissing(c *Context) bool {
-	return t3GlobalPathMissing(c, "lib")
+	return t3GlobalPathsMissing(c, "lib")
 }
 
-// t3GlobalPathMissing reports whether npm's global prefix is an absolute path
-// and the path below it certainly does not exist. Only "no such file" counts:
-// a directory on the way that cannot be searched answers "permission denied",
-// which says nothing about what it holds.
-func t3GlobalPathMissing(c *Context, below ...string) bool {
+// t3GlobalPathsMissing reports whether npm's global prefix is an absolute path
+// and every path below it certainly does not exist. Only "no such file"
+// counts: a directory on the way that cannot be searched answers "permission
+// denied", which says nothing about what it holds.
+func t3GlobalPathsMissing(c *Context, below ...string) bool {
 	result := c.Runner(procx.Command{Argv: []string{"npm", "prefix", "-g"}, Env: c.Env, Timeout: 30 * time.Second})
 	if result.Err != nil || result.TimedOut || result.Code != 0 {
 		return false
@@ -464,8 +466,12 @@ func t3GlobalPathMissing(c *Context, below ...string) bool {
 	if !filepath.IsAbs(prefix) || strings.ContainsAny(prefix, "\n\r") || filepath.Clean(prefix) != prefix {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(append([]string{prefix}, below...)...))
-	return errors.Is(err, fs.ErrNotExist)
+	for _, path := range below {
+		if _, err := os.Lstat(filepath.Join(prefix, path)); !errors.Is(err, fs.ErrNotExist) {
+			return false
+		}
+	}
+	return true
 }
 
 // stewardUnitPresent reports whether the host has a steward service unit at
