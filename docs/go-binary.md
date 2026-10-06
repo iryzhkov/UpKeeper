@@ -244,9 +244,13 @@ runs while the host has a scheduled hold marker.
 5. The process execs the new generation as
    `self-pull --after-update <commit> --update-transaction <id>`, where the
    transaction names the switch just made; every switch replaces
-   `~/.local/lib/upkeeper/switch.json` with a fresh one before moving a link. That run refuses a checkout that moved,
-   checks its own program against the checkout, and converges. The report and
-   the run record carry a `self_update` entry.
+   `~/.local/lib/upkeeper/switch.json` with a fresh one before moving a link.
+   That run locks the checkout (an `flock` on its root directory, which every
+   refresh also takes, so HEAD cannot move under it), refuses a checkout that
+   moved, checks its own program against the checkout, and converges exactly
+   the commit it checked: convergence is given that commit and refuses before
+   loading anything if HEAD is not it. The lock is held until convergence
+   ends. The report and the run record carry a `self_update` entry.
 
 Any refusal before the switch leaves `current` unchanged and the host on the
 binary it was running, with the same exit 30 the refusal had before. If the

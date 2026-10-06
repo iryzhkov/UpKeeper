@@ -123,10 +123,14 @@ func (f *fakeUpdate) seam() *selfUpdate {
 			f.execArgv = argv
 			return f.execErr
 		},
-		converge: func(root string, details map[string]any) (map[string]any, int, error) {
-			f.steps = append(f.steps, "converge")
+		converge: func(root, commit string, details map[string]any) (map[string]any, int, error) {
+			f.steps = append(f.steps, "converge "+commit)
 			f.details = details
 			return map[string]any{"run_id": "r"}, 0, nil
+		},
+		lockCheckout: func(string) (func(), error) {
+			f.steps = append(f.steps, "lock")
+			return func() { f.steps = append(f.steps, "unlock") }, nil
 		},
 		scheduledHold: func(string) (string, bool) { return f.held, f.held != "" },
 	}
@@ -263,7 +267,7 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 		!strings.Contains(err.Error(), "moved") {
 		t.Errorf("a moved checkout produced %v", err)
 	}
-	if slices.Contains(moved.steps, "rollback") || slices.Contains(moved.steps, "converge") {
+	if !slices.Equal(moved.steps, []string{"lock", "unlock"}) {
 		t.Errorf("a moved checkout did %v", moved.steps)
 	}
 
@@ -272,7 +276,7 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 		!strings.Contains(err.Error(), "rolled back to generation previous-generation") {
 		t.Errorf("a wrong program produced %v", err)
 	}
-	if !slices.Equal(wrong.steps, []string{"verify " + binary, "rollback"}) {
+	if !slices.Equal(wrong.steps, []string{"lock", "verify " + binary, "rollback", "unlock"}) {
 		t.Errorf("a wrong program did %v", wrong.steps)
 	}
 
@@ -280,7 +284,10 @@ func TestAfterUpdateChecksTheCheckoutAndTheProgram(t *testing.T) {
 	if _, code, err := right.seam().afterUpdate("/checkout", commit, ""); err != nil || code != 0 {
 		t.Fatalf("the updated binary did not converge: %d %v", code, err)
 	}
-	if !slices.Equal(right.steps, []string{"verify " + binary, "converge"}) {
+	// The checkout stays locked from the check of HEAD through the program
+	// check to the end of convergence, which is given exactly the commit
+	// that was checked rather than reading HEAD again.
+	if !slices.Equal(right.steps, []string{"lock", "verify " + binary, "converge " + commit, "unlock"}) {
 		t.Errorf("steps %v", right.steps)
 	}
 	if right.details["after_update"] != commit || right.details["binary_commit"] != binary ||
@@ -434,7 +441,7 @@ func TestAnOperatorRollbackBeforeThePostUpdateCheckIsKept(t *testing.T) {
 	if current := installer.Layout.CurrentGeneration(); current != restored.Generation {
 		t.Fatalf("current is %s; the operator chose %s", current, restored.Generation)
 	}
-	if slices.Contains(fake.steps, "converge") {
+	if slices.Contains(fake.steps, "converge "+commit) {
 		t.Errorf("a refused binary converged: %v", fake.steps)
 	}
 }

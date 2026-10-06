@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/buildinfo"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
@@ -35,7 +36,9 @@ type selfUpdate struct {
 	generation func() string
 	exec       selfupdate.ExecFunc
 	// converge is selfconv.ConvergeSelfAfterUpdate.
-	converge func(root string, details map[string]any) (map[string]any, int, error)
+	converge func(root, commit string, details map[string]any) (map[string]any, int, error)
+	// lockCheckout is selfconv.LockCheckout.
+	lockCheckout func(root string) (func(), error)
 	// scheduledHold names this host's scheduled hold marker when it exists.
 	scheduledHold func(host string) (string, bool)
 }
@@ -67,8 +70,12 @@ var newSelfUpdate = func() (*selfUpdate, error) {
 		rollback:     installer.UndoSwitch,
 		generation:   func() string { return selfupdate.ActiveGeneration(home) },
 		exec:         selfupdate.Exec,
-		converge: func(root string, details map[string]any) (map[string]any, int, error) {
-			return selfconv.ConvergeSelfAfterUpdate(root, procx.Run, details)
+		converge: func(root, commit string, details map[string]any) (map[string]any, int, error) {
+			return selfconv.ConvergeSelfAfterUpdate(root, commit, procx.Run, details)
+		},
+		lockCheckout: func(root string) (func(), error) {
+			// A refresh holds the lock for at most its fetch and gate check.
+			return selfconv.LockCheckout(root, 3*time.Minute)
 		},
 		scheduledHold: func(host string) (string, bool) {
 			directory, err := selfconv.HoldDirectory()
@@ -132,6 +139,13 @@ func (s *selfUpdate) updateProgram(root, refreshed string, pin *release.ProgramP
 // component is touched, provided the switch the transaction names is still
 // the installation's last change.
 func (s *selfUpdate) afterUpdate(root, commit, transaction string) (map[string]any, int, error) {
+	// No refresh may move HEAD between the check below and the end of
+	// convergence, which is given the checked commit rather than reading HEAD.
+	unlock, err := s.lockCheckout(root)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer unlock()
 	revision, err := s.checkout(root)
 	if err != nil {
 		return nil, 0, err
@@ -152,7 +166,7 @@ func (s *selfUpdate) afterUpdate(root, commit, transaction string) (map[string]a
 			"the installed binary is not the gated program: %s; rolled back to generation %s",
 			err.Error(), restored.Generation)
 	}
-	return s.converge(root, map[string]any{
+	return s.converge(root, revision, map[string]any{
 		"after_update":  commit,
 		"binary_commit": s.binaryCommit(),
 		"version":       buildinfo.Version,

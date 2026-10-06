@@ -28,23 +28,35 @@ func HoldDirectory() (string, error) {
 func ConvergeSelf(
 	root string, dryRun bool, runner procx.Runner,
 ) (map[string]any, int, error) {
-	return convergeSelf(root, dryRun, runner, nil)
+	return convergeSelf(root, "", dryRun, runner, nil)
 }
 
 // ConvergeSelfAfterUpdate is ConvergeSelf run by a freshly installed binary,
 // which records what the self-update did in the report and the run record.
+//
+// It converges exactly commit, the checkout commit whose program the binary
+// was checked against, and refuses before loading anything if HEAD is not
+// that commit. The caller holds LockCheckout across the check and this call.
 func ConvergeSelfAfterUpdate(
-	root string, runner procx.Runner, selfUpdate map[string]any,
+	root, commit string, runner procx.Runner, selfUpdate map[string]any,
 ) (map[string]any, int, error) {
-	return convergeSelf(root, false, runner, selfUpdate)
+	return convergeSelf(root, commit, false, runner, selfUpdate)
 }
 
+// convergeSelf converges the checkout's HEAD; when expected is not "", HEAD
+// must be exactly that commit.
 func convergeSelf(
-	root string, dryRun bool, runner procx.Runner, selfUpdate map[string]any,
+	root, expected string, dryRun bool, runner procx.Runner, selfUpdate map[string]any,
 ) (map[string]any, int, error) {
 	revision, err := CheckoutRevision(root, runner)
 	if err != nil {
 		return nil, 0, err
+	}
+	if expected != "" && revision != expected {
+		return nil, 0, failure.Value(
+			"the checkout moved from %s to %s after this binary's program was checked "+
+				"against it; nothing was converged, and the next self-pull converges %s",
+			expected, revision, revision)
 	}
 	config, err := inventory.Load(root)
 	if err != nil {

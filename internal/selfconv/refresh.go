@@ -30,6 +30,13 @@ func Refresh(root string, runner procx.Runner) (string, error) {
 	if runner == nil {
 		runner = procx.Run
 	}
+	// A binary converging after a self-update holds this lock, so that the
+	// commit it checked stays HEAD until it has converged it.
+	unlock, err := LockCheckout(root, 0)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	before, err := CheckoutRevision(root, runner)
 	if err != nil {
 		return "", err
