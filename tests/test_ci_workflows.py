@@ -1,7 +1,9 @@
 """Local/hosted gate parity and exact-commit release authorization."""
 
 import importlib.util
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -119,7 +121,8 @@ def test_release_gate_does_not_use_an_older_success():
     ], "abc")
 
 
-def test_release_authorizes_before_build_and_attests_both_binaries_before_publish():
+@pytest.mark.parametrize("private", [False, True], ids=["public", "private"])
+def test_release_authorizes_before_build_and_publish_with_optional_attestation(private):
     release = workflow("release.yml")
     assert release["name"] == "release"
     assert set(release["jobs"]) == {"release"}
@@ -134,13 +137,53 @@ def test_release_authorizes_before_build_and_attests_both_binaries_before_publis
     )
     publish_index = next(i for i, step in enumerate(steps)
                          if step["name"] == "Publish the release")
-    assert gate_index < build_index < attest_index < publish_index
+    checksum_index = next(i for i, step in enumerate(steps)
+                          if step["name"] == "Record the toolchain and the checksums")
+    notes_index = next(i for i, step in enumerate(steps)
+                      if step["name"] == "Write the release notes")
+    assert gate_index < build_index < attest_index < checksum_index < notes_index < publish_index
+    assert steps[attest_index]["if"] == "${{ !github.event.repository.private }}"
+    # Only attestation is conditional. Every other step uses success() by
+    # default, so skipping attestation cannot bypass a failed CI gate.
+    assert "if" not in release["jobs"]["release"]
+    for i, step in enumerate(steps):
+        assert step.get("continue-on-error", False) is False
+        if i != attest_index:
+            assert "if" not in step
+    active_indices = [i for i in range(len(steps)) if not (private and i == attest_index)]
+    assert gate_index in active_indices
+    assert active_indices.index(gate_index) < active_indices.index(build_index)
+    assert active_indices.index(build_index) < active_indices.index(checksum_index)
+    assert active_indices.index(checksum_index) < active_indices.index(publish_index)
+    assert (attest_index in active_indices) is (not private)
+    assert "gh release create" in steps[publish_index]["run"]
+    assert "--notes-file bin/NOTES.md" in steps[publish_index]["run"]
     assert steps[attest_index]["with"]["subject-path"].splitlines() == [
         "bin/upkeeper-linux-amd64", "bin/upkeeper-linux-arm64",
     ]
     assert release["permissions"]["actions"] == "read"
     assert release["permissions"]["id-token"] == "write"
     assert release["permissions"]["attestations"] == "write"
+
+
+@pytest.mark.parametrize("private", [False, True], ids=["public", "private"])
+def test_release_notes_disclose_skipped_private_attestation(tmp_path, private):
+    steps = workflow("release.yml")["jobs"]["release"]["steps"]
+    notes = next(step for step in steps if step["name"] == "Write the release notes")
+    assert notes["env"]["REPOSITORY_PRIVATE"] == "${{ github.event.repository.private }}"
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin/TOOLCHAIN").write_text("go version test\n")
+    (tmp_path / "bin/SHA256SUMS").write_text("test-checksums\n")
+    subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", notes["run"]],
+        cwd=tmp_path, check=True,
+        env={**os.environ, "REPOSITORY_PRIVATE": str(private).lower(),
+             "GITHUB_REF_NAME": "v0.1.31", "GITHUB_SHA": "abc"},
+    )
+    body = (tmp_path / "bin/NOTES.md").read_text()
+    disclosure = "Provenance attestation was skipped because the repository is private."
+    assert (disclosure in body) is private
+    assert "test-checksums" in body
 
 
 @pytest.mark.parametrize("failed", [

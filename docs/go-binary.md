@@ -333,3 +333,18 @@ commit produce different bytes and a published checksum can only be reproduced
 by someone who happened to build in the same directory. With it, any clean
 checkout of the commit reproduces the published checksum exactly, which is what
 makes the checksum evidence rather than decoration.
+
+The release workflow requires a successful push run of `ci.yml` for the exact
+tagged commit before building either architecture. It then builds, attests
+(public repositories only), records toolchain and checksums, writes release
+notes, and publishes. A failed, missing or timed-out CI gate blocks publication
+whether attestation runs or is skipped.
+
+Build-provenance attestation is audit-only. The trust root is the manifest-pinned
+artifact digest plus a reproducible rebuild from the pinned source and toolchain;
+an adjacent checksum or attestation does not replace that trust root. GitHub does
+not support these attestations for user-owned private repositories, so the
+SHA-pinned attestation action runs only when the repository is public. Private
+releases explicitly state in their notes that provenance attestation was skipped
+because the repository is private. All other release gates and ordering remain
+the same; an attestation failure on a public repository still blocks publication.

@@ -41,6 +41,7 @@ jobs:
       - name: Build both fleet architectures
         run: make go-cross
       - name: Attest both release binaries
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: |
@@ -53,6 +54,8 @@ jobs:
           cd bin
           sha256sum upkeeper-linux-amd64 upkeeper-linux-arm64 | tee SHA256SUMS
       - name: Write the release notes
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
           {
             echo "UpKeeper ${GITHUB_REF_NAME}, built from ${GITHUB_SHA}"
@@ -66,6 +69,9 @@ jobs:
             cat bin/SHA256SUMS
             echo '```'
           } > bin/NOTES.md
+          if [ "$REPOSITORY_PRIVATE" = "true" ]; then
+            echo "Provenance attestation was skipped because the repository is private." >> bin/NOTES.md
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
