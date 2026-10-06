@@ -1,6 +1,7 @@
 package selfconv
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
+	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
 // Origins are the only remotes a self-refresh will pull release intent from.
@@ -107,8 +109,15 @@ func Refresh(root string, runner procx.Runner) (string, error) {
 }
 
 // ProgramPaths are the paths a change to which changes the program itself,
-// as opposed to the release intent the program applies.
-var ProgramPaths = []string{"go.mod", "cmd", "internal"}
+// as opposed to the release intent the program applies. The release package
+// owns the list, because the published-manifest gate checks the program pin
+// against the same paths.
+var ProgramPaths = release.ProgramPaths
+
+// ErrProgramDiffers marks the one VerifyProgram refusal a self-update can
+// resolve: an identified, clean binary whose program is not the gated one.
+// An unidentified binary, or one the checkout cannot compare, is not it.
+var ErrProgramDiffers = errors.New("program differs")
 
 // VerifyProgram refuses to converge when the running binary is not built from
 // the program the refreshed checkout now holds.
@@ -146,11 +155,13 @@ func VerifyProgram(root, binaryCommit, checkoutCommit string, runner procx.Runne
 	}
 	diff := run(append([]string{"diff", "--quiet", binaryCommit, checkoutCommit, "--"},
 		ProgramPaths...)...)
-	if diff.Err != nil {
+	// Only git's "differences found" may count as a changed program: that is
+	// what a self-update acts on, and a failed comparison proves nothing.
+	if diff.Err != nil || (diff.Code != 0 && diff.Code != 1) {
 		return failure.Value("cannot compare this binary's source with the checkout")
 	}
 	if diff.Code != 0 {
-		return failure.Value(
+		return failure.Wrap(ErrProgramDiffers, failure.KindValue,
 			"this binary was built from %s and the gated checkout is now %s, whose "+
 				"program differs; install the released artifact for %s before converging",
 			binaryCommit, checkoutCommit, checkoutCommit)
