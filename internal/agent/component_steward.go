@@ -338,15 +338,71 @@ func stewardStage(
 	if t3Spec == nil {
 		t3Spec = map[string]any{"service": "t3code.service"}
 	}
+	// The running T3 is observed through a steward. A host that has none yet
+	// is observed through the verified candidate instead, which proves the same
+	// thing about the same server.
+	if _, err := os.Stat(c.Path(adapterSpecString(spec, "path"))); err != nil {
+		c.stewardCheckBinary = candidate
+		defer func() { c.stewardCheckBinary = "" }()
+	}
 	current, err := t3Observe(c, t3Spec)
 	if err != nil {
 		return "", "", err
+	}
+	// No T3 at all is a safe transition: there is no running server for the
+	// steward to be incompatible with, the candidate has just proved that the
+	// release's own T3 is inside its range, and the t3 component installs that
+	// T3 after this one. Without this a fresh host could never converge.
+	if t3NotInstalled(c, t3Spec, current) {
+		return candidate, hookCandidate, nil
 	}
 	if err := stewardRunningT3InRange(
 		current, low, high, adapterSpecString(t3Spec, "version")); err != nil {
 		return "", "", err
 	}
 	return candidate, hookCandidate, nil
+}
+
+// t3NotInstalled reports whether an observation proves that the host has no
+// T3 whatsoever: no package, no controlled installation, nothing serving, no
+// active service, and no unit systemd knows or the user directory holds. Any
+// trace of T3, or an answer that cannot be had, is not "not installed".
+func t3NotInstalled(c *Context, t3Spec, observed map[string]any) bool {
+	if observed["installed"] != nil || observed["served"] != nil {
+		return false
+	}
+	if active, _ := observed["service_active"].(bool); active {
+		return false
+	}
+	if checkOK, _ := observed["check_ok"].(bool); checkOK {
+		return false
+	}
+	if managed, _ := observed["artifact_managed"].(bool); managed {
+		return false
+	}
+	if observed["installed_path"] != nil || observed["running_file_count"] != nil {
+		return false
+	}
+	service := adapterSpecString(t3Spec, "service")
+	if service == "" {
+		service = "t3code.service"
+	}
+	if pathExists(c.Path(userUnitDir, service)) {
+		return false
+	}
+	status, err := unitStatus(c, service)
+	return err == nil && status["LoadState"] == "not-found"
+}
+
+// stewardUnitPresent reports whether the host has a steward service unit at
+// all. systemctl cat fails only when no unit file exists anywhere systemd
+// looks, so an answer that cannot be had counts as present.
+func stewardUnitPresent(c *Context, service string) bool {
+	if pathExists(c.Path(userUnitDir, service)) {
+		return true
+	}
+	result := c.Run([]string{"systemctl", "--user", "cat", service}, 10*time.Second, "")
+	return result.OK || result.TimedOut
 }
 
 // stewardRunningT3InRange refuses a pair transition the running T3 cannot take.
@@ -456,6 +512,12 @@ func stewardApplyPinnedBinary(
 		if active && stewardSessionHookConverged(c, spec) {
 			return "converged", nil
 		}
+		// A host without a steward unit has nothing to restart: the binary is
+		// what this component installs, and it is in place and verified.
+		if !active && stewardSessionHookConverged(c, spec) && !stewardUnitPresent(c, service) {
+			*actions = append(*actions, stewardNoUnitAction(service))
+			return "converged", nil
+		}
 	}
 	if c.DryRun {
 		*actions = append(*actions, "would install and verify pinned steward "+version)
@@ -511,7 +573,8 @@ func stewardApplyPinnedBinary(
 	}
 
 	hookInstalled := false
-	failure := stewardInstall(c, service, binary, candidate, hookCandidate, hookPath, &hookInstalled)
+	unitPresent := stewardUnitPresent(c, service)
+	failure := stewardInstall(c, service, binary, candidate, hookCandidate, hookPath, unitPresent, &hookInstalled)
 	if failure != nil {
 		return "", stewardRestorePrevious(c, before, stewardRestoration{
 			binary:        binary,
@@ -527,6 +590,9 @@ func stewardApplyPinnedBinary(
 	}
 
 	*actions = append(*actions, "installed verified pinned steward "+version)
+	if !unitPresent {
+		*actions = append(*actions, stewardNoUnitAction(service))
+	}
 	if adapterSpecString(spec, "session_hook_sha256") != "" {
 		*actions = append(*actions,
 			"installed verified OpenCode caller hook; loaded by new OpenCode servers")
@@ -537,9 +603,18 @@ func stewardApplyPinnedBinary(
 	return "updated", nil
 }
 
-// stewardInstall replaces the binary and the hook and proves the result.
+// stewardNoUnitAction tells the operator that the steward service is theirs
+// to install on this host.
+func stewardNoUnitAction(service string) string {
+	return service + " is not installed on this host; the verified binary is in place. " +
+		"Install the service with t3-steward install-service once T3 serves"
+}
+
+// stewardInstall replaces the binary and the hook and proves the result. A
+// host without a steward unit gets the binary proved without a restart.
 func stewardInstall(
-	c *Context, service, binary, candidate, hookCandidate, hookPath string, hookInstalled *bool,
+	c *Context, service, binary, candidate, hookCandidate, hookPath string,
+	unitPresent bool, hookInstalled *bool,
 ) error {
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		return err
@@ -581,6 +656,10 @@ func stewardInstall(
 			return err
 		}
 		*hookInstalled = true
+	}
+	if !unitPresent {
+		_, _, err := stewardVerifyPairBinary(c, binary)
+		return err
 	}
 	if _, err := c.Must([]string{"systemctl", "--user", "restart", service},
 		0, "", "restart pinned steward"); err != nil {

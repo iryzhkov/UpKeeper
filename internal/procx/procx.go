@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -79,10 +80,26 @@ func Run(command Command) Result {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
+	// exec resolves a bare program name against this process's own PATH, not
+	// the PATH the command will run with. Over SSH those differ: the session
+	// has only the system PATH, and the agent's environment adds the mise shims
+	// and ~/.local/bin. The program is found where the command can see it.
+	program := command.Argv[0]
+	if command.Env != nil && !strings.Contains(program, "/") {
+		if _, present := pathOf(command.Env); present {
+			resolved := LookupIn(program, command.Env)
+			if resolved == "" {
+				return Result{Code: -1, Err: &exec.Error{Name: program, Err: exec.ErrNotFound}}
+			}
+			program = resolved
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	process := exec.CommandContext(ctx, command.Argv[0], command.Argv[1:]...)
+	process := exec.CommandContext(ctx, program, command.Argv[1:]...)
+	// The program sees the name it was asked for, as it would from a shell.
+	process.Args[0] = command.Argv[0]
 	process.Dir = command.Dir
 	process.Env = command.Env
 	if command.Input != "" {
@@ -134,6 +151,50 @@ func Lookup(name string) string {
 		return ""
 	}
 	return path
+}
+
+// LookupIn reports the absolute path of an executable on the PATH of env, or
+// "" when it is not there. The last PATH assignment counts, as it does for a
+// child process. An environment without PATH searches this process's PATH.
+func LookupIn(name string, env []string) string {
+	search, present := pathOf(env)
+	if !present {
+		return Lookup(name)
+	}
+	if strings.Contains(name, "/") {
+		if executable(name) {
+			return name
+		}
+		return ""
+	}
+	for _, directory := range filepath.SplitList(search) {
+		// An empty or relative entry would resolve against whatever the
+		// working directory happens to be; it is never searched.
+		if !filepath.IsAbs(directory) {
+			continue
+		}
+		if candidate := filepath.Join(directory, name); executable(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+// pathOf returns the last PATH assignment in env.
+func pathOf(env []string) (string, bool) {
+	search, present := "", false
+	for _, entry := range env {
+		if value, found := strings.CutPrefix(entry, "PATH="); found {
+			search, present = value, true
+		}
+	}
+	return search, present
+}
+
+// executable reports whether path is a regular file somebody may execute.
+func executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 
 // GitEnvironment returns an environment in which Git may never prompt and SSH

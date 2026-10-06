@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -591,12 +592,14 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 			return "", err
 		}
 	}
-	// The directory is an exclusive claim: even an empty pre-existing directory
-	// at the live path belongs to whoever made it.
-	if err := os.Mkdir(checkout, 0o755); err != nil {
-		return "", err
-	}
-	if err := os.Rename(candidate, checkout); err != nil {
+	// The rename is the exclusive claim: even an empty pre-existing directory
+	// at the live path belongs to whoever made it, so it is never replaced.
+	// Claiming the path with a directory first cannot work, because nothing
+	// can then be renamed onto that directory.
+	if err := fsatomic.RenameNoReplace(candidate, checkout); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return "", errors.New(checkout + " appeared during the bootstrap; preserving it and the built candidate at " + candidate)
+		}
 		return "", err
 	}
 	if err := os.Remove(stage); err != nil {

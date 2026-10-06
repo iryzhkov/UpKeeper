@@ -8,6 +8,36 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- A fresh host converges end to end. Components declare their OS prerequisites
+  (python3-venv, git, go, make, mise and the CLI tools agent-tooling stages
+  with) and the credentials they need (the ov-memory OpenViking key). `doctor`
+  lists missing prerequisites as blockers with the command that installs them,
+  and `pull`, dry run included, reports a missing prerequisite or credential as
+  the component state `blocked` with the remedy instead of failing: nothing is
+  changed, later components still run, and only real dependents (t3,
+  worker-configuration and steward-fleet-configuration on t3-steward) are
+  skipped. A blocked host exits 10. A host whose inventory entry sets
+  `install_os_packages` has missing packages installed with `sudo -n`; no other
+  host ever has. See "Fresh host" in `docs/upkeeper-push-pull.md`.
+
+### Fixed
+
+- Every command the agent runs is resolved on the agent's own explicit `PATH`,
+  not the SSH session's, so `npm` and other mise tools are found on hosts whose
+  `~/.bashrc` never adds the shims for a non-interactive session.
+- An incomplete agent-tooling stage that UpKeeper itself created for the same
+  release is moved to `failed-stages/` (newest three kept) and retried instead
+  of refusing every later run; a stage of unknown origin is still refused.
+- Huyang bootstraps on a host without Huyang: the built checkout is renamed into
+  place with an atomic no-replace rename instead of being renamed onto a
+  directory claimed first, which Go's `os.Rename` always refused.
+- The steward accepts a host with no T3 at all as a safe pair transition, and
+  observes a running T3 through the verified candidate on a host without a
+  steward, so neither a fresh host nor a T3-only host is refused any more.
+- `push --authored` commits the inventory a release depends on when the
+  committed inventory lacks a host the release names, and refuses when the
+  working inventory lacks it too.
+
 - A failed controlled T3 activation now journals its original cause and every
   failed installed, served, health, native and unit predicate sample before
   rollback, and reports the restoration result beside that cause instead of

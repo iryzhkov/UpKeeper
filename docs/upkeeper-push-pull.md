@@ -97,7 +97,11 @@ manifest's canonical encoding with every other byte preserved, and never committ
 digest: a Steward release that changes either still needs a capture.
 
 `push --authored` publishes the reviewed bytes as they stand, without recapturing anything,
-once `HEAD` and the release digest match both fences.
+once `HEAD` and the release digest match both fences. Every host the release names (Steward
+fleet hosts, clients and coordinator, workers, Jocasta hosts) has to be in the working
+`inventory/hosts.yml`, or nothing is published. When the inventory committed at the expected
+head lacks one of them, the working inventory is committed with the release, so the published
+commit is consistent; an inventory edit the release does not need stays uncommitted.
 
 ## The resident agent instructions are gated before anything is captured
 
@@ -184,6 +188,8 @@ repository. pull --self is the explicit target-side repository exception describ
 Each host is locked on controller and target; dry run observes without writes or service
 effects. Components run in fixed order. Selecting either t3 or t3-steward in a new release
 selects the pair. A failure or deferred T3 restart stops later components on that host.
+A blocked component (see [Fresh host](#fresh-host)) does not: only the components that
+depend on it are skipped.
 A successful earlier component is not automatically rolled back by a later failure.
 
 Environment materialization rebases structured home paths, preserves the local Claude
@@ -230,6 +236,82 @@ project it is eligible for, or its own models, quota pools, executor slots, capa
 class or provider instances), that the reload is refused while that worker holds a retained
 assignment.
 
+## Fresh host
+
+A host that has never been converged needs a few things UpKeeper does not install or
+copy. Everything else, Huyang included, is installed by the first `pull`.
+
+### Before the first converge
+
+1. Put the released `upkeeper` binary at `~/.local/bin/upkeeper`, add the host to
+   `inventory/hosts.yml` with its machine identity and SSH host key, and make sure the
+   controller can reach it over SSH with the key already in `known_hosts`.
+2. Install the OS prerequisites. `upkeeper doctor --limit HOST` lists every missing one as
+   a `blocker:` line with the command that installs it, looking where the agent will look
+   (`~/.local/bin` and the mise shims count even though a non-interactive SSH session has
+   neither on its `PATH`). The current catalogue, by component:
+
+   | Component | Needs | Debian package | Arch package |
+   | --- | --- | --- | --- |
+   | omarchy-setup | git | git | git |
+   | agent-tooling | mise, bash, curl, jq, python3, ssh, readlink, secret-tool | (mise from mise.run), bash, curl, jq, python3, openssh-client, coreutils, libsecret-tools | mise, bash, curl, jq, python, openssh, coreutils, libsecret |
+   | agent-tooling, when it stages a release | Python's venv and ensurepip | python3-venv | python |
+   | huyang | git; go and make when it builds | git, golang-go, make | git, go, make |
+
+   mise also has to provide the node, codex, claude and opencode tools in its global
+   configuration, as on every other host.
+3. Create the per-host credentials by hand. UpKeeper never copies a secret between hosts:
+   - the OpenViking API key for ov-memory: `umask 077; mkdir -p ~/.config/ov-mcp; cat >
+     ~/.config/ov-mcp/key` (paste the key, then Ctrl-D), or store it in the keyring with
+     `secret-tool store --label='OpenViking API key' service openviking key api`;
+     `OV_API_KEY` or `api_key` in `~/.config/ov-mcp/config.toml` also count;
+   - `~/.config/claude/oauth.env`, if T3 should authenticate providers (the seeded T3 unit
+     reads it when present and warns when it is not);
+   - the worker's Steward protocol credential that its `worker-configuration` entry names.
+
+A host may instead opt in to having missing OS packages installed by the agent, with
+`"install_os_packages": true` in its inventory entry. The agent then runs `apt-get install`
+or `pacman -S` only through `sudo -n`, so only where sudo needs no password; anywhere else
+the component stays blocked with the install command. Without the opt-in, pull never
+installs an OS package.
+
+### The first converge
+
+```bash
+./bin/upkeeper doctor --limit agent-a
+./bin/upkeeper pull --hosts agent-a --dry-run
+./bin/upkeeper pull --hosts agent-a
+```
+
+The dry run reports a missing prerequisite or credential as the component state `blocked`
+with the remedy, before anything changes. A blocked component changes nothing, and the
+components after it still converge unless they depend on it (t3, worker-configuration and
+steward-fleet-configuration depend on t3-steward); a blocked host exits 10, like drift.
+Create what the message names and pull again.
+
+On the first converge of a fresh host, expect:
+
+- every component except the blocked ones to report `updated`; Huyang is cloned and built
+  in a private stage, renamed into place without ever replacing something that is already
+  there, and its unit is seeded and started;
+- t3-steward to install its verified binary although no T3 exists yet: no T3 at all is a
+  safe pair transition, because nothing is running that the steward could be incompatible
+  with and the candidate has proved that the release's T3 is in its range. When the host has
+  no `t3-steward.service`, the binary is installed and verified without a restart and the
+  action says so; install the service with `t3-steward install-service` once T3 serves;
+- t3 to install the pinned T3 after the steward.
+
+Every command the agent runs is looked up on its own explicit `PATH` (the mise shims,
+`~/.local/bin`, `~/go/bin`, `/usr/local/go/bin`, then the session's), so a hand-written
+`PATH` block in `~/.bashrc` is no longer needed on any host.
+
+If the agent-tooling stage fails part-way, the next run moves that incomplete stage to
+`~/.local/share/upkeeper-tools/failed-stages/` (the newest three are kept for diagnosis)
+and stages again. Only a stage carrying UpKeeper's own `.upkeeper-stage` marker for the same
+release is moved; any other incomplete directory is preserved and refused until somebody
+has looked at it. Stages left by an UpKeeper older than this marker are refused once and
+have to be moved aside by hand.
+
 ## Records and recovery
 
 Controller results are redacted under ~/.local/state/dev-fleet/runs/. Environment
@@ -262,7 +344,7 @@ use exact historical pins. Binary rollback does not downgrade steward databases 
 protocol state: select a version compatible with that host's persisted state.
 This is an ordinary pull with the same locking, deferral and lost-response limits.
 
-Exit codes retain the existing interface: 0 converged/updated, 10 ahead/deferred,
+Exit codes retain the existing interface: 0 converged/updated, 10 ahead/deferred/blocked,
 20 partial/offline when no deployment-failure result takes precedence, 40 failed or
 rolled-back, 50 rollback-failed, 60 lock contention. A dry-run update describes a planned
 change and retains the existing exit-0 reporting convention. A transport failure
