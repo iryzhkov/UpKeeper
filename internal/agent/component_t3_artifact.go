@@ -907,6 +907,11 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	if !verified {
 		return fail(errors.New("T3 post-restart identity or service verification failed"), true)
 	}
+	// Final serving helpers may sample their own binding. Fence the original
+	// transaction binding again after every serving check, before committing.
+	if err = checkBinding(); err != nil {
+		return fail(err, true)
+	}
 	if err = journal("committed"); err != nil {
 		return "", fmt.Errorf("T3 installed and serving verified identity; commit journal failed; backup %s: %w", tx.dir, err)
 	}
