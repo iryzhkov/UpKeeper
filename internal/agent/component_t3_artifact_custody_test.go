@@ -274,9 +274,12 @@ func TestT3CustodyDependentStewardRestart(t *testing.T) {
 					t.Fatalf("stale dependent accepted: %s %v", got, e)
 				}
 			case "unknown":
-				var rolled *RolledBack
-				if !errors.As(e, &rolled) || h.restarts != 0 || !strings.Contains(e.Error(), "identity unknown") {
+				// Unknown identity refuses before activation, so nothing needs rollback.
+				if e == nil || h.restarts != 0 || !strings.Contains(e.Error(), "before any effect") || !strings.Contains(e.Error(), "identity unknown") {
 					t.Fatalf("restart without dependent identity: %s %v restarts=%d", got, e, h.restarts)
+				}
+				if _, _, v := h.transaction(t); v["phase"] != "staging" || v["package_activated"] != false {
+					t.Fatalf("refusal took an effect: %v", v)
 				}
 			}
 		})

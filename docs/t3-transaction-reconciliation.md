@@ -7,7 +7,8 @@ activation fails and how to close one that rollback left at `files-restored`.
 
 ## What a failed transaction retains
 
-- `cause` is the original failure, redacted and bounded. It is journaled at
+- `cause` is the original failure, redacted as a whole and then bounded, so a
+  secret straddling the bound is still removed. It is journaled at
   `restoration-required`, before any rollback effect, and is never replaced by
   the restoration result.
 - `failed_samples` holds each failed readiness sample: the installed, served,
@@ -20,13 +21,20 @@ activation fails and how to close one that rollback left at `files-restored`.
   both the restoration result and the original cause.
 - `service`, `binding_sha256`, `prior_active` and `prior_served` record the unit,
   its launcher binding and the serving state the transaction found.
+- `dependents` is the census of `PartOf=` dependents taken before any effect:
+  the `InvocationID` of each active unit, and an empty value for each known
+  inactive one. The active ones are restoration obligations.
 
 After a restart, readiness is a bounded series of complete samples (six, five
 seconds apart), not one early sample. Unit binding drift and installed identity
 drift end the probe at once. Units bound to the T3 unit with `PartOf=` (systemd
 reports them as `ConsistsOf=`), such as the Steward service, restart with T3:
-each that was active must come back active under a new `InvocationID`, and an
-unknown dependent identity refuses the restart.
+each that was active must come back active under a new `InvocationID`. A
+dependent whose activity or identity cannot be determined (for example, the
+user bus is unreachable) is unknown, not inactive, and refuses the activation
+before any effect. Rollback keeps every dependent that was active when the
+transaction began as an obligation, even one that stopped after the failed
+restart, and does not report the service restored until each is active again.
 
 A record written before this change has none of these fields. Its original
 cause was not retained and cannot be reconstructed.
@@ -51,6 +59,10 @@ hold, and otherwise refuses with the journal and every retained tree unchanged:
 - the transaction directory is an owner-only directory beside the current
   package, and its record is at `files-restored` and names the current prefix,
   package, launcher, provenance path and unit;
+- the transaction directory and `transaction.json` are the same directory and
+  file, with the same bytes, as when reconciliation read them, at every fence
+  and again immediately before the new record is published; a record changed
+  or replaced by another writer is refused and left as that writer left it;
 - the live package tree, launcher and provenance equal the transaction's
   original digests, and no `current-previous` recovery backup exists;
 - the retained failed tree (`failed`) and failed provenance and receipts
@@ -60,7 +72,11 @@ hold, and otherwise refuses with the journal and every retained tree unchanged:
   equals `binding_sha256`;
 - the service serves the prior identity healthily within the bounded probe.
   For a record without `prior_served` the prior version is the one the
-  unchanged original tree installs.
+  unchanged original tree installs;
+- every dependent the record's `dependents` census found active is active now.
+  A record without `dependents` needs a known current census, which is recorded
+  in the reconciliation but not required to be active, because the original
+  state was not retained.
 
 Repeating the command on a reconciled transaction reports `converged` and
 writes nothing. Nothing is deleted: the failed tree, failed provenance and the

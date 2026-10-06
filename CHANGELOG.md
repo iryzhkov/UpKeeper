@@ -13,7 +13,9 @@ release tags (`v0.1.x`).
   rollback, and reports the restoration result beside that cause instead of
   replacing it. Post-restart and restoration readiness are bounded probes that
   also require Steward units declared `PartOf=` the T3 unit to return under a
-  new invocation. `upkeeper pull --hosts HOST --components t3
+  new invocation; unknown dependent activity refuses before any effect, and
+  dependents active before the activation remain restoration obligations.
+  `upkeeper pull --hosts HOST --components t3
   --reconcile-t3-transaction NAME` explicitly closes one transaction left at
   `files-restored` once every retained tree, the unit and the serving identity
   prove unchanged; see `docs/t3-transaction-reconciliation.md`.

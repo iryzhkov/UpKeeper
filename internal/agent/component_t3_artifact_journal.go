@@ -80,6 +80,14 @@ func (tx *t3Transaction) persistJournal(phase string, b []byte) error {
 			_ = os.Remove(previous)
 		}
 	}()
+	// The hard link pins the journal about to be replaced, so the fence proves
+	// the exact record this write supersedes, not a newer one.
+	if tx.publishFence != nil {
+		if e = tx.publishFence(previous); e != nil {
+			cleanupPrevious = hadPrevious
+			return e
+		}
+	}
 	if e = os.Rename(f.Name(), target); e != nil {
 		return e
 	}

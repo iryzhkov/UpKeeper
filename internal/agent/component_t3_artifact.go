@@ -218,6 +218,13 @@ type t3Transaction struct {
 	priorServed            any
 	cause, restoration     string
 	samples                []t3PredicateSample
+	// dependents is the PartOf census taken before any effect: the invocation
+	// of each active dependent, empty for a known inactive one. The active ones
+	// are restoration obligations for rollback and reconciliation.
+	dependents map[string]string
+	// publishFence, when set, proves the journal about to be replaced is still
+	// the record the caller read; persistJournal refuses otherwise.
+	publishFence func(path string) error
 }
 
 func t3Begin(c *Context, prefix string) (*t3Transaction, error) {
@@ -337,7 +344,8 @@ func (tx *t3Transaction) record(phase string) error {
 		"had_package": tx.hadPackage, "had_link": tx.hadLink, "had_state": tx.hadState,
 		"new_digest": tx.installedDigest, "new_link": tx.newLink, "new_state_digest": tx.newStateDigest,
 		"package_moved": tx.packageMoved, "package_activated": tx.packageActivated, "link_activated": tx.linkActivated, "state_moved": tx.stateMoved, "state_activated": tx.stateActivated,
-		"service": tx.service, "binding_sha256": tx.bindingDigest, "prior_active": tx.priorActive, "prior_served": tx.priorServed}
+		"service": tx.service, "binding_sha256": tx.bindingDigest, "prior_active": tx.priorActive, "prior_served": tx.priorServed,
+		"dependents": tx.dependents}
 	if tx.cause != "" {
 		m["cause"] = tx.cause
 	}
@@ -786,7 +794,15 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 	if adapterSpecString(fresh, "npm_prefix") != prefix {
 		return "", Failf("T3 prefix changed before activation")
 	}
-	priorActive, _ := fresh["service_active"].(bool)
+	// Prior activity and the PartOf dependents are custody evidence rollback and
+	// reconciliation uphold, so unknown activity refuses before any effect.
+	priorActive, e := t3UnitState(c, service)
+	if e != nil || priorActive != (fresh["service_active"] == true) {
+		return "", Failf("T3 activation refused before any effect: service activity unknown")
+	}
+	if tx.dependents, err = t3Dependents(c, service); err != nil {
+		return "", Failf("T3 activation refused before any effect: %v", err)
+	}
 	priorServed := fresh["served"]
 	priorSpec := map[string]any{"service": service, "version": fresh["installed"]}
 	priorUpstream := release.VerifyT3Upstream(c.Home, prefix, adapterSpecString(priorSpec, "version")) == nil
@@ -823,7 +839,9 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		if journalErr != nil {
 			return "", fmt.Errorf("files restored; service restoration unverified; journal persistence failed; backup %s; cause %s: %w", tx.dir, tx.cause, journalErr)
 		}
-		var dependents map[string]string
+		// Dependents active before the transaction must be active again whether or
+		// not they survived the failed restart.
+		dependents := t3DependentObligations(tx.dependents, nil)
 		if restarted {
 			// No retry restart without a new independent successful idle observation.
 			obs, e = t3Observe(c, spec)
@@ -837,18 +855,24 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 				if e = checkBinding(); e != nil {
 					return settle("files-restored", "files restored; rollback service mapping changed", e)
 				}
-				if dependents, e = t3Dependents(c, service); e != nil {
+				current, e := t3Dependents(c, service)
+				if e != nil {
 					return settle("files-restored", "files restored; rollback dependent units unknown", e)
 				}
+				dependents = t3DependentObligations(tx.dependents, current)
 				if _, e = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restore idle previous T3"); e != nil {
 					return settle("files-restored", "files restored; previous service restoration failed", e)
 				}
-			} else if c.UnitActive(service) {
+			} else if active, e := t3UnitState(c, service); e != nil {
+				return settle("files-restored", "files restored; service activity unknown; no unsafe stop", e)
+			} else if active {
 				return settle("files-restored", "files restored; service unexpectedly active; no unsafe stop", nil)
 			}
 		}
-		if !priorActive && c.UnitActive(service) {
-			return settle("files-restored", "files restored; previous service state not verified", nil)
+		if !priorActive {
+			if active, e := t3UnitState(c, service); e != nil || active {
+				return settle("files-restored", "files restored; previous service state not verified", e)
+			}
 		}
 		if priorActive {
 			e = tx.awaitReady("restoration", func() (t3PredicateSample, []string, bool) {
@@ -873,7 +897,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		}
 		var persistence *t3JournalError
 		if errors.As(cause, &persistence) {
-			return "", fmt.Errorf("files and previous service restored; journal persistence failed; backup %s: %w", tx.dir, cause)
+			return "", fmt.Errorf("files and previous service restored; journal persistence failed; backup %s; cause %s: %w", tx.dir, tx.cause, persistence)
 		}
 		return "", RolledBackf("restored exact previous T3 bytes, modes, launcher and provenance; cause %s; evidence %s", tx.cause, tx.dir)
 	}
@@ -930,11 +954,13 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		return fail(err, false)
 	}
 	// Steward units declared PartOf= the T3 unit restart with it; their prior
-	// invocation is the identity readiness must see replaced.
-	dependents, err := t3Dependents(c, service)
+	// invocation is the identity readiness must see replaced. Units active when
+	// the transaction began remain obligations even if they stopped since.
+	current, err := t3Dependents(c, service)
 	if err != nil {
 		return fail(err, false)
 	}
+	dependents := t3DependentObligations(tx.dependents, current)
 	if _, err = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restart idle T3"); err != nil {
 		return fail(err, true)
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,8 @@ type t3Journal struct {
 	BindingSHA256    string `json:"binding_sha256"`
 	PriorActive      *bool  `json:"prior_active"`
 	PriorServed      any    `json:"prior_served"`
+	// Dependents is the PartOf census before any effect; nil for a legacy record.
+	Dependents map[string]string `json:"dependents"`
 }
 
 // t3ReconcileRetained is the explicit resume of one retained transaction left
@@ -80,7 +83,14 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 	if !info.IsDir() || info.Mode().Perm() != 0700 || !owned || stat.Uid != uint32(os.Getuid()) {
 		return "", Failf("retained T3 transaction %s is missing or not an owner-only directory", name)
 	}
-	body, err := release.T3ReadFile(filepath.Join(dir, "transaction.json"), t3JournalLimit)
+	// The journal's identity is taken before its bytes, so a replacement between
+	// the two reads differs in bytes or identity at every later fence.
+	journalPath := filepath.Join(dir, "transaction.json")
+	journalInfo, err := os.Lstat(journalPath)
+	if err != nil || !journalInfo.Mode().IsRegular() {
+		return "", Failf("retained T3 transaction journal unreadable")
+	}
+	body, err := release.T3ReadFile(journalPath, t3JournalLimit)
 	if err != nil {
 		return "", Failf("retained T3 transaction journal unreadable: %v", err)
 	}
@@ -105,8 +115,28 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 	}
 	tx := &t3Transaction{c: c, prefix: prefix, packagePath: j.Package, link: j.Link, state: state, dir: dir}
 	failedState := filepath.Join(filepath.Dir(state), "failed-"+name)
-	// Every boundary the transaction owned, read fresh each time it is asked.
+	// The record this reconciliation read: the same inode with the same bytes,
+	// so neither a replacement nor an in-place change by another writer is
+	// overwritten with conclusions drawn from the older record.
+	journalUnchanged := func(path string) error {
+		current, e := os.Lstat(path)
+		if e != nil || !os.SameFile(current, journalInfo) {
+			return errors.New("retained T3 transaction journal was replaced")
+		}
+		if now, e := release.T3ReadFile(path, t3JournalLimit); e != nil || !bytes.Equal(now, body) {
+			return errors.New("retained T3 transaction journal changed")
+		}
+		return nil
+	}
+	// Every boundary the transaction owned, read fresh each time it is asked:
+	// the transaction directory and its journal first, then the trees.
 	unchanged := func() error {
+		if current, e := os.Lstat(dir); e != nil || !os.SameFile(current, info) || !current.IsDir() || current.Mode().Perm() != 0700 {
+			return errors.New("retained T3 transaction directory was replaced or changed")
+		}
+		if e := journalUnchanged(journalPath); e != nil {
+			return e
+		}
 		if e := tx.parentsUnchanged(); e != nil {
 			return e
 		}
@@ -183,6 +213,21 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 			return refuse(err)
 		}
 	}
+	// Dependents active when the transaction began are restoration obligations:
+	// each must be active now. A legacy record did not journal them, so the
+	// current census must be known and is recorded, but it is not required.
+	obligations := map[string]string{}
+	dependentEvidence := "journaled dependents active"
+	if record["dependents"] != nil {
+		obligations = t3DependentObligations(j.Dependents, nil)
+	} else {
+		census, e := t3Dependents(c, service)
+		if e != nil {
+			return refuse(e)
+		}
+		censusJSON, _ := json.Marshal(census)
+		dependentEvidence = "dependents not journaled by the transaction; current census " + string(censusJSON)
+	}
 	if priorActive {
 		err = tx.awaitReady("reconciliation", func() (t3PredicateSample, []string, bool) {
 			sample := t3PredicateSample{}
@@ -190,10 +235,13 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 				sample["unit_binding"] = "changed"
 				return sample, []string{"unit_binding"}, true
 			}
-			return sample, t3PriorServing(c, spec, priorSpec, prefix, priorServed, priorRetained, priorUpstream, sample), false
+			failed := t3PriorServing(c, spec, priorSpec, prefix, priorServed, priorRetained, priorUpstream, sample)
+			return sample, append(failed, t3DependentsReturned(c, obligations, sample)...), false
 		})
-	} else if c.UnitActive(service) {
-		err = errors.New("T3 service active where the transaction found it inactive")
+	} else if active, e := t3UnitState(c, service); e != nil || active {
+		err = errors.Join(errors.New("T3 service active or unknown where the transaction found it inactive"), e)
+	} else if failed := t3DependentsReturned(c, obligations, t3PredicateSample{}); len(failed) > 0 {
+		err = fmt.Errorf("T3 dependents not active: %s", strings.Join(failed, ", "))
 	}
 	if err != nil {
 		return refuse(err)
@@ -231,12 +279,18 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 		"prior_identity":      identity,
 		"prior_served":        priorServed,
 		"prior_active":        priorActive,
+		"dependents":          obligations,
+		"dependent_evidence":  dependentEvidence,
 		"failed_samples":      tx.samples,
 	}
 	record["reconciled_from"] = map[string]any{"sha256": release.T3Digest(body), "journal": json.RawMessage(body)}
 	next, err := json.Marshal(record)
 	if err != nil {
 		return "", err
+	}
+	// Publish only over the exact record read, in the directory first opened.
+	tx.publishFence = func(previous string) error {
+		return errors.Join(journalUnchanged(previous), unchanged())
 	}
 	if err = tx.persistJournal("reconciled", next); err != nil {
 		return "", fmt.Errorf("retained T3 transaction %s still files-restored; reconciliation journal failed: %w", name, &t3JournalError{err})

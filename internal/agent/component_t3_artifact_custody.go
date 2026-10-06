@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,13 +24,26 @@ var (
 // the first failure of each stage is kept, then the most recent ones.
 const t3RetainedSamples = 12
 
-// t3EvidenceText bounds and redacts free text before it is persisted or
-// returned, so a cause quoting command output cannot leak a credential.
+// An earlier bound, such as the command-output tail Must keeps, can cut a
+// private key block so that only its header or only its footer survives.
+// Redaction needs both, so the fragment around an unpaired one is removed.
+var (
+	t3KeyHeadFragment = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*$`)
+	t3KeyTailFragment = regexp.MustCompile(`(?s)^.*-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+)
+
+// t3EvidenceText redacts and then bounds free text before it is persisted or
+// returned, so a cause quoting command output cannot leak a credential. The
+// complete text is redacted first: bounding first could cut a secret away
+// from the delimiter its pattern needs and leave the secret itself behind.
 func t3EvidenceText(s string) string {
+	s = redact.Text(s)
+	s = t3KeyHeadFragment.ReplaceAllString(s, redact.Placeholder)
+	s = t3KeyTailFragment.ReplaceAllString(s, redact.Placeholder)
 	if len(s) > 400 {
 		s = s[:400]
 	}
-	return redact.Text(s)
+	return s
 }
 
 // t3PredicateSample is the evidence of one readiness observation: each
@@ -94,11 +108,26 @@ func (tx *t3Transaction) awaitReady(stage string, check func() (sample t3Predica
 	}
 }
 
+// t3UnitState reports whether a user unit is active. Only systemd's answer for
+// a running or a stopped unit is known. A failed query, such as an unreachable
+// user bus, or a transitional state is unknown and an error, never inactive.
+func t3UnitState(c *Context, unit string) (bool, error) {
+	result := c.Run([]string{"systemctl", "--user", "is-active", unit}, 10*time.Second, "")
+	switch {
+	case result.OK && result.Output == "active":
+		return true, nil
+	case result.Code == 3 && (result.Output == "inactive" || result.Output == "failed"):
+		return false, nil
+	}
+	return false, fmt.Errorf("unit %s activity unknown", unit)
+}
+
 // t3Dependents names the units bound to the T3 service with PartOf= (systemd
-// reports them as ConsistsOf=) with the invocation of each active one. A T3
-// restart restarts them too, so readiness includes their return under a new
-// invocation. An unanswerable query is unknown and refuses the restart rather
-// than assuming there are none.
+// reports them as ConsistsOf=) with the invocation of each active one and an
+// empty invocation for each known inactive one. A T3 restart restarts them
+// too, so readiness includes their return under a new invocation. An
+// unanswerable query is unknown and refuses the restart rather than assuming
+// there are none or that a unit is inactive.
 func t3Dependents(c *Context, service string) (map[string]string, error) {
 	result := c.Run([]string{"systemctl", "--user", "show", service, "-p", "ConsistsOf", "--value"}, 10*time.Second, "")
 	if !result.OK {
@@ -106,7 +135,11 @@ func t3Dependents(c *Context, service string) (map[string]string, error) {
 	}
 	dependents := map[string]string{}
 	for _, unit := range strings.Fields(result.Output) {
-		if !c.UnitActive(unit) {
+		active, e := t3UnitState(c, unit)
+		if e != nil {
+			return nil, fmt.Errorf("T3 dependent %w", e)
+		}
+		if !active {
 			dependents[unit] = ""
 			continue
 		}
@@ -127,20 +160,45 @@ func t3Invocation(c *Context, unit string) string {
 	return strings.TrimSpace(result.Output)
 }
 
-// t3DependentsReturned adds the dependent predicate to a sample: every unit
-// that was active before the restart is active again under a new invocation.
-func t3DependentsReturned(c *Context, before map[string]string, sample t3PredicateSample) []string {
+// t3DependentObligations names the dependents that must be active after a
+// restart, each with the invocation it must have replaced. Every unit active
+// when the transaction began stays an obligation even if it has stopped since,
+// and every unit active now restarts with the T3 unit. An empty invocation
+// means the unit is not active now, so any invocation it returns under counts.
+func t3DependentObligations(original, current map[string]string) map[string]string {
+	obligations := map[string]string{}
+	for unit, id := range original {
+		if id != "" {
+			obligations[unit] = current[unit]
+		}
+	}
+	for unit, id := range current {
+		if id != "" {
+			obligations[unit] = id
+		}
+	}
+	return obligations
+}
+
+// t3DependentsReturned adds the dependent predicate to a sample: every
+// obligated unit is known active under an invocation other than the one it
+// had to replace. Unknown activity fails the predicate.
+func t3DependentsReturned(c *Context, obligations map[string]string, sample t3PredicateSample) []string {
 	failed := []string{}
 	states := map[string]any{}
-	for unit, previous := range before {
-		if previous == "" {
-			continue
+	for unit, previous := range obligations {
+		active, e := t3UnitState(c, unit)
+		current := ""
+		if active {
+			current = t3Invocation(c, unit)
 		}
-		active := c.UnitActive(unit)
-		current := t3Invocation(c, unit)
-		restarted := active && current != "" && current != previous
-		states[unit] = map[string]any{"active": active, "restarted": restarted}
-		if !restarted {
+		returned := e == nil && active && current != "" && current != previous
+		state := map[string]any{"active": active, "returned": returned}
+		if e != nil {
+			state["activity"] = "unknown"
+		}
+		states[unit] = state
+		if !returned {
 			failed = append(failed, "dependent "+unit)
 		}
 	}
