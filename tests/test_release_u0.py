@@ -356,9 +356,21 @@ def remote_namespace(tmp_path):
     return namespace
 
 
+def remote_upstream_t3(namespace, tmp_path, version):
+    prefix = tmp_path / "npm-prefix"
+    package = prefix / "lib/node_modules/t3/package.json"
+    package.parent.mkdir(parents=True)
+    package.write_text(json.dumps({
+        "name": "t3", "version": version,
+        "_resolved": "https://registry.npmjs.org/t3/-/t3-" + version + ".tgz",
+    }))
+    namespace["run"] = lambda *a, **k: {"ok": True, "output": str(prefix)}
+
+
 @pytest.mark.parametrize("running,ok", [(1, True), (None, True), (0, False)])
 def test_t3_never_installs_or_restarts_without_proven_idle(tmp_path, running, ok):
     ns = remote_namespace(tmp_path)
+    remote_upstream_t3(ns, tmp_path, "0.0.37")
     ns["COMPONENTS"] = {"t3-steward": {"path": ".local/bin/t3-steward"}}
     ns["verify_pair_binary"] = lambda _: None
     ns["observe_t3"] = lambda _: {"check_ok": ok, "running_threads": running, "installed": "0.0.37"}
@@ -391,6 +403,7 @@ def test_setup_drift_does_not_reclaim_environment_owned_files(tmp_path):
 
 def test_pair_dry_run_does_not_require_future_steward_already_installed(tmp_path):
     ns = remote_namespace(tmp_path)
+    remote_upstream_t3(ns, tmp_path, "0.0.38")
     ns["DRY_RUN"] = True
     ns["verify_pair_binary"] = lambda _: pytest.fail("future binary is not installed in dry run")
     ns["seed_t3_service"] = lambda *args: pytest.fail("an active T3 service is never seeded")
@@ -403,6 +416,7 @@ def test_pair_dry_run_does_not_require_future_steward_already_installed(tmp_path
 
 def test_t3_rechecks_idle_after_install_and_verifies_served_version(tmp_path):
     ns = remote_namespace(tmp_path)
+    remote_upstream_t3(ns, tmp_path, "0.0.37")
     ns["COMPONENTS"] = {"t3-steward": {"path": ".local/bin/t3-steward"}}
     ns["verify_pair_binary"] = lambda _: None
     observations = iter(

@@ -66,7 +66,7 @@ class FakeMachine:
                     [], 0 if f"origin/{ref}" in self.branches else 1, stdout="", stderr=""
                 )
         if argv[0] == "npm":
-            return _done('{"dependencies":{"t3":{"version":"0.0.38"}}}')
+            return _done('{"dependencies":{"t3":{"version":"0.0.38","resolved":"https://registry.npmjs.org/t3/-/t3-0.0.38.tgz"}}}')
         if argv[-1] == "version":
             return _done(f"t3-steward {self.steward} (tested with T3 0.0.38..0.0.38)\n")
         raise AssertionError(f"unexpected command {argv}")

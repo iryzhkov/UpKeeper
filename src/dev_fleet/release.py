@@ -179,6 +179,8 @@ def validate_release(manifest: dict[str, Any]) -> Release:
                 raise ValidationError("invalid worker configuration: " + str(exc)) from exc
             continue
         if name == "t3":
+            if "artifact" in component:
+                raise ValidationError("controlled T3 operations require the Go agent")
             if set(component) != {"kind", "package", "version", "compatibility", "service"}:
                 raise ValidationError("invalid T3 component fields")
             if (
@@ -362,20 +364,41 @@ def _version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(n) for n in value.split("."))
 
 
-def _capture_t3(runner: Runner, home: Path, steward: dict[str, Any]) -> dict[str, Any]:
+def _capture_t3(
+    runner: Runner, home: Path, steward: dict[str, Any], previous: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    if (previous is not None and "artifact" in previous) or os.path.lexists(
+        home / ".local/state/dev-fleet/t3-controlled"
+    ):
+        raise CaptureError("controlled T3 capture requires the Go agent")
+    prefix_result = runner(["npm", "prefix", "-g"], None, 30)
+    prefix = Path(prefix_result.stdout.strip())
+    if prefix.is_absolute():
+        package_path = prefix / "lib/node_modules/t3/package.json"
+        try:
+            metadata = json.loads(package_path.read_text())
+            if "upkeeperControlledBuild" in metadata:
+                raise CaptureError("controlled T3 capture requires the Go agent")
+        except (ValueError, OSError) as exc:
+            if package_path.exists():
+                raise CaptureError("ambiguous T3 provenance") from exc
     version = runner([str(home / steward["path"]), "version"], None, 15)
     match = re.search(r"tested with T3 (\d+\.\d+\.\d+)\.\.(\d+\.\d+\.\d+)", version.stdout)
     if version.returncode or not match:
         raise CaptureError("steward does not report its tested T3 range")
     installed = runner(["npm", "ls", "-g", "--depth=0", "--json", "t3"], None, 30)
     try:
-        package = json.loads(installed.stdout)["dependencies"]["t3"]["version"]
+        entry = json.loads(installed.stdout)["dependencies"]["t3"]
+        package = entry["version"]
     except (ValueError, KeyError, TypeError) as exc:
         raise CaptureError("cannot observe installed npm t3 package") from exc
     if installed.returncode or not _version_tuple(match[1]) <= _version_tuple(
         package
     ) <= _version_tuple(match[2]):
         raise CaptureError("installed T3 is outside the steward tested range")
+    resolved = entry.get("resolved", entry.get("_resolved"))
+    if resolved != f"https://registry.npmjs.org/t3/-/t3-{package}.tgz":
+        raise CaptureError("T3 origin ambiguous: positive upstream provenance required")
     return {
         "kind": "npm-package",
         "package": "t3",
@@ -735,7 +758,7 @@ def capture_release(
             or hashlib.sha256(hook_path.read_bytes()).hexdigest() != hook_hash
         ):
             raise CaptureError("installed OpenCode session hook does not match the reviewed pin")
-    components["t3"] = _capture_t3(runner, home, components["t3-steward"])
+    components["t3"] = _capture_t3(runner, home, components["t3-steward"], components.get("t3"))
     components["t3-steward"]["installer"] = "upkeeper"
     provenance = ProjectInstructionRef(
         "github.com/iryzhkov/UpKeeper",

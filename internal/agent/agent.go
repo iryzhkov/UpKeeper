@@ -99,8 +99,9 @@ type Context struct {
 	Now   func() time.Time
 	Sleep func(time.Duration)
 
-	lockDirectory string
-	lockOwned     bool
+	t3JournalFiles *t3JournalFiles // Owned journal IO; nil uses the filesystem.
+	lockDirectory  string
+	lockOwned      bool
 }
 
 // now reads the context's clock.

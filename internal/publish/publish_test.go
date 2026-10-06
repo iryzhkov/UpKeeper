@@ -180,7 +180,7 @@ func (f *fixture) run(command procx.Command) procx.Result {
 	case strings.HasSuffix(joined, "t3-steward version"):
 		return procx.Result{Stdout: "t3-steward v0.10.1\ntested with T3 1.2.0..1.4.0\n"}
 	case strings.HasPrefix(joined, "npm ls"):
-		return procx.Result{Stdout: `{"dependencies":{"t3":{"version":"1.3.0"}}}`}
+		return procx.Result{Stdout: `{"dependencies":{"t3":{"version":"1.3.0","resolved":"https://registry.npmjs.org/t3/-/t3-1.3.0.tgz"}}}`}
 	case strings.HasSuffix(joined, "remote"):
 		return procx.Result{Stdout: "origin\nforgejo\nbackup\n"}
 	case strings.Contains(joined, "diff --cached"):

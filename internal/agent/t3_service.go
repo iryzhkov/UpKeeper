@@ -36,6 +36,10 @@ WantedBy=default.target
 // It reports whether it seeded anything. An existing unit, in any state, is
 // left exactly as the host has it.
 func SeedT3Service(c *Context, actions *[]string) (bool, error) {
+	return seedT3Service(c, actions, nil)
+}
+
+func seedT3Service(c *Context, actions *[]string, beforeStart func() error) (bool, error) {
 	path := c.Path(".config/systemd/user/t3code.service")
 	status, err := unitStatus(c, "t3code.service")
 	if err != nil {
@@ -73,6 +77,11 @@ func SeedT3Service(c *Context, actions *[]string) (bool, error) {
 	if _, err := c.Must([]string{"systemctl", "--user", "daemon-reload"},
 		0, "", "reload seeded T3 service"); err != nil {
 		return false, err
+	}
+	if beforeStart != nil {
+		if err := beforeStart(); err != nil {
+			return false, err
+		}
 	}
 	if _, err := c.Must([]string{"systemctl", "--user", "enable", "--now", "t3code.service"},
 		0, "", "start seeded T3 service"); err != nil {

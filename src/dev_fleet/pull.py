@@ -718,10 +718,51 @@ def apply_pinned_steward(spec, before, actions):
     return "updated"
 
 
+def refuse_controlled_t3(spec):
+    if "artifact" in spec or os.path.lexists(HOME / ".local/state/dev-fleet/t3-controlled"):
+        raise StepFailed("controlled T3 operations require the Go agent")
+    prefix = run(["npm", "prefix", "-g"], timeout=30)
+    path = Path(prefix["output"].strip())
+    if not prefix["ok"] or not path.is_absolute():
+        raise StepFailed("unknown installed T3 prefix; provenance cannot be verified")
+    package_root = path / "lib/node_modules/t3"
+    package = package_root / "package.json"
+    try:
+        metadata = json.loads(package.read_text())
+    except FileNotFoundError:
+        if not os.path.lexists(package_root):
+            return False  # A missing installation is distinct from an unreadable one.
+        raise StepFailed("ambiguous installed T3 provenance") from None
+    except (ValueError, OSError):
+        raise StepFailed("ambiguous installed T3 provenance") from None
+    if not isinstance(metadata, dict):
+        raise StepFailed("ambiguous installed T3 provenance")
+    if "upkeeperControlledBuild" in metadata:
+        raise StepFailed("controlled T3 operations require the Go agent")
+    version = metadata.get("version")
+    resolved = metadata.get("_resolved") or metadata.get("resolved")
+    if resolved is None:
+        # Legacy npm installations can expose registry provenance through npm ls
+        # rather than persisting it in the package manifest.
+        observed = run(["npm", "ls", "-g", "--depth=0", "--json", "t3"], timeout=30)
+        try:
+            entry = json.loads(observed["output"])["dependencies"]["t3"]
+            if observed["ok"] and entry["version"] == version:
+                resolved = entry.get("resolved") or entry.get("_resolved")
+        except (ValueError, KeyError, TypeError):
+            pass
+    if (metadata.get("name") != "t3" or not isinstance(version, str)
+            or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+            or resolved != "https://registry.npmjs.org/t3/-/t3-" + version + ".tgz"):
+        raise StepFailed("ambiguous installed T3 provenance; positive upstream origin required")
+    return True
+
+
 def observe_t3(spec):
+    installed_present = refuse_controlled_t3(spec)
     package = run(["npm", "ls", "-g", "--depth=0", "--json", "t3"], timeout=30)
     try:
-        installed = json.loads(package["output"])["dependencies"]["t3"]["version"] if package["ok"] else None
+        installed = json.loads(package["output"])["dependencies"]["t3"]["version"] if package["ok"] and installed_present else None
     except (ValueError, KeyError, TypeError):
         installed = None
     check = run([str(HOME / COMPONENTS["t3-steward"]["path"]), "check"], timeout=30)
@@ -733,6 +774,8 @@ def observe_t3(spec):
 
 
 def apply_t3(spec, before, actions):
+    if not refuse_controlled_t3(spec):
+        before = {**before, "installed": None}
     # Service seeding never overwrites an existing unit or its credentials/bind address.
     # Only start a seed after the installed package and steward have been verified.
     seeded = False
