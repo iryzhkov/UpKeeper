@@ -36,6 +36,11 @@ type Installer struct {
 	// the installation, and an error it returns is treated as that step
 	// failing. It exists so that tests can interrupt a switch at each boundary.
 	Fault func(step string) error
+	// Flush makes the installation's files and directory entries durable; its
+	// zero value flushes for real. Every failure of a flush is a refusal: a
+	// generation is not named, and current is not switched, on the strength of
+	// a flush that did not happen.
+	Flush fsatomic.Flusher
 }
 
 // Result is what an installation or rollback did.
@@ -282,7 +287,7 @@ func (i *Installer) rollback(reason string) (Result, error) {
 	}
 	// The hold goes first: a crash after it and before the switch holds
 	// updates on the old binary, which is the conservative outcome.
-	if err := fsatomic.WriteFile(i.Layout.Hold(),
+	if err := i.Flush.WriteFile(i.Layout.Hold(),
 		[]byte("rolled back from "+i.Layout.CurrentGeneration()+": "+reason+"\n"), 0o600); err != nil {
 		return result, failure.Value("cannot record the rollback hold: %v", err)
 	}
@@ -381,10 +386,10 @@ func (i *Installer) installGeneration(staged, name string, record identity) erro
 	if err := i.fault("sync-staged"); err != nil {
 		return err
 	}
-	if err := syncFile(staged); err != nil {
+	if err := i.Flush.File(staged); err != nil {
 		return failure.Value("cannot flush the staged binary: %v", err)
 	}
-	if err := syncFile(identityPath); err != nil {
+	if err := i.Flush.File(identityPath); err != nil {
 		return failure.Value("cannot flush the generation identity: %v", err)
 	}
 	return i.publishGeneration(filepath.Dir(staged), name)
@@ -401,7 +406,7 @@ func (i *Installer) installLinkGeneration(staged, name string, record identity) 
 	if err := i.fault("sync-staged"); err != nil {
 		return err
 	}
-	if err := syncFile(identityPath); err != nil {
+	if err := i.Flush.File(identityPath); err != nil {
 		return failure.Value("cannot flush the generation identity: %v", err)
 	}
 	return i.publishGeneration(filepath.Dir(staged), name)
@@ -433,7 +438,7 @@ func (i *Installer) publishGeneration(directory, name string) error {
 	if err := i.fault("sync-staged-directory"); err != nil {
 		return err
 	}
-	if err := fsatomic.SyncDirectory(directory); err != nil {
+	if err := i.Flush.Directory(directory); err != nil {
 		return failure.Value("cannot flush the staged generation %s: %v", name, err)
 	}
 	final := i.Layout.Generation(name)
@@ -455,7 +460,7 @@ func (i *Installer) publishGeneration(directory, name string) error {
 	if err := i.fault("sync-generations"); err != nil {
 		return err
 	}
-	if err := fsatomic.SyncDirectory(i.Layout.Generations()); err != nil {
+	if err := i.Flush.Directory(i.Layout.Generations()); err != nil {
 		return failure.Value("cannot flush the generations directory: %v", err)
 	}
 	return nil
@@ -521,7 +526,7 @@ func (i *Installer) recordSwitch(record switchRecord) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := fsatomic.WriteFile(i.Layout.Switch(), append(encoded, '\n'), 0o600); err != nil {
+	if err := i.Flush.WriteFile(i.Layout.Switch(), append(encoded, '\n'), 0o600); err != nil {
 		return "", failure.Value("cannot record the switch: %v", err)
 	}
 	return record.ID, nil
@@ -556,7 +561,10 @@ func (i *Installer) replaceLink(link, target, step string) error {
 	if err := i.fault("sync-" + step); err != nil {
 		return err
 	}
-	return fsatomic.SyncDirectory(directory)
+	if err := i.Flush.Directory(directory); err != nil {
+		return failure.Value("cannot flush the link %s: %v", link, err)
+	}
+	return nil
 }
 
 // linkBinary makes ~/.local/bin/upkeeper the link to current.
@@ -746,13 +754,4 @@ func (i *Installer) journal(event map[string]any) {
 	if _, err := handle.Write(append(encoded, '\n')); err == nil {
 		_ = handle.Sync()
 	}
-}
-
-func syncFile(path string) error {
-	handle, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = handle.Close() }()
-	return handle.Sync()
 }
