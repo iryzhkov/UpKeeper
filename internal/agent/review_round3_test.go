@@ -124,3 +124,81 @@ func huyangRanBefore(r *adapterTestRunner, first, then []string) bool {
 	}
 	return false
 }
+
+// Recovery builds for up to ten minutes before it seeds and starts the unit.
+// Whatever the operator does to the checkout or the unit meanwhile is theirs:
+// recovery checks both again after the build, starts nothing and keeps the
+// pending marker if either changed or can no longer be read.
+func TestRound3ReviewRecoveryRevalidatesAfterBuild(t *testing.T) {
+	seeded := fmt.Sprintf(huyangUnitTemplate, ".local/share/huyang")
+	operator := "[Service]\nExecStart=/operator/huyang\n"
+	for _, change := range []string{
+		"dirty", "off-pin", "head-unreadable", "operator-unit", "masked-unit",
+		"unit-appears", "partial-unit-rewritten",
+	} {
+		t.Run(change, func(t *testing.T) {
+			before := seeded
+			switch change {
+			case "unit-appears":
+				before = ""
+			case "partial-unit-rewritten":
+				before = seeded[:40]
+			}
+			c, r := huyangCrashWorld(t, before)
+			inner := r.handle
+			built := false
+			unit := c.Path(".config/systemd/user/huyang.service")
+			r.handle = func(cmd procx.Command) procx.Result {
+				if adapterTestMatches(cmd.Argv, "make", "build") {
+					built = true
+					switch change {
+					case "operator-unit", "unit-appears":
+						adapterTestWrite(t, unit, operator)
+					case "partial-unit-rewritten":
+						adapterTestWrite(t, unit, seeded[:20])
+					case "masked-unit":
+						if err := os.Remove(unit); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink("/dev/null", unit); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if built && change == "dirty" && adapterTestMatches(cmd.Argv, "status", "--porcelain") {
+					return procx.Result{Stdout: " M main.go\n"}
+				}
+				if built && change == "off-pin" && adapterTestMatches(cmd.Argv, "rev-parse", "HEAD") {
+					return procx.Result{Stdout: huyangLocal}
+				}
+				if built && change == "head-unreadable" && adapterTestMatches(cmd.Argv, "rev-parse", "HEAD") {
+					return procx.Result{Code: 128, Stderr: "fatal: not a git repository"}
+				}
+				return inner(cmd)
+			}
+			observed := map[string]any{"commit": huyangPinned, "dirty": false, "service_active": false, "socket": false}
+			state, err := huyangApplyCheckout(c, c.Spec("huyang"), observed, &[]string{})
+			if !built {
+				t.Fatalf("recovery did not build: state=%s err=%v calls=%v", state, err, r.calls)
+			}
+			if err == nil || r.ran("enable", "--now") || !pathExists(c.Path(huyangBootstrapPending)) {
+				t.Fatalf("%s during build accepted: state=%s err=%v marker=%v calls=%v",
+					change, state, err, pathExists(c.Path(huyangBootstrapPending)), r.calls)
+			}
+			switch change {
+			case "operator-unit", "unit-appears":
+				if raw, _ := os.ReadFile(unit); string(raw) != operator {
+					t.Fatalf("operator unit overwritten: %q", raw)
+				}
+			case "partial-unit-rewritten":
+				if raw, _ := os.ReadFile(unit); string(raw) != seeded[:20] {
+					t.Fatalf("unit overwritten: %q", raw)
+				}
+			case "masked-unit":
+				if link, _ := os.Readlink(unit); link != "/dev/null" {
+					t.Fatalf("mask removed: %q", link)
+				}
+			}
+		})
+	}
+}

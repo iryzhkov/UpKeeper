@@ -316,7 +316,9 @@ If the Huyang bootstrap is interrupted after the built checkout is in place, the
 finishes it (builds the checkout again, seeds the unit if needed, enables and probes the
 service) instead of mistaking the checkout for an installed Huyang. It does so only while the
 checkout is on the pinned commit without local changes; otherwise it refuses and keeps the
-pending marker. A service that does not answer the probe is disabled again.
+pending marker. Both the checkout and the unit are checked again after the build: if either
+changed while it ran, or the unit is masked or no longer the seeded one, nothing is seeded or
+started and the marker stays. A service that does not answer the probe is disabled again.
 
 If the agent-tooling stage fails part-way, the next run moves that incomplete stage to
 `~/.local/share/upkeeper-tools/failed-stages/` (the newest three UpKeeper put there are kept

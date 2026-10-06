@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -690,29 +691,12 @@ func huyangResumeBootstrap(
 	// The observation may be stale by now. Nothing is seeded or started, and no
 	// dry run promises either, unless the checkout is still on the pin and
 	// provably has no local changes.
-	dirty := c.GitDirty(checkout)
-	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
-		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
+	if err := huyangResumeCheckout(c, checkout, commit); err != nil {
+		return "", err
 	}
 	want := fmt.Sprintf(huyangUnitTemplate, relative)
-	// Only a regular file holding the start of the template is the seeded
-	// unit a crash cut short. A mask (a link to /dev/null) or an empty file
-	// reads as nothing, which is a prefix of anything, so neither is taken
-	// for one.
-	if info, err := os.Lstat(unit); err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
-		return "", Failf("an interrupted Huyang bootstrap found %s masked, empty or not a regular file; "+
-			"inspect it. Only the next run's bootstrap enables %s at boot: remove the file to let it "+
-			"finish, or enable the service yourself before removing %s",
-			unit, service, c.Path(huyangBootstrapPending))
-	}
-	if raw, err := os.ReadFile(unit); err == nil && string(raw) != want {
-		if !strings.HasPrefix(want, string(raw)) {
-			return "", Failf("an interrupted Huyang bootstrap found %s changed; inspect it. "+
-				"Only the next run's bootstrap enables %s at boot: restore the seeded unit to let it "+
-				"finish, or enable the service yourself before removing %s",
-				unit, adapterSpecString(spec, "service"), c.Path(huyangBootstrapPending))
-		}
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	before, err := huyangResumeUnit(c, unit, service, want)
+	if err != nil {
 		return "", err
 	}
 	if c.DryRun {
@@ -723,7 +707,23 @@ func huyangResumeBootstrap(
 		return "", err
 	}
 	*actions = append(*actions, "built "+adapterShortCommit(commit))
-	if raw, err := os.ReadFile(unit); err != nil || string(raw) != want {
+	// The build can take minutes, and the checkout and the unit stay the
+	// operator's meanwhile: both are checked again, and the unit must be
+	// exactly what it was before the build, before anything is seeded or
+	// started.
+	if err := huyangResumeCheckout(c, checkout, commit); err != nil {
+		return "", err
+	}
+	after, err := huyangResumeUnit(c, unit, service, want)
+	if err != nil {
+		return "", err
+	}
+	if (before == nil) != (after == nil) || (before != nil && !bytes.Equal(*before, *after)) {
+		return "", Failf("an interrupted Huyang bootstrap found %s changed while it built; inspect it. "+
+			"Keep %s: the next run finishes the bootstrap once the unit is the seeded one or absent",
+			unit, c.Path(huyangBootstrapPending))
+	}
+	if after == nil || string(*after) != want {
 		// Absent, or a prefix of the template the crash cut short.
 		if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return "", err
@@ -749,6 +749,48 @@ func huyangResumeBootstrap(
 	*actions = append(*actions, fmt.Sprintf("finished the interrupted Huyang bootstrap at %s; enabled %s",
 		adapterShortCommit(commit), service))
 	return "updated", nil
+}
+
+// huyangResumeCheckout refuses recovery unless the checkout is provably on
+// the pin without local changes.
+func huyangResumeCheckout(c *Context, checkout, commit string) error {
+	dirty := c.GitDirty(checkout)
+	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
+		return huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
+	return nil
+}
+
+// huyangResumeUnit reads the unit an interrupted bootstrap left: nil when
+// there is none, otherwise its bytes, the start of the seeded unit. Only a
+// regular file holding the start of the template is the seeded unit a crash
+// cut short. A mask (a link to /dev/null) or an empty file reads as nothing,
+// which is a prefix of anything, so neither is taken for one.
+func huyangResumeUnit(c *Context, unit, service, want string) (*[]byte, error) {
+	info, err := os.Lstat(unit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return nil, Failf("an interrupted Huyang bootstrap found %s masked, empty or not a regular file; "+
+			"inspect it. Only the next run's bootstrap enables %s at boot: remove the file to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, service, c.Path(huyangBootstrapPending))
+	}
+	raw, err := os.ReadFile(unit)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || !strings.HasPrefix(want, string(raw)) {
+		return nil, Failf("an interrupted Huyang bootstrap found %s changed; inspect it. "+
+			"Only the next run's bootstrap enables %s at boot: restore the seeded unit to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, service, c.Path(huyangBootstrapPending))
+	}
+	return &raw, nil
 }
 
 // huyangResumeRefused explains why an interrupted bootstrap was not finished.
