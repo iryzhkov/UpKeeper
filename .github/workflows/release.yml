@@ -18,7 +18,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # The agent-a self-hosted runners (2026-10-06): hosted Actions minutes for
+    # this private repository are capped at a $0 budget.
+    runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out the tagged commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
