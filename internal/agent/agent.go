@@ -373,7 +373,9 @@ func Execute(context *Context) map[string]any {
 
 	worst := "converged"
 	stop := false
-	if context.Payload.RetireUpdater {
+	// Explicit T3 transaction reconciliation only rewrites that transaction's
+	// journal, so it never performs the unrelated legacy updater retirement.
+	if context.Payload.RetireUpdater && context.Payload.ReconcileT3Transaction == "" {
 		retirement := RetireLegacyUpdater(context)
 		result["legacy_updater"] = retirement
 		state, _ := retirement["state"].(string)
