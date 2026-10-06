@@ -310,20 +310,12 @@ func (i *Installer) stagingDirectory() (string, error) {
 // binary is made read-only and synced before the directory appears under its
 // final name, so a generation that exists is a generation that is complete.
 func (i *Installer) installGeneration(staged, name string, record identity) error {
-	if err := fsatomic.EnsureDirectory(i.Layout.Generations(), 0o700); err != nil {
-		return failure.Value("cannot create the generations directory: %v", err)
-	}
 	if err := os.Chmod(staged, 0o500); err != nil {
 		return failure.Value("cannot make the staged binary read-only: %v", err)
 	}
-	record.InstalledAt = pytime.ISO8601Z(i.now())
-	encoded, err := json.Marshal(record)
+	identityPath, err := i.writeIdentity(filepath.Dir(staged), record)
 	if err != nil {
 		return err
-	}
-	directory := filepath.Dir(staged)
-	if err := os.WriteFile(filepath.Join(directory, "identity.json"), append(encoded, '\n'), 0o400); err != nil {
-		return failure.Value("cannot record the generation identity: %v", err)
 	}
 	if err := i.fault("sync-staged"); err != nil {
 		return err
@@ -331,7 +323,58 @@ func (i *Installer) installGeneration(staged, name string, record identity) erro
 	if err := syncFile(staged); err != nil {
 		return failure.Value("cannot flush the staged binary: %v", err)
 	}
-	_ = fsatomic.SyncDirectory(directory)
+	if err := syncFile(identityPath); err != nil {
+		return failure.Value("cannot flush the generation identity: %v", err)
+	}
+	return i.publishGeneration(filepath.Dir(staged), name)
+}
+
+// installLinkGeneration is installGeneration for an adopted link, which has no
+// bytes of its own to make read-only or flush: the link is an entry of the
+// staged directory, which publishGeneration flushes.
+func (i *Installer) installLinkGeneration(staged, name string, record identity) error {
+	identityPath, err := i.writeIdentity(filepath.Dir(staged), record)
+	if err != nil {
+		return err
+	}
+	if err := i.fault("sync-staged"); err != nil {
+		return err
+	}
+	if err := syncFile(identityPath); err != nil {
+		return failure.Value("cannot flush the generation identity: %v", err)
+	}
+	return i.publishGeneration(filepath.Dir(staged), name)
+}
+
+// writeIdentity records a generation's identity beside its binary.
+func (i *Installer) writeIdentity(directory string, record identity) (string, error) {
+	record.InstalledAt = pytime.ISO8601Z(i.now())
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(directory, "identity.json")
+	if err := os.WriteFile(path, append(encoded, '\n'), 0o400); err != nil {
+		return "", failure.Value("cannot record the generation identity: %v", err)
+	}
+	return path, nil
+}
+
+// publishGeneration gives a staged directory whose files are flushed its
+// generation name. The staged directory is flushed first, so that its
+// entries are durable before anything can name them, and the generations
+// directory after, so that the name itself is; a failure of either stops the
+// install before current can be switched to it.
+func (i *Installer) publishGeneration(directory, name string) error {
+	if err := fsatomic.EnsureDirectory(i.Layout.Generations(), 0o700); err != nil {
+		return failure.Value("cannot create the generations directory: %v", err)
+	}
+	if err := i.fault("sync-staged-directory"); err != nil {
+		return err
+	}
+	if err := fsatomic.SyncDirectory(directory); err != nil {
+		return failure.Value("cannot flush the staged generation %s: %v", name, err)
+	}
 	final := i.Layout.Generation(name)
 	// A directory of this name is only replaced after it failed to verify, so
 	// it is debris from an interruption or a damaged copy. Even when current
@@ -351,7 +394,10 @@ func (i *Installer) installGeneration(staged, name string, record identity) erro
 	if err := i.fault("sync-generations"); err != nil {
 		return err
 	}
-	return fsatomic.SyncDirectory(i.Layout.Generations())
+	if err := fsatomic.SyncDirectory(i.Layout.Generations()); err != nil {
+		return failure.Value("cannot flush the generations directory: %v", err)
+	}
+	return nil
 }
 
 // switchTo makes a generation current and the one it replaces previous, then
@@ -481,37 +527,6 @@ func (i *Installer) adopt() (string, error) {
 		return "", err
 	}
 	return name, nil
-}
-
-// installLinkGeneration is installGeneration for an adopted link, which has no
-// bytes of its own to make read-only.
-func (i *Installer) installLinkGeneration(staged, name string, record identity) error {
-	if err := fsatomic.EnsureDirectory(i.Layout.Generations(), 0o700); err != nil {
-		return failure.Value("cannot create the generations directory: %v", err)
-	}
-	record.InstalledAt = pytime.ISO8601Z(i.now())
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	directory := filepath.Dir(staged)
-	if err := os.WriteFile(filepath.Join(directory, "identity.json"), append(encoded, '\n'), 0o400); err != nil {
-		return failure.Value("cannot record the generation identity: %v", err)
-	}
-	_ = fsatomic.SyncDirectory(directory)
-	final := i.Layout.Generation(name)
-	if _, err := os.Lstat(final); err == nil {
-		if err := removeGeneration(final); err != nil {
-			return failure.Value("cannot remove the incomplete generation %s: %v", name, err)
-		}
-	}
-	if err := i.fault("rename-generation"); err != nil {
-		return err
-	}
-	if err := os.Rename(directory, final); err != nil {
-		return failure.Value("cannot install generation %s: %v", name, err)
-	}
-	return fsatomic.SyncDirectory(i.Layout.Generations())
 }
 
 // recover is Recover without the lock, for callers that hold it.

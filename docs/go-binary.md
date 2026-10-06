@@ -232,7 +232,11 @@ runs while the host has a scheduled hold marker.
 4. It is installed read-only as
    `~/.local/lib/upkeeper/generations/<sha256>/upkeeper`, `current` is switched
    to it by rename and fsync, and `~/.local/bin/upkeeper` becomes a link to
-   `../lib/upkeeper/current/upkeeper`. The first time, whatever that path held
+   `../lib/upkeeper/current/upkeeper`. The binary, its `identity.json` and
+   the staged generation directory are each flushed before the directory is
+   renamed into `generations/`, and that directory is flushed before
+   `current` can name it; a failure of any flush stops the install with
+   `current` unchanged. The first time, whatever that path held
    is adopted as a generation (a copied file, or the recorded link target), so
    a rollback can return to it. Three generations are kept; the current and
    previous ones are never removed. Every switch is appended to

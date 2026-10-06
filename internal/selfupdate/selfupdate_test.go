@@ -3,6 +3,7 @@ package selfupdate
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -555,7 +556,7 @@ func TestRetentionKeepsThreeAndNeverTheActiveOnes(t *testing.T) {
 
 // boundaries are every fsync and rename an apply onto a managed host crosses.
 var boundaries = []string{
-	"sync-staged", "rename-generation", "sync-generations",
+	"sync-staged", "sync-staged-directory", "rename-generation", "sync-generations",
 	"rename-previous", "sync-previous", "rename-current", "sync-current",
 }
 
@@ -619,6 +620,100 @@ func TestAnInterruptedSwitchRecoversToAValidCurrent(t *testing.T) {
 			if target.Layout.PreviousGeneration() != old.sha() {
 				t.Errorf("previous is %q, not the generation the switch left",
 					target.Layout.PreviousGeneration())
+			}
+		})
+	}
+}
+
+// unmanagedHost gives a host the binary it ran before generations: a regular
+// file, or a link to a launcher elsewhere, such as the Python checkout's.
+func unmanagedHost(t *testing.T, target *Installer, kind string) program {
+	t.Helper()
+	legacy := newProgram("v0.1.30", "a")
+	if err := os.MkdirAll(filepath.Dir(target.Layout.Binary()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if kind == "file" {
+		if err := os.WriteFile(target.Layout.Binary(), legacy.body, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return legacy
+	}
+	launcher := filepath.Join(target.Layout.Home, ".local/share/dev-fleet/scripts/upkeeper")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, legacy.body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../share/dev-fleet/scripts/upkeeper", target.Layout.Binary()); err != nil {
+		t.Fatal(err)
+	}
+	return legacy
+}
+
+// The first apply on an unmanaged host installs two generations, the pinned
+// one and the adopted one, and switches twice. Each generation's directory is
+// flushed before it appears under its name, and an interruption at any of
+// the apply's fsync and rename boundaries, in the adoption as much as in the
+// install, leaves a binary that runs and an installation the next apply
+// finishes with the adopted program as the one a rollback restores.
+func TestEveryBoundaryOfAnAdoptingApplyIsRecoverable(t *testing.T) {
+	update := newProgram("v0.1.31", "b")
+	for _, kind := range []string{"file", "link"} {
+		t.Run(kind, func(t *testing.T) {
+			store, server := serve(t)
+			target := installer(t, server)
+			unmanagedHost(t, target, kind)
+			store.publish(update)
+			trace := []string{}
+			target.Fault = func(step string) error { trace = append(trace, step); return nil }
+			if _, err := target.Apply(update.pin()); err != nil {
+				t.Fatalf("a clean apply: %v", err)
+			}
+			for _, step := range []string{"sync-staged", "sync-staged-directory", "rename-generation", "sync-generations"} {
+				if count := len(slices.DeleteFunc(slices.Clone(trace), func(s string) bool { return s != step })); count != 2 {
+					t.Fatalf("installing the pinned and the adopted generation crossed %s %d times: %v", step, count, trace)
+				}
+			}
+			for index, step := range trace {
+				t.Run(fmt.Sprintf("%02d-%s", index, step), func(t *testing.T) {
+					store, server := serve(t)
+					target := installer(t, server)
+					legacy := unmanagedHost(t, target, kind)
+					store.publish(update)
+					interrupted := errors.New("interrupted")
+					crossed := 0
+					target.Fault = func(string) error {
+						defer func() { crossed++ }()
+						if crossed == index {
+							return interrupted
+						}
+						return nil
+					}
+					if _, err := target.Apply(update.pin()); !errors.Is(err, interrupted) {
+						t.Fatalf("the fault at %s was not reported: %v", step, err)
+					}
+					target.Fault = nil
+					if got := runBinary(t, target.Layout); got != versionOf(legacy) && got != versionOf(update) {
+						t.Fatalf("after the interruption the host runs %q", got)
+					}
+					if err := target.Recover(); err != nil {
+						t.Fatalf("recover: %v", err)
+					}
+					if _, err := target.Apply(update.pin()); err != nil {
+						t.Fatalf("the next apply did not finish: %v", err)
+					}
+					if got := runBinary(t, target.Layout); got != versionOf(update) {
+						t.Fatalf("after recovery the host runs %q", got)
+					}
+					if _, err := target.Rollback("operator"); err != nil {
+						t.Fatalf("rollback: %v", err)
+					}
+					if got := runBinary(t, target.Layout); got != versionOf(legacy) {
+						t.Errorf("a rollback restores %q, not the adopted program", got)
+					}
+				})
 			}
 		})
 	}
