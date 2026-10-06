@@ -393,7 +393,7 @@ func shortIdentity(identity string) string {
 // failedStageName is the name setAsideOwnFailedStage gives a failed stage:
 // when the attempt began, the release identity, and a counter for attempts
 // that began in the same second. Such names sort by time.
-var failedStageName = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{1,12}(-[0-9]{3})?$`)
+var failedStageName = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}Z)-([0-9a-f]{1,12})(-[0-9]{3})?$`)
 
 // pruneFailedStages keeps the newest toolingFailedStageLimit failed stages.
 // Only a directory setAsideOwnFailedStage moved there counts, recognised by
@@ -405,14 +405,9 @@ func pruneFailedStages(failed string) error {
 	}
 	names := []string{}
 	for _, entry := range entries {
-		if !entry.IsDir() || !failedStageName.MatchString(entry.Name()) {
-			continue
+		if entry.IsDir() && ownFailedStage(failed, entry.Name()) {
+			names = append(names, entry.Name())
 		}
-		if info, err := os.Lstat(filepath.Join(failed, entry.Name(), toolingStageMarker)); err != nil ||
-			!info.Mode().IsRegular() {
-			continue
-		}
-		names = append(names, entry.Name())
 	}
 	sort.Strings(names)
 	for len(names) > toolingFailedStageLimit {
@@ -422,6 +417,37 @@ func pruneFailedStages(failed string) error {
 		names = names[1:]
 	}
 	return nil
+}
+
+// ownFailedStage reports whether failed/name is a stage setAsideOwnFailedStage
+// moved there: its marker is a small regular file that says UpKeeper created
+// it, for the release identity its name abbreviates, and, when the marker
+// records when it began, at the time its name gives. A marker that cannot be
+// read, does not parse, or says anything else makes the directory unknown,
+// and an unknown directory is never counted or deleted.
+func ownFailedStage(failed, name string) bool {
+	parts := failedStageName.FindStringSubmatch(name)
+	if parts == nil {
+		return false
+	}
+	path := filepath.Join(failed, name, toolingStageMarker)
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || info.Size() > 4096 {
+		return false
+	}
+	data, ok := readSmallRegularFile(path, 4096)
+	if !ok {
+		return false
+	}
+	var owner toolingStageOwner
+	if json.Unmarshal(data, &owner) != nil || owner.CreatedBy != "upkeeper" ||
+		owner.Identity == "" || shortIdentity(owner.Identity) != parts[2] {
+		return false
+	}
+	if started, err := time.Parse(toolingStageTime, owner.StartedAt); err == nil &&
+		started.UTC().Format(toolingStageTime) != parts[1] {
+		return false
+	}
+	return true
 }
 
 func probeTooling(c *Context, dir string, t *release.Tooling) error {

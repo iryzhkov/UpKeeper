@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
 func init() {
@@ -391,7 +392,44 @@ func t3NotInstalled(c *Context, t3Spec, observed map[string]any) bool {
 		return false
 	}
 	status, err := unitStatus(c, service)
-	return err == nil && status["LoadState"] == "not-found"
+	if err != nil || status["LoadState"] != "not-found" {
+		return false
+	}
+	return t3PackageAbsent(c)
+}
+
+// t3PackageAbsent reports whether npm itself says that no global t3 package
+// is installed. The observation leaves its package unset both when npm says
+// so and when npm could not answer at all, so absence is asked again here and
+// only a JSON object npm produced on its own terms, without an error and
+// without a t3 entry, counts. npm exits 1 when the package it was asked about
+// is not installed. A missing npm, a timeout, a permission error or output
+// that does not parse leaves the package unknown, which is not absent.
+func t3PackageAbsent(c *Context) bool {
+	result := c.Runner(procx.Command{
+		Argv: []string{"npm", "ls", "-g", "--depth=0", "--json", "t3"},
+		Env:  c.Env, Timeout: 30 * time.Second,
+	})
+	if result.Err != nil || result.TimedOut || (result.Code != 0 && result.Code != 1) {
+		return false
+	}
+	var document map[string]json.RawMessage
+	if json.Unmarshal([]byte(result.Stdout), &document) != nil || document == nil {
+		return false
+	}
+	if _, failed := document["error"]; failed {
+		return false
+	}
+	raw, listed := document["dependencies"]
+	if !listed {
+		return true
+	}
+	var dependencies map[string]json.RawMessage
+	if json.Unmarshal(raw, &dependencies) != nil || dependencies == nil {
+		return false
+	}
+	_, present := dependencies["t3"]
+	return !present
 }
 
 // stewardUnitPresent reports whether the host has a steward service unit at

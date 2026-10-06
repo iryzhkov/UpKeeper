@@ -62,7 +62,10 @@ var Catalogue = map[string][]Prerequisite{
 		command("python3", "python3", "python", "python"),
 		command("ssh", "openssh-client", "openssh", ""),
 		command("readlink", "coreutils", "coreutils", ""),
-		command("secret-tool", "libsecret-tools", "libsecret", "libsecret"),
+		// Staging checks for the keyring CLI with the others. A staged host does
+		// not need it: the OV key can live in the environment, the config or a
+		// key file, and the credential check looks at the keyring only last.
+		staging(command("secret-tool", "libsecret-tools", "libsecret", "libsecret")),
 		// Debian splits venv and ensurepip out of the interpreter; Arch and
 		// Homebrew ship them with python. The OV memory server lives in a venv.
 		{Name: "python3-venv", Command: "python3",
@@ -91,6 +94,11 @@ func command(name, debian, arch, darwin string) Prerequisite {
 		packages[Darwin] = darwin
 	}
 	return Prerequisite{Name: name, Command: name, Packages: packages}
+}
+
+func staging(p Prerequisite) Prerequisite {
+	p.Staging = true
+	return p
 }
 
 // Components lists the components that declare prerequisites, sorted.

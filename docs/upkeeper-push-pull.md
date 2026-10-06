@@ -254,8 +254,8 @@ copy. Everything else, Huyang included, is installed by the first `pull`.
    | Component | Needs | Debian package | Arch package |
    | --- | --- | --- | --- |
    | omarchy-setup | git | git | git |
-   | agent-tooling | mise, bash, curl, jq, python3, ssh, readlink, secret-tool | (mise from mise.run), bash, curl, jq, python3, openssh-client, coreutils, libsecret-tools | mise, bash, curl, jq, python, openssh, coreutils, libsecret |
-   | agent-tooling, when it stages a release | Python's venv and ensurepip | python3-venv | python |
+   | agent-tooling | mise, bash, curl, jq, python3, ssh, readlink | (mise from mise.run), bash, curl, jq, python3, openssh-client, coreutils | mise, bash, curl, jq, python, openssh, coreutils |
+   | agent-tooling, when it stages a release | secret-tool; Python's venv and ensurepip | libsecret-tools, python3-venv | libsecret, python |
    | huyang | git; go 1.21 or newer and make when it builds | git, golang-go, make | git, go, make |
 
    Go 1.21 and later fetch the toolchain Huyang's `go.mod` names. Debian 12's golang-go is
@@ -267,7 +267,9 @@ copy. Everything else, Huyang included, is installed by the first `pull`.
    - the OpenViking API key for ov-memory: `umask 077; mkdir -p ~/.config/ov-mcp; cat >
      ~/.config/ov-mcp/key` (paste the key, then Ctrl-D), or store it in the keyring with
      `secret-tool store --label='OpenViking API key' service openviking key api`;
-     `OV_API_KEY` or `api_key` in `~/.config/ov-mcp/config.toml` also count;
+     `OV_API_KEY` or `api_key` in `~/.config/ov-mcp/config.toml` also count. A host that
+   has already staged the release and keeps its key in one of those places does not need
+   secret-tool;
    - `~/.config/claude/oauth.env`, if T3 should authenticate providers (the seeded T3 unit
      reads it when present and warns when it is not);
    - the worker's Steward protocol credential that its `worker-configuration` entry names.
@@ -298,7 +300,8 @@ On the first converge of a fresh host, expect:
   in a private stage, renamed into place without ever replacing something that is already
   there, and its unit is seeded and started;
 - t3-steward to install its verified binary although no T3 exists yet: no T3 at all is a
-  safe pair transition, because nothing is running that the steward could be incompatible
+  safe pair transition (only when npm answers that no global t3 package is installed; an
+  npm that is missing, times out or cannot read its package tree refuses the transition), because nothing is running that the steward could be incompatible
   with and the candidate has proved that the release's T3 is in its range. When the host has
   no `t3-steward.service`, the binary is installed and verified without a restart and the
   action says so; install the service with `t3-steward install-service` once T3 serves;
