@@ -62,6 +62,12 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 	if !t3TransactionName.MatchString(name) {
 		return "", Failf("retained T3 transaction name is not a transaction directory: %q", name)
 	}
+	// The journal is read, checked and published under the host's target lock
+	// the run took, which serializes this command with every UpKeeper run. A
+	// dry run writes nothing and may observe without it.
+	if !c.DryRun && !c.lockHeld {
+		return "", Failf("retained T3 transaction %s not reconciled: the host's target lock is not held", name)
+	}
 	service := adapterSpecString(spec, "service")
 	if _, _, err := stewardVerifyPairBinary(c, t3StewardBinary(c)); err != nil {
 		return "", err
@@ -113,7 +119,8 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 		j.State != state || (j.Service != "" && j.Service != service) {
 		return "", Failf("retained T3 transaction %s does not own the current prefix, launcher, provenance or unit", name)
 	}
-	tx := &t3Transaction{c: c, prefix: prefix, packagePath: j.Package, link: j.Link, state: state, dir: dir}
+	tx := &t3Transaction{c: c, prefix: prefix, packagePath: j.Package, link: j.Link, state: state, dir: dir,
+		journalInfo: journalInfo, journalBytes: body}
 	failedState := filepath.Join(filepath.Dir(state), "failed-"+name)
 	// The record this reconciliation read: the same inode with the same bytes,
 	// so neither a replacement nor an in-place change by another writer is
@@ -288,10 +295,10 @@ func t3ReconcileRetained(c *Context, spec map[string]any, name string, actions *
 	if err != nil {
 		return "", err
 	}
-	// Publish only over the exact record read, in the directory first opened.
-	tx.publishFence = func(previous string) error {
-		return errors.Join(journalUnchanged(previous), unchanged())
-	}
+	// Publish only over the exact record read (the transaction's journal
+	// snapshot), in the directory first opened, with every owned boundary
+	// unchanged.
+	tx.publishFence = func(string) error { return unchanged() }
 	if err = tx.persistJournal("reconciled", next); err != nil {
 		return "", fmt.Errorf("retained T3 transaction %s still files-restored; reconciliation journal failed: %w", name, &t3JournalError{err})
 	}

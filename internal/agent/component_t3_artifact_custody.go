@@ -56,22 +56,26 @@ func t3Must(c *Context, argv []string, timeout time.Duration, what string) error
 		timeout = 60 * time.Second
 	}
 	result := c.Runner(procx.Command{Argv: argv, Env: c.Env, Timeout: timeout})
-	var output string
-	switch {
-	case result.TimedOut:
-		output = "timeout"
-	case result.Err != nil:
-		output = result.Err.Error()
-	case result.Code == 0:
+	if !result.TimedOut && result.Err == nil && result.Code == 0 {
 		return nil
-	default:
-		output = strings.TrimSpace(result.Stdout + result.Stderr)
 	}
-	output = redact.Text(output)
+	output := t3RedactedOutput(result)
 	if len(output) > 400 {
 		output = output[len(output)-400:]
 	}
 	return Failf("%s failed: %s", what, output)
+}
+
+// t3RedactedOutput is the complete output of one command, redacted before any
+// bound or line is taken from it.
+func t3RedactedOutput(result procx.Result) string {
+	switch {
+	case result.TimedOut:
+		return "timeout"
+	case result.Err != nil:
+		return redact.Text(result.Err.Error())
+	}
+	return redact.Text(strings.TrimSpace(result.Stdout + result.Stderr))
 }
 
 // t3PredicateSample is the evidence of one readiness observation: each

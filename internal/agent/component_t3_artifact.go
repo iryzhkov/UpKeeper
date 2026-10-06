@@ -222,9 +222,15 @@ type t3Transaction struct {
 	// of each active dependent, empty for a known inactive one. The active ones
 	// are restoration obligations for rollback and reconciliation.
 	dependents map[string]string
-	// publishFence, when set, proves the journal about to be replaced is still
-	// the record the caller read; persistJournal refuses otherwise.
+	// publishFence, when set, proves every other boundary the caller owns is
+	// unchanged immediately before publication; persistJournal refuses otherwise.
 	publishFence func(path string) error
+	// journalInfo and journalBytes are the journal snapshot taken under the
+	// host's target lock: the record this transaction last published, or the
+	// retained record reconciliation read. Nil before the first record.
+	// Publication refuses unless the on-disk journal is still exactly it.
+	journalInfo  os.FileInfo
+	journalBytes []byte
 }
 
 func t3Begin(c *Context, prefix string) (*t3Transaction, error) {

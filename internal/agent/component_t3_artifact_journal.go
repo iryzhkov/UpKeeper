@@ -7,11 +7,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
-	"unsafe"
+	"strings"
 
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
+
+// Journal concurrency contract. The supported writers of a transaction's
+// transaction.json are UpKeeper runs and the explicit --reconcile-t3-transaction
+// command, and both hold the host's target deployment lock for the whole
+// read-check-publish sequence, so they are serialized. Any other writer is
+// unsupported. Publication compares the on-disk journal with the snapshot this
+// transaction took under the lock (the record it last published, or read) and
+// refuses on any difference, leaving the journal untouched and keeping the
+// intended record under a quarantine name beside it. Nothing that is not
+// provably this transaction's is exchanged, undone or deleted; a leftover
+// temporary name is renamed to a quarantine name, not removed. An unsupported
+// writer acting between the final re-check and the rename is outside the
+// contract.
 
 type t3JournalError struct{ error }
 
@@ -35,26 +47,6 @@ func t3Absent(path string) bool {
 	return os.IsNotExist(e)
 }
 
-// t3RenameExchange atomically exchanges two paths with renameat2
-// RENAME_EXCHANGE, so neither record is ever unlinked by the swap.
-func t3RenameExchange(a, b string) error {
-	from, e := syscall.BytePtrFromString(a)
-	if e != nil {
-		return e
-	}
-	to, e := syscall.BytePtrFromString(b)
-	if e != nil {
-		return e
-	}
-	const renameExchange = 1 << 1
-	atFDCWD := -100 // AT_FDCWD: both paths resolve from the working directory.
-	fd := uintptr(atFDCWD)
-	if _, _, errno := syscall.Syscall6(t3SysRenameat2, fd, uintptr(unsafe.Pointer(from)), fd, uintptr(unsafe.Pointer(to)), renameExchange, 0); errno != 0 {
-		return &os.LinkError{Op: "renameat2 exchange", Old: a, New: b, Err: errno}
-	}
-	return nil
-}
-
 // t3SameRecord proves path holds the expected journal record: the same inode
 // with the same bytes.
 func t3SameRecord(path string, expected os.FileInfo, want []byte) error {
@@ -68,27 +60,67 @@ func t3SameRecord(path string, expected os.FileInfo, want []byte) error {
 	return nil
 }
 
-// t3ExchangeRecord atomically swaps the records at from and to, then proves the
-// record it moved away from to was the expected one. Otherwise it swaps them
-// back, so a record another writer published or changed meanwhile is returned
-// to its place and never overwritten or unlinked.
-func t3ExchangeRecord(from, to string, expected os.FileInfo, want []byte) error {
-	if e := t3RenameExchange(from, to); e != nil {
-		return fmt.Errorf("atomic journal exchange failed: %w", e)
+// t3Quarantine moves a leftover journal file to a new, unique quarantine name
+// beside the journal and returns where its bytes are now. It never replaces an
+// existing name and never deletes bytes: the old name is dropped only after
+// the quarantine name is proved to hold the same inode, and when no
+// quarantine name can be made the file keeps its own name.
+func t3Quarantine(path string) string {
+	dir := filepath.Dir(path)
+	base := strings.TrimPrefix(filepath.Base(path), ".")
+	for i := 0; i < 8; i++ {
+		q := filepath.Join(dir, fmt.Sprintf("transaction.json.quarantine-%s-%d", base, i))
+		if e := os.Link(path, q); e != nil {
+			if os.IsExist(e) {
+				continue
+			}
+			return path
+		}
+		from, e := os.Lstat(path)
+		to, err := os.Lstat(q)
+		if e == nil && err == nil && os.SameFile(from, to) {
+			_ = os.Remove(path)
+		}
+		return q
 	}
-	if e := t3SameRecord(from, expected, want); e != nil {
-		return errors.Join(fmt.Errorf("another writer changed the journal; its record is kept: %w", e), t3RenameExchange(from, to))
-	}
-	return nil
+	return path
 }
 
-// Publish only a completely written, synced and closed journal. Keep the old
-// inode until the directory rename is durable; a failed directory sync restores
-// that inode and reports failure even if the restoration sync also fails.
-// Publication and restoration each exchange records atomically and verify what
-// they displaced, so a record another writer left after the publish fence is
-// kept, together with the superseded record recovery needs.
+// t3Discard drops a name this publication made for a record it proved its
+// own. A name that no longer holds exactly that record is quarantined instead.
+func t3Discard(path string, expected os.FileInfo, want []byte) string {
+	if t3SameRecord(path, expected, want) == nil {
+		if os.Remove(path) == nil {
+			return ""
+		}
+	}
+	return t3Quarantine(path)
+}
+
+// journalCurrent proves the journal at target is still the snapshot this
+// transaction took under the lock: absent before its first record, otherwise
+// the same inode with the same bytes.
+func (tx *t3Transaction) journalCurrent(target string) error {
+	if tx.journalInfo == nil {
+		if _, e := os.Lstat(target); !os.IsNotExist(e) {
+			return errors.New("journal record appeared")
+		}
+		return nil
+	}
+	return t3SameRecord(target, tx.journalInfo, tx.journalBytes)
+}
+
+// Publish only a completely written, synced and closed journal, and only over
+// the snapshot taken under the host's target lock: write a temporary file,
+// sync it, re-check the journal, rename over it, sync the directory. The
+// superseded inode is kept under a second name until the directory rename is
+// durable; a failed directory sync restores it, but only while the journal is
+// still exactly the record just published, and reports failure even if the
+// restoration sync also fails.
 func (tx *t3Transaction) persistJournal(phase string, b []byte) error {
+	if !tx.c.lockHeld {
+		return errors.New("journal not published: the host's target lock is not held")
+	}
 	create := func(dir, pattern string) (t3JournalFile, error) { return os.CreateTemp(dir, pattern) }
 	directory := func(dir string) (t3JournalFile, error) { return os.Open(dir) }
 	if tx.c.t3JournalFiles != nil {
@@ -99,18 +131,18 @@ func (tx *t3Transaction) persistJournal(phase string, b []byte) error {
 			directory = tx.c.t3JournalFiles.directory
 		}
 	}
+	target := filepath.Join(tx.dir, "transaction.json")
 	f, e := create(tx.dir, ".journal-"+phase+"-*")
 	if e != nil {
 		return e
 	}
-	// After an exchange the temporary name holds the superseded record, and if
-	// undoing an exchange failed, another writer's record, which is kept.
-	var written, superseded os.FileInfo
+	// Until the rename publishes it, the temporary name holds only the intended
+	// record; a publication that stops early keeps it under a quarantine name.
+	published := false
 	defer func() {
-		if info, e := os.Lstat(f.Name()); e == nil && written != nil && !os.SameFile(info, written) && (superseded == nil || !os.SameFile(info, superseded)) {
-			return
+		if !published && !t3Absent(f.Name()) {
+			t3Quarantine(f.Name())
 		}
-		_ = os.Remove(f.Name())
 	}()
 	n, e := f.Write(b)
 	if e == nil && n != len(b) {
@@ -131,83 +163,78 @@ func (tx *t3Transaction) persistJournal(phase string, b []byte) error {
 	if e = errors.Join(d.Sync(), d.Close()); e != nil {
 		return e
 	}
-	target := filepath.Join(tx.dir, "transaction.json")
-	previous := f.Name() + "-previous"
-	if e = os.Link(target, previous); e != nil && !os.IsNotExist(e) {
-		return e
-	}
-	hadPrevious := e == nil
-	cleanupPrevious := false
-	defer func() {
-		if cleanupPrevious {
-			_ = os.Remove(previous)
-		}
-	}()
-	var supersededBytes []byte
-	if hadPrevious {
-		if superseded, e = os.Lstat(previous); e == nil {
-			supersededBytes, e = release.T3ReadFile(previous, t3JournalLimit)
-		}
-		if e != nil {
-			cleanupPrevious = true
-			return e
-		}
-	}
-	// The hard link pins the journal about to be replaced, so the fence proves
-	// the exact record this write supersedes, not a newer one.
-	if tx.publishFence != nil {
-		if e = tx.publishFence(previous); e != nil {
-			cleanupPrevious = hadPrevious
-			return e
-		}
-	}
-	if written, e = os.Lstat(f.Name()); e != nil {
-		cleanupPrevious = hadPrevious
-		return e
-	}
-	// A writer acting after the fence either left a record where none was, which
-	// the link refuses to replace, or replaced or changed the superseded record,
-	// which the exchange detects and undoes.
-	if hadPrevious {
-		e = t3ExchangeRecord(f.Name(), target, superseded, supersededBytes)
-	} else {
-		e = os.Link(f.Name(), target)
-	}
+	written, e := os.Lstat(f.Name())
 	if e != nil {
-		cleanupPrevious = hadPrevious
 		return e
 	}
+	// refuse leaves the journal as it is and keeps the intended record under a
+	// quarantine name, reporting both paths.
+	refuse := func(cause error) error {
+		published = true
+		return fmt.Errorf("journal not published: %w; %s left untouched; intended record kept at %s", cause, target, t3Quarantine(f.Name()))
+	}
+	if tx.publishFence != nil {
+		if e = tx.publishFence(target); e != nil {
+			return refuse(e)
+		}
+	}
+	if e = tx.journalCurrent(target); e != nil {
+		return refuse(fmt.Errorf("the journal differs from the record read under the target lock: %w", e))
+	}
+	// Pin the superseded record under a second name for durability recovery,
+	// and prove the pinned inode is still the snapshot.
+	previous := ""
+	if tx.journalInfo != nil {
+		previous = f.Name() + "-previous"
+		if e = os.Link(target, previous); e != nil {
+			return refuse(fmt.Errorf("the journal differs from the record read under the target lock: %w", e))
+		}
+		if e = t3SameRecord(previous, tx.journalInfo, tx.journalBytes); e != nil {
+			return refuse(fmt.Errorf("the journal differs from the record read under the target lock: %w; its record is also kept at %s", e, t3Quarantine(previous)))
+		}
+	}
+	if e = os.Rename(f.Name(), target); e != nil {
+		if previous != "" {
+			e = errors.Join(e, fmt.Errorf("superseded record kept at %s", t3Discard(previous, tx.journalInfo, tx.journalBytes)))
+		}
+		return e
+	}
+	published = true
 	d, e = directory(tx.dir)
 	if e == nil {
 		e = errors.Join(d.Sync(), d.Close())
 	}
 	if e != nil {
-		// Withdraw this record only while the journal is still exactly it. A
-		// newer record stays, and so does the superseded one recovery needs.
-		switch {
-		case !hadPrevious:
-			if ours := t3SameRecord(target, written, b); ours != nil {
-				e = errors.Join(e, fmt.Errorf("another writer changed the journal; its record is kept: %w", ours))
-			} else {
-				e = errors.Join(e, os.Remove(target))
+		// Withdraw the record only while the journal is still exactly it. A
+		// record another writer left stays, and so does the superseded one.
+		if ours := t3SameRecord(target, written, b); ours != nil {
+			e = errors.Join(e, fmt.Errorf("%s was changed by an unsupported writer and is left untouched: %w", target, ours))
+			if previous != "" {
+				e = errors.Join(e, fmt.Errorf("superseded record kept at %s", t3Quarantine(previous)))
 			}
-		case t3SameRecord(target, written, b) != nil:
-			e = errors.Join(e, fmt.Errorf("another writer changed the journal; its record is kept and the superseded record is at %s", previous))
-		default:
-			if restoreErr := t3ExchangeRecord(previous, target, written, b); restoreErr != nil {
-				e = errors.Join(e, restoreErr, fmt.Errorf("superseded record kept at %s", previous))
-			} else {
-				// The withdrawn record now has the superseded record's name.
-				cleanupPrevious = true
+		} else if previous != "" {
+			if restoreErr := os.Rename(previous, target); restoreErr != nil {
+				e = errors.Join(e, restoreErr, fmt.Errorf("superseded record kept at %s", t3Quarantine(previous)))
 			}
+		} else {
+			e = errors.Join(e, os.Remove(target))
 		}
 		if d, restoreErr := directory(tx.dir); restoreErr == nil {
 			e = errors.Join(e, d.Sync(), d.Close())
 		} else {
 			e = errors.Join(e, restoreErr)
 		}
+		// The snapshot follows whatever this transaction's record now is.
+		if t3SameRecord(target, written, b) == nil {
+			tx.journalInfo, tx.journalBytes = written, b
+		}
 		return fmt.Errorf("journal replacement durability failed: %w", e)
 	}
-	cleanupPrevious = true
+	// The pinned superseded record is dropped only while it is still exactly
+	// the snapshot; otherwise it is quarantined.
+	if previous != "" {
+		t3Discard(previous, tx.journalInfo, tx.journalBytes)
+	}
+	tx.journalInfo, tx.journalBytes = written, b
 	return nil
 }

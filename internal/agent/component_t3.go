@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
@@ -133,7 +134,8 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 			}
 		}
 	}
-	check := c.Run([]string{t3StewardBinary(c), "check"}, 30*time.Second, "")
+	checked := c.Runner(procx.Command{Argv: []string{t3StewardBinary(c), "check"}, Env: c.Env, Timeout: 30 * time.Second})
+	check := commandResult(checked)
 	if served := t3ServedPattern.FindStringSubmatch(check.Output); served != nil {
 		observed["served"] = served[1]
 	}
@@ -147,8 +149,14 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 	observed["service_active"] = c.UnitActive(service)
 	observed["check_ok"] = check.OK
 	if !check.OK {
-		// The first line is what a refusal quotes; the tail is already bounded.
-		observed["check_error"] = firstLine(check.Output)
+		// The first line is what a refusal quotes, and readiness samples keep it
+		// as custody evidence. It comes from the complete output, redacted first:
+		// the tail Run keeps can cut a secret away from the label redaction needs.
+		checkError := firstLine(t3RedactedOutput(checked))
+		if len(checkError) > 2000 {
+			checkError = checkError[:2000]
+		}
+		observed["check_error"] = checkError
 	}
 	observed["installed_path"], observed["installed_path_exists"] = t3ServiceBinary(c, service)
 	files := t3RunningFiles(c, service)

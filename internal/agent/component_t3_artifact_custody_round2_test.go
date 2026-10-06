@@ -89,9 +89,10 @@ type t3SyncFailureDirectory struct{ *os.File }
 
 func (f *t3SyncFailureDirectory) Sync() error { return errors.New("synthetic directory sync failure") }
 
-// F7: reconciliation publishes its record, then another writer records an
-// operator intervention while the directory sync runs, and the sync fails.
-// Withdrawing the publication must not overwrite the newer record.
+// F7: reconciliation publishes its record, then an unsupported writer records
+// an operator intervention while the directory sync runs, and the sync fails.
+// Withdrawing the publication must not overwrite the newer record, and the
+// superseded record is kept under a quarantine name, not deleted.
 func TestT3ReconcileDurabilityRecoveryKeepsNewerJournal(t *testing.T) {
 	h := newT3CustodyHost(t)
 	_, name := h.filesRestored(t)
@@ -118,22 +119,21 @@ func TestT3ReconcileDurabilityRecoveryKeepsNewerJournal(t *testing.T) {
 		t.Fatal("durability recovery overwrote the newer operator journal after the publish fence")
 	}
 	// The superseded record stays available beside the newer one.
-	kept := false
-	entries, _ := os.ReadDir(dir)
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), "-previous") {
-			b, _ := os.ReadFile(filepath.Join(dir, entry.Name()))
-			kept = kept || string(b) == string(original)
+	kept := ""
+	for name, b := range t3Quarantined(t3DirFiles(t, dir)) {
+		if b == string(original) {
+			kept = name
 		}
 	}
-	if !kept {
-		t.Fatal("superseded record needed for recovery was not kept")
+	if kept == "" || !strings.Contains(e.Error(), filepath.Join(dir, kept)) {
+		t.Fatalf("superseded record needed for recovery was not kept and reported: %v", e)
 	}
 }
 
-// F7: another writer acts after the publish fence passed and before the new
-// record is published, by replacing the journal or changing it in place.
-// Publication refuses and the other writer's record survives byte-identical.
+// F7: an unsupported writer acts after the snapshot was taken and before the
+// new record is published, by replacing the journal or changing it in place.
+// Publication refuses, the other writer's record survives byte-identical and
+// the intended record is quarantined beside it.
 func TestT3JournalPublicationKeepsWriterAfterFence(t *testing.T) {
 	for _, writer := range []string{"replaced", "changed-in-place"} {
 		t.Run(writer, func(t *testing.T) {
@@ -158,6 +158,9 @@ func TestT3JournalPublicationKeepsWriterAfterFence(t *testing.T) {
 			}
 			if got, _ := os.ReadFile(path); string(got) != string(newer) {
 				t.Fatalf("newer journal overwritten: %s", got)
+			}
+			if t3QuarantinedPhase(t, t3DirFiles(t, tx.dir), "next") == "" {
+				t.Fatal("intended record not quarantined")
 			}
 		})
 	}

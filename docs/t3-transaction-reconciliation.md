@@ -14,6 +14,10 @@ activation fails and how to close one that rollback left at `files-restored`.
   without the label redaction needs. It is journaled at
   `restoration-required`, before any rollback effect, and is never replaced by
   the restoration result.
+- A failed health check (`t3-steward check`) is quoted as `check_error` in
+  every readiness sample. That line is taken from the complete check output
+  after redaction, never from an already bounded tail, for the post-restart
+  samples and the restoration samples alike.
 - `failed_samples` holds each failed readiness sample: the installed, served,
   health, artifact-installed, artifact-served (native descendant), unit binding
   and dependent-unit predicates, which of them failed, the stage
@@ -43,17 +47,40 @@ does not stop a dependent from running on its own, rollback adds no restart to
 bring one back, and an original dependent not active again leaves the
 transaction at `files-restored`.
 
-Each journal record is published by atomically exchanging it with the record
-it supersedes (`renameat2` `RENAME_EXCHANGE`) and checking that the displaced
-record is the one expected: the same inode with the same bytes. If another
-writer replaced or changed the record meanwhile, the exchange is undone and the
-write refuses. If the directory sync after publication fails, the new record is
-withdrawn only while the journal is still exactly that record; a newer record
-from another writer is kept, together with the superseded record (named
-`.journal-*-previous` in the transaction directory) that recovery needs.
-
 A record written before this change has none of these fields. Its original
 cause was not retained and cannot be reconstructed.
+
+## Journal writers and concurrency
+
+The supported writers of `transaction.json` are UpKeeper runs and the
+`--reconcile-t3-transaction` command. Both hold the host's target deployment
+lock (`~/.local/state/dev-fleet/locks/HOST.lock`) for the whole
+read-check-publish sequence, so they never interleave; a journal write without
+that lock refuses before it creates any file. Any other writer, such as an
+operator editing the file by hand during a run, is unsupported.
+
+A transaction keeps a snapshot of its journal taken under the lock: the record
+it last published, or for reconciliation the retained record it read (inode
+and bytes). Each publication writes a temporary file and syncs it, re-checks
+that the on-disk journal is still exactly that snapshot, renames the temporary
+file over `transaction.json` and syncs the directory. If the journal differs,
+because an unsupported writer changed, replaced, removed or created it, the
+publication refuses: `transaction.json` is left exactly as that writer left it,
+the intended record is kept beside it as
+`transaction.json.quarantine-*`, and the error names both paths. Every later
+publication by the same transaction refuses the same way. No record is
+exchanged, undone or deleted unless it is provably this transaction's, and a
+leftover temporary name is renamed to a quarantine name rather than removed.
+
+If the directory sync after the rename fails, the superseded record (kept
+under a second name until then) is restored only while `transaction.json` is
+still exactly the record just published; otherwise the journal is left alone
+and the superseded record is quarantined. A publication linearizes at its
+rename: a write by an unsupported writer after that point supersedes it, and
+the run still reports the publication it made. An unsupported writer acting
+in the short window between the final re-check and the rename, or between a
+failed sync's check and its restoration, is outside this contract and can be
+overwritten.
 
 ## Reconciling a files-restored transaction
 
@@ -77,9 +104,10 @@ hold, and otherwise refuses with the journal and every retained tree unchanged:
   package, and its record is at `files-restored` and names the current prefix,
   package, launcher, provenance path and unit;
 - the transaction directory and `transaction.json` are the same directory and
-  file, with the same bytes, as when reconciliation read them, at every fence
-  and again immediately before the new record is published; a record changed
-  or replaced by another writer is refused and left as that writer left it;
+  file, with the same bytes, as when reconciliation read them under the
+  target lock, at every fence and again immediately before the new record is
+  published; a record changed or replaced by an unsupported writer is refused
+  and left as that writer left it, with the reconciled record quarantined;
 - the live package tree, launcher and provenance equal the transaction's
   original digests, and no `current-previous` recovery backup exists;
 - the retained failed tree (`failed`) and failed provenance and receipts
