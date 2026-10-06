@@ -700,8 +700,14 @@ func TestInspectionProcessHelper(t *testing.T) {
 		return
 	}
 	file := strings.TrimPrefix(os.Args[len(os.Args)-1], "a1-helper:")
-	if err := os.WriteFile(file, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+	// Publish atomically: write a temporary file in the same directory, then
+	// rename it into place so a reader never sees an empty or partial pid file.
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
 		os.Exit(91)
+	}
+	if err := os.Rename(tmp, file); err != nil {
+		os.Exit(92)
 	}
 	for {
 		time.Sleep(time.Second)
@@ -738,12 +744,12 @@ func TestInspectionRealAdapterCancellation(t *testing.T) {
 	timeout := time.After(5 * time.Second)
 ready:
 	for {
+		// Empty or partial content means the helper has not published yet.
 		if raw, err := os.ReadFile(pidfile); err == nil {
-			pid, err = strconv.Atoi(string(raw))
-			if err != nil {
-				t.Fatal(err)
+			if parsed, perr := strconv.Atoi(strings.TrimSpace(string(raw))); perr == nil {
+				pid = parsed
+				break ready
 			}
-			break ready
 		}
 		select {
 		case <-done:
