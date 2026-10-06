@@ -8,6 +8,24 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- A failed controlled T3 activation now journals its original cause and every
+  failed installed, served, health, native and unit predicate sample before
+  rollback, and reports the restoration result beside that cause instead of
+  replacing it. Post-restart and restoration readiness are bounded probes that
+  also require Steward units declared `PartOf=` the T3 unit to return under a
+  new invocation; unknown dependent activity refuses before any effect, and
+  dependents active before the activation remain restoration obligations, also
+  when the T3 unit itself was inactive. Failed transaction command and health
+  check output is redacted complete before it is bounded. Journal records are
+  published only under the host's target lock and only over the record the
+  transaction last wrote or read; a journal changed by any other writer is
+  left untouched and the intended record is quarantined beside it.
+  `upkeeper pull --hosts HOST --components t3
+  --reconcile-t3-transaction NAME` explicitly closes one transaction left at
+  `files-restored` once every retained tree, the unit and the serving identity
+  prove unchanged; it does not perform legacy updater retirement. See
+  `docs/t3-transaction-reconciliation.md`.
+
 - `upkeeper author --steward VERSION --omarchy-setup COMMIT` writes an authored
   release into `desired/release.json` without capturing any host. It sets the
   Steward and omarchy-setup pins and refreshes the agent-environment skills and

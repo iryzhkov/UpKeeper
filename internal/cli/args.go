@@ -54,6 +54,10 @@ type arguments struct {
 	dryRun          bool
 	pullTimeout     int
 	to              string
+	// reconcileT3 is pull's explicit resume of one retained controlled T3
+	// transaction left at files-restored. It is its own flag rather than a
+	// mode of a general --force: it names one transaction on one host.
+	reconcileT3 string
 
 	// shared
 	components []string
@@ -319,8 +323,29 @@ func parsePull(parsed *arguments, argv []string, choices []string) error {
 			}
 			parsed.to = value
 			index = next
+		case "--reconcile-t3-transaction":
+			if parsed.command != "pull" {
+				return unrecognized(token)
+			}
+			value, next, err := takeValue(argv, index, "--reconcile-t3-transaction")
+			if err != nil {
+				return err
+			}
+			parsed.reconcileT3 = value
+			index = next
 		default:
 			return unrecognized(token)
+		}
+	}
+	if parsed.reconcileT3 != "" {
+		if !strings.HasPrefix(parsed.reconcileT3, ".upkeeper-t3-") || strings.ContainsRune(parsed.reconcileT3, '/') {
+			return usagef("argument --reconcile-t3-transaction: expected a .upkeeper-t3-* transaction name")
+		}
+		if len(parsed.hosts) != 1 || parsed.all || parsed.selfOnly {
+			return usagef("argument --reconcile-t3-transaction: requires --hosts with exactly one host")
+		}
+		if len(parsed.components) != 1 || parsed.components[0] != "t3" {
+			return usagef("argument --reconcile-t3-transaction: requires --components t3")
 		}
 	}
 	if parsed.command == "rollback" && parsed.to == "" {

@@ -64,7 +64,7 @@ func t3RetainedUpstreamApply(c *Context, spec map[string]any, actions *[]string)
 	if e != nil || current != binding {
 		return "", errors.New("retained upstream service mapping changed before restart")
 	}
-	if _, e = c.Must([]string{"systemctl", "--user", "restart", service}, 0, "", "restart idle retained upstream T3"); e != nil {
+	if e = t3Must(c, []string{"systemctl", "--user", "restart", service}, 0, "restart idle retained upstream T3"); e != nil {
 		return "", e
 	}
 	after, e := t3Observe(c, spec)

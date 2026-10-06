@@ -371,6 +371,7 @@ func runConvergence(parsed *arguments, streams Streams) (int, error) {
 		SelfOnly:        parsed.selfOnly,
 		SkipUnreachable: parsed.skipUnreachable,
 		Process:         procx.Run,
+		ReconcileT3:     parsed.reconcileT3,
 	})
 	if err != nil {
 		return exitcode.Preflight, err

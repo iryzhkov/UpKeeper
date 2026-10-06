@@ -320,7 +320,7 @@ func spoolCommands() map[string]struct{} {
 var spoolFlags = []string{
 	"all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head", "expect-release-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "previous",
-	"publish-diverged-instructions", "quota-pool", "reason", "repository",
+	"publish-diverged-instructions", "quota-pool", "reason", "reconcile-t3-transaction", "repository",
 	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "workers",
 }
 

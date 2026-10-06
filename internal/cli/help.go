@@ -155,11 +155,16 @@ func pushHelp(program string) string {
 func pullHelp(program string) string {
 	return "usage: " + program + " pull [-h] (--hosts HOST [HOST ...] | --all | --self)" +
 		" [--skip-unreachable] [--components COMPONENT [COMPONENT ...]]" +
-		" [--dry-run] [--timeout TIMEOUT] [--json]\n\noptions:\n" +
+		" [--dry-run] [--timeout TIMEOUT] [--json]" +
+		" [--reconcile-t3-transaction NAME]\n\noptions:\n" +
 		helpOption + "\n" +
 		describe("  --hosts HOST [HOST ...]", "exact inventory names") +
 		describe("  --all", "every inventory host") +
 		describe("  --self", "read this checkout and converge only this inventory machine") +
+		describe("  --reconcile-t3-transaction NAME",
+			"verify and record one retained .upkeeper-t3-* transaction left at files-restored; "+
+				"needs one --hosts HOST and --components t3, restarts and moves nothing, "+
+				"refuses any drift; with --dry-run it only reports") +
 		convergeOptions() +
 		componentChoices()
 }

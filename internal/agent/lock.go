@@ -39,6 +39,7 @@ func (c *Context) acquireLock() (map[string]any, error) {
 		}
 		if owner != nil {
 			if runID, ok := owner["run_id"].(string); ok && runID == c.RunID {
+				c.lockHeld = true
 				return nil, nil
 			}
 			return owner, nil
@@ -72,11 +73,13 @@ func (c *Context) acquireLock() (map[string]any, error) {
 		return nil, err
 	}
 	c.lockOwned = true
+	c.lockHeld = true
 	return nil, nil
 }
 
 // releaseLock drops only a lock this agent created.
 func (c *Context) releaseLock() {
+	c.lockHeld = false
 	if !c.lockOwned {
 		return
 	}

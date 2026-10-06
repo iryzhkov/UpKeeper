@@ -47,6 +47,10 @@ type Payload struct {
 	Manifest       map[string]any    `json:"manifest"`
 	StoredFiles    map[string]string `json:"stored_files"`
 	Lock           map[string]any    `json:"lock"`
+	// ReconcileT3Transaction names one retained controlled T3 transaction left
+	// at files-restored for the explicit, guarded reconciliation pull
+	// --reconcile-t3-transaction asks for. Empty in every other run.
+	ReconcileT3Transaction string `json:"reconcile_t3_transaction,omitempty"`
 }
 
 // StepFailed is a component step that did not complete. The host stops here.
@@ -102,6 +106,10 @@ type Context struct {
 	t3JournalFiles *t3JournalFiles // Owned journal IO; nil uses the filesystem.
 	lockDirectory  string
 	lockOwned      bool
+	// lockHeld is true while this run holds the host's target lock, whether it
+	// created the lock or re-entered the one its own controller holds. T3
+	// transaction journals are published only under it.
+	lockHeld bool
 }
 
 // now reads the context's clock.
@@ -144,7 +152,11 @@ func (c *Context) Run(argv []string, timeout time.Duration, dir string) CommandR
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	result := c.Runner(procx.Command{Argv: argv, Dir: dir, Env: c.Env, Timeout: timeout})
+	return commandResult(c.Runner(procx.Command{Argv: argv, Dir: dir, Env: c.Env, Timeout: timeout}))
+}
+
+// commandResult is the bounded result Run reports for one runner result.
+func commandResult(result procx.Result) CommandResult {
 	if result.TimedOut {
 		return CommandResult{Code: -1, Output: "timeout", TimedOut: true}
 	}
@@ -369,7 +381,9 @@ func Execute(context *Context) map[string]any {
 
 	worst := "converged"
 	stop := false
-	if context.Payload.RetireUpdater {
+	// Explicit T3 transaction reconciliation only rewrites that transaction's
+	// journal, so it never performs the unrelated legacy updater retirement.
+	if context.Payload.RetireUpdater && context.Payload.ReconcileT3Transaction == "" {
 		retirement := RetireLegacyUpdater(context)
 		result["legacy_updater"] = retirement
 		state, _ := retirement["state"].(string)

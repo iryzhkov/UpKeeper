@@ -61,6 +61,9 @@ func adapterTestContext(t *testing.T, runner *adapterTestRunner) *Context {
 		Env:     []string{"PATH=" + filepath.Join(home, "no-such-bin")},
 		Runtime: filepath.Join(home, "run"),
 		Runner:  runner.run,
+		// Execute takes the host's target lock before any handler runs; a
+		// handler test stands in for that run.
+		lockHeld: true,
 	}
 }
 
