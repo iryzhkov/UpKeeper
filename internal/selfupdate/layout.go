@@ -9,6 +9,7 @@
 // installed as a generation:
 //
 //	~/.local/lib/upkeeper/generations/<sha256>/upkeeper   the binary, 0500
+//	~/.local/lib/upkeeper/generations/<sha256>/.durable   its publication was flushed
 //	~/.local/lib/upkeeper/current  -> generations/<name>  relative symlink
 //	~/.local/lib/upkeeper/previous -> generations/<name>  relative symlink
 //	~/.local/bin/upkeeper -> ../lib/upkeeper/current/upkeeper
@@ -16,7 +17,10 @@
 //
 // Every link is replaced by creating a fresh symlink beside it, renaming it
 // over the old one and syncing the directory, so a crash at any point leaves
-// current naming a complete generation. Three generations are kept, and the
+// current naming a complete generation. A generation is published only once
+// its files, its directory and its name have all been flushed, which its
+// .durable marker records; nothing switches to a generation without it until
+// those flushes have been made again. Three generations are kept, and the
 // current and previous ones are never removed.
 package selfupdate
 

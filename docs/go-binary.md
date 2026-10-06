@@ -246,7 +246,13 @@ runs while the host has a scheduled hold marker.
    the staged generation directory are each flushed before the directory is
    renamed into `generations/`, and that directory is flushed before
    `current` can name it; a failure of any flush stops the install with
-   `current` unchanged. The first time, whatever that path held
+   `current` unchanged. Only after the flush of `generations/` succeeds is
+   the generation recorded as durable, by a flushed `.durable` marker inside
+   it. A generation that exists without the marker, such as one an earlier
+   attempt named before that flush failed, is never trusted for its valid
+   digest: an apply, `self install`, adoption, rollback or recovery that
+   would reuse or switch to it makes every flush again and refuses, with
+   `current` unchanged, for as long as one fails. The first time, whatever that path held
    is adopted as a generation (a copied file, or the recorded link target), so
    a rollback can return to it. Three generations are kept; the current and
    previous ones are never removed. Every switch is appended to

@@ -556,7 +556,7 @@ func TestRetentionKeepsThreeAndNeverTheActiveOnes(t *testing.T) {
 
 // boundaries are every fsync and rename an apply onto a managed host crosses.
 var boundaries = []string{
-	"sync-staged", "sync-staged-directory", "rename-generation", "sync-generations",
+	"sync-staged", "sync-staged-directory", "rename-generation", "sync-generations", "record-durable",
 	"rename-previous", "sync-previous", "rename-current", "sync-current",
 }
 

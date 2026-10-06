@@ -151,6 +151,10 @@ func (i *Installer) Apply(pin *release.ProgramPin) (Result, error) {
 			// An installed generation is probed again rather than trusted for
 			// its name alone: its name proves its bytes, not what they say.
 			return err
+		} else if err := i.ensureDurable(name); err != nil {
+			// Nor do its bytes prove that they survive a power loss: an
+			// earlier attempt may have named it and then failed to flush.
+			return err
 		}
 		// Adoption happens only once the new binary is verified and
 		// installed, so that a refusal leaves an unmanaged host unmanaged.
@@ -208,6 +212,8 @@ func (i *Installer) InstallFile(path, expectSHA256, versionLine string) (Result,
 			}); err != nil {
 				return err
 			}
+		} else if err := i.ensureDurable(digest); err != nil {
+			return err
 		}
 		transaction, err := i.switchTo(digest, "self install")
 		if err != nil {
@@ -284,6 +290,11 @@ func (i *Installer) rollback(reason string) (Result, error) {
 	if previous == "" || !i.Layout.validGeneration(previous) ||
 		previous == i.Layout.CurrentGeneration() {
 		return result, failure.Value("there is no previous upkeeper generation to roll back to")
+	}
+	// The previous generation is established as durable before the hold is
+	// recorded, so that a rollback that cannot switch holds nothing.
+	if err := i.ensureDurable(previous); err != nil {
+		return result, err
 	}
 	// The hold goes first: a crash after it and before the switch holds
 	// updates on the old binary, which is the conservative outcome.
@@ -457,13 +468,62 @@ func (i *Installer) publishGeneration(directory, name string) error {
 	if err := os.Rename(directory, final); err != nil {
 		return failure.Value("cannot install generation %s: %v", name, err)
 	}
+	return i.recordDurable(name)
+}
+
+// durableMarker, inside a generation's directory, records that the generation
+// is published: its files, its directory and its name in the generations
+// directory were all flushed. A generation without it can hold exactly what
+// its name says and still be one a power loss takes away, so nothing switches
+// to it until those flushes have been made again and the marker written.
+const durableMarker = ".durable"
+
+// recordDurable flushes the generations directory, so that a generation's
+// name is durable, and only once that succeeds records the generation as
+// durable. Its files and its directory must already have been flushed.
+func (i *Installer) recordDurable(name string) error {
 	if err := i.fault("sync-generations"); err != nil {
 		return err
 	}
 	if err := i.Flush.Directory(i.Layout.Generations()); err != nil {
 		return failure.Value("cannot flush the generations directory: %v", err)
 	}
+	if err := i.fault("record-durable"); err != nil {
+		return err
+	}
+	marker := filepath.Join(i.Layout.Generation(name), durableMarker)
+	if err := i.Flush.WriteFile(marker, []byte("durable\n"), 0o400); err != nil {
+		return failure.Value("cannot record generation %s as durable: %v", name, err)
+	}
 	return nil
+}
+
+// ensureDurable comes before anything reuses or switches to a generation that
+// already exists. A generation recorded as durable is used as it is. For any
+// other, such as one an earlier attempt named before the flush of its name
+// failed, every flush its publication makes is made again, its binary's, its
+// identity's, its directory's and its name's, and it is recorded as durable
+// only once they all succeed. A valid digest is never taken for durability:
+// it proves what the bytes are, not that they survive a power loss.
+func (i *Installer) ensureDurable(name string) error {
+	generation := i.Layout.Generation(name)
+	if info, err := os.Lstat(filepath.Join(generation, durableMarker)); err == nil && info.Mode().IsRegular() {
+		return nil
+	}
+	// An adopted link has no bytes of its own to flush: the link is an entry
+	// of the generation's directory.
+	for _, file := range []string{i.Layout.GenerationBinary(name), filepath.Join(generation, "identity.json")} {
+		if info, err := os.Lstat(file); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := i.Flush.File(file); err != nil {
+			return failure.Value("cannot flush generation %s: %v", name, err)
+		}
+	}
+	if err := i.Flush.Directory(generation); err != nil {
+		return failure.Value("cannot flush generation %s: %v", name, err)
+	}
+	return i.recordDurable(name)
 }
 
 // switchTo makes a generation current and the one it replaces previous, then
@@ -474,6 +534,10 @@ func (i *Installer) publishGeneration(directory, name string) error {
 // two leaves a record whose current is not the one on disk, which UndoSwitch
 // treats as a later change: it refuses rather than guesses.
 func (i *Installer) switchTo(name, reason string) (string, error) {
+	// Every caller has established this already; a switch never relies on it.
+	if err := i.ensureDurable(name); err != nil {
+		return "", err
+	}
 	old := i.Layout.CurrentGeneration()
 	if old == name {
 		return "", i.linkBinary()
@@ -642,6 +706,8 @@ func (i *Installer) adopt() (string, error) {
 		} else if err := i.installGeneration(staged, name, record); err != nil {
 			return "", err
 		}
+	} else if err := i.ensureDurable(name); err != nil {
+		return "", err
 	}
 	if _, err := i.switchTo(name, "adopt "+path); err != nil {
 		return "", err
@@ -678,6 +744,9 @@ func (i *Installer) recover() error {
 		return failure.Value(
 			"%s names no complete generation and there is no previous one to restore; "+
 				"install a released binary with `upkeeper self install`", i.Layout.Current())
+	}
+	if err := i.ensureDurable(previous); err != nil {
+		return err
 	}
 	if err := i.replaceLink(i.Layout.Current(), filepath.Join("generations", previous), "current"); err != nil {
 		return err
