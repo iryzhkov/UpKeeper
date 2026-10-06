@@ -67,6 +67,9 @@ type arguments struct {
 	// updateTransaction names the switch that installed it, when there was one.
 	updateTransaction string
 
+	// __agent: the program the controller requires this binary to be.
+	agentProgram string
+
 	// self
 	selfAction       string
 	selfExpectSHA256 string
@@ -119,6 +122,30 @@ var Commands = []string{
 const agentCommand = "__agent"
 const probeCommand = "__probe"
 
+// agentProgramFlag is the program fence on the agent's command line, spelled
+// as converge.AgentProgramFlag. An agent from before the fence rejects it as
+// an unrecognized argument, which is the point: it must not do fenced work.
+const agentProgramFlag = "--expect-program"
+
+// parseAgent accepts the agent's only option, the program fence.
+func parseAgent(parsed *arguments, argv []string) error {
+	for index := 0; index < len(argv); index++ {
+		if argv[index] != agentProgramFlag || parsed.agentProgram != "" {
+			return usagef("unrecognized arguments: %s", strings.Join(argv[index:], " "))
+		}
+		value, next, err := takeValue(argv, index, agentProgramFlag)
+		if err != nil {
+			return err
+		}
+		if !fullCommit(value) {
+			return usagef("argument %s: expected a full lowercase commit", agentProgramFlag)
+		}
+		parsed.agentProgram = value
+		index = next
+	}
+	return nil
+}
+
 // isCommand reports whether a token names a subcommand. The machine-facing
 // halves are deliberately excluded: they have no help to print and a
 // controller never asks for it.
@@ -167,7 +194,9 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseHold(parsed, rest)
 	case "self":
 		return parsed, parseSelf(parsed, rest)
-	case "install-self-timer", "install-pull-timer", agentCommand, probeCommand, "version":
+	case agentCommand:
+		return parsed, parseAgent(parsed, rest)
+	case "install-self-timer", "install-pull-timer", probeCommand, "version":
 		if len(rest) > 0 {
 			return nil, usagef("unrecognized arguments: %s", strings.Join(rest, " "))
 		}

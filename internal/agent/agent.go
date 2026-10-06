@@ -490,6 +490,14 @@ func observeQuietly(
 
 // Run reads one payload from input, converges, and writes one result line.
 func Run(input io.Reader, output io.Writer, runner procx.Runner) error {
+	return RunFenced(input, output, runner, "")
+}
+
+// RunFenced is Run for an agent invoked with the program fence on its command
+// line. The fence is the same requirement as the payload's
+// expected_program_commit; a payload that names another program contradicts
+// its own invocation and is refused, before the lock like any other fence.
+func RunFenced(input io.Reader, output io.Writer, runner procx.Runner, program string) error {
 	data, err := io.ReadAll(io.LimitReader(input, 64<<20))
 	if err != nil {
 		return err
@@ -497,6 +505,13 @@ func Run(input io.Reader, output io.Writer, runner procx.Runner) error {
 	payload, err := DecodePayload(data)
 	if err != nil {
 		return err
+	}
+	if program != "" {
+		if payload.ExpectedProgramCommit != "" && payload.ExpectedProgramCommit != program {
+			return fmt.Errorf("the payload requires program %s and the invocation requires %s",
+				payload.ExpectedProgramCommit, program)
+		}
+		payload.ExpectedProgramCommit = program
 	}
 	context, err := NewContext(payload, runner)
 	if err != nil {

@@ -12,6 +12,7 @@ package converge
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -425,7 +426,28 @@ func RunHost(
 			"error": "invalid-agent-payload",
 		}
 	}
-	outcome := transport.Invoke(spec, AgentSubcommand, string(encoded), timeout, process)
+	// A fenced payload is not enough on its own: an agent from before the
+	// fence ignores the field and does the work. The fence is therefore also
+	// an option of the invocation, which such an agent rejects as a usage
+	// error before it reads the payload.
+	command := []string{AgentSubcommand}
+	if payload.ExpectedProgramCommit != "" {
+		command = append(command, AgentProgramFlag, payload.ExpectedProgramCommit)
+	}
+	outcome := transport.InvokeCommand(spec, command, string(encoded), timeout, process)
+	if payload.ExpectedProgramCommit != "" && outcome.Err == nil && outcome.Code == 2 &&
+		strings.Contains(outcome.Stderr, AgentProgramFlag) {
+		return map[string]any{
+			"host": spec.Name, "reachable": true, "transport": "ssh", "result": "failed",
+			"program": map[string]any{"expected_commit": payload.ExpectedProgramCommit},
+			"error": fmt.Sprintf(
+				"this host's upkeeper predates the program fence and refused the fenced "+
+					"invocation before doing any work; the release requires upkeeper built from %s: "+
+					"install that binary on the host before converging it", payload.ExpectedProgramCommit),
+			"returncode": outcome.Code,
+			"stderr":     transport.Tail(outcome.Stderr, 2000),
+		}
+	}
 	if outcome.Err != nil {
 		return map[string]any{
 			"host": spec.Name, "reachable": false, "result": "failed",
@@ -445,6 +467,9 @@ func RunHost(
 
 // AgentSubcommand is the hidden subcommand a target's binary is invoked with.
 const AgentSubcommand = "__agent"
+
+// AgentProgramFlag carries the program fence on the agent's command line.
+const AgentProgramFlag = "--expect-program"
 
 func runLocal(
 	spec inventory.HostSpec, payload agent.Payload, process procx.Runner,

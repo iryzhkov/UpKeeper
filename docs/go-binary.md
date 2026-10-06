@@ -283,12 +283,16 @@ By hand:
 - `upkeeper self status [--json]` reports the binary path, the generations and
   which is current and previous.
 
-On the SSH path, `pull` and `scheduled-pull` send the pin's `source_commit` as
-`expected_program_commit` in the `__agent` payload, and a target built from
-another commit refuses before it takes its lock, naming both commits. A
-rollback sends no fence, so restoring older intent never requires the older
-binary; the in-process local path is checked by `self-pull` instead. Agents
-older than this ignore the field. `status` and the probe report each host's
+On the SSH path, `pull` and `scheduled-pull` fence the agent on the pin's
+`source_commit`: the target runs `__agent --expect-program <commit>`, and the
+payload carries the same commit as `expected_program_commit`. A target built
+from another commit refuses before it takes its lock, naming both commits.
+An agent from before the fence ignores the payload field, but rejects the
+unknown option as a usage error before it reads the payload, so it does no
+work; the controller reports that the host's upkeeper predates the fence and
+must be updated to the pinned binary. A rollback sends no fence and invokes
+plain `__agent`, so restoring older intent never requires the older binary;
+the in-process local path is checked by `self-pull` instead. `status` and the probe report each host's
 binary version, commit and active generation.
 
 ## Gates

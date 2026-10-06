@@ -105,7 +105,7 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 	case "environment":
 		return runEnvironment(parsed, streams)
 	case agentCommand:
-		return runAgent(streams)
+		return runAgent(parsed, streams)
 	case probeCommand:
 		return runProbe(streams)
 	case "version":
@@ -142,8 +142,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 
 // runAgent is the target-side half of a convergence. It is invoked by a
 // controller over SSH and speaks only JSON.
-func runAgent(streams Streams) (int, error) {
-	if err := agent.Run(streams.In, streams.Out, procx.Run); err != nil {
+func runAgent(parsed *arguments, streams Streams) (int, error) {
+	if err := agent.RunFenced(streams.In, streams.Out, procx.Run, parsed.agentProgram); err != nil {
 		return 1, err
 	}
 	return exitcode.Success, nil

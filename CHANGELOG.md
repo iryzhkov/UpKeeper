@@ -19,8 +19,10 @@ release tags (`v0.1.x`).
   unchanged or restore the previous generation. `upkeeper self install
   --expect-sha256`, `self rollback` and `self status` manage the generations by
   hand. The published-manifest gate proves the pin was built from the commit's
-  own program, `go.sum` now counts as program, remote agents refuse an
-  `expected_program_commit` they were not built from, and `status` and the
+  own program, `go.sum` now counts as program, remote agents are invoked as
+  `__agent --expect-program COMMIT` and refuse a program they were not built
+  from (an agent from before the fence rejects the option and does no
+  work), and `status` and the
   probe report each host's binary version, commit and generation.
 
 - `upkeeper author --steward VERSION --omarchy-setup COMMIT` writes an authored

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/iryzhkov/UpKeeper/internal/converge"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -56,6 +57,31 @@ func TestTheAfterUpdateOptionIsHiddenAndExact(t *testing.T) {
 	if help := helpText("upkeeper", "self-pull"); strings.Contains(help, "after-update") ||
 		strings.Contains(help, "update-transaction") {
 		t.Error("the self-pull help documents the hidden option")
+	}
+}
+
+// The agent's one option is the program fence, as the controller spells it.
+func TestTheAgentTakesOnlyTheProgramFence(t *testing.T) {
+	if agentProgramFlag != converge.AgentProgramFlag {
+		t.Fatalf("the agent accepts %s and a controller sends %s", agentProgramFlag, converge.AgentProgramFlag)
+	}
+	commit := strings.Repeat("b", 40)
+	if parsed := parseOrFail(t, "__agent", "--expect-program", commit); parsed.agentProgram != commit {
+		t.Errorf("agentProgram %q", parsed.agentProgram)
+	}
+	if parsed := parseOrFail(t, "__agent"); parsed.agentProgram != "" {
+		t.Errorf("agentProgram %q", parsed.agentProgram)
+	}
+	for _, argv := range [][]string{
+		{"__agent", "--expect-program"},
+		{"__agent", "--expect-program", "abc1234"},
+		{"__agent", "--expect-program", commit, "--expect-program", commit},
+		{"__agent", "--json"},
+		{"__probe", "--expect-program", commit},
+	} {
+		if _, err := parse(argv, release.ComponentOrder); err == nil {
+			t.Errorf("%v was accepted", argv)
+		}
 	}
 }
 

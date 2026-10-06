@@ -320,7 +320,7 @@ func spoolCommands() map[string]struct{} {
 // when the parser accepts an option this list does not have.
 var spoolFlags = []string{
 	"after-update", "all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head",
-	"expect-release-sha256", "expect-sha256", "help", "h",
+	"expect-program", "expect-release-sha256", "expect-sha256", "help", "h",
 	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "repository",
 	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "update-transaction", "workers",
