@@ -2295,27 +2295,6 @@
         "host": "normandy"
       },
       "hosts": {
-        "agent-a": {
-          "admin_credential_ref": "secretref:f03-admin/agent-a",
-          "credential_ref": "secretref:f02-protocol/agent-a",
-          "exceptions": {
-            "executor_slots": 6
-          },
-          "profile": "standard",
-          "transport": "ssh",
-          "worker_id": "agent-a"
-        },
-        "agent-b": {
-          "admin_credential_ref": "secretref:f03-admin/agent-b",
-          "credential_ref": "secretref:f02-protocol/agent-b",
-          "exceptions": {
-            "cpu_class": "low",
-            "executor_slots": 1
-          },
-          "profile": "standard",
-          "transport": "ssh",
-          "worker_id": "agent-b"
-        },
         "homelab": {
           "admin_credential_ref": "secretref:f03-admin/homelab",
           "credential_ref": "secretref:f02-protocol/homelab",
@@ -2471,8 +2450,6 @@
         "homelab-cli-github": {
           "default_ref": "main",
           "eligible_workers": [
-            "agent-a",
-            "agent-b",
             "homelab",
             "omarchy-pc"
           ],
@@ -2499,8 +2476,6 @@
         "omarchy-setup-github": {
           "default_ref": "main",
           "eligible_workers": [
-            "agent-a",
-            "agent-b",
             "homelab",
             "omarchy-pc"
           ],
@@ -2565,8 +2540,6 @@
         "t3-steward-github": {
           "default_ref": "main",
           "eligible_workers": [
-            "agent-a",
-            "agent-b",
             "homelab",
             "omarchy-pc"
           ],
@@ -2576,8 +2549,6 @@
         "upkeeper-migration": {
           "default_ref": "main",
           "eligible_workers": [
-            "agent-a",
-            "agent-b",
             "homelab",
             "omarchy-pc"
           ],
@@ -2733,36 +2704,6 @@
     },
     "worker-configuration": {
       "hosts": {
-        "agent-a": {
-          "capabilities": [
-            "git",
-            "huyang"
-          ],
-          "coordinator_id": "normandy-coordinator",
-          "credential_ref": "secretref:f02-protocol/agent-a",
-          "provider_routes": [
-            "claudeAgent",
-            "codex"
-          ],
-          "schema_version": 1,
-          "transport": "ssh",
-          "worker_id": "agent-a"
-        },
-        "agent-b": {
-          "capabilities": [
-            "git",
-            "huyang"
-          ],
-          "coordinator_id": "normandy-coordinator",
-          "credential_ref": "secretref:f02-protocol/agent-b",
-          "provider_routes": [
-            "claudeAgent",
-            "codex"
-          ],
-          "schema_version": 1,
-          "transport": "ssh",
-          "worker_id": "agent-b"
-        },
         "homelab": {
           "capabilities": [
             "git",
