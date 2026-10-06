@@ -84,6 +84,27 @@ func TestTheProgramIncludesTheDependencySums(t *testing.T) {
 	}
 }
 
+// Tests and their fixtures are not build inputs, so the comparison excludes
+// them: a test-only commit must not make hosts refuse to converge.
+func TestTheProgramComparisonIgnoresTestsAndTestdata(t *testing.T) {
+	var diff []string
+	runner := func(command procx.Command) procx.Result {
+		if slices.Contains(command.Argv, "diff") {
+			diff = command.Argv
+		}
+		return procx.Result{Code: 0}
+	}
+	if err := selfconv.VerifyProgram("/checkout", strings.Repeat("a", 40),
+		strings.Repeat("b", 40), runner); err != nil {
+		t.Fatalf("refused an unchanged program: %v", err)
+	}
+	for _, pathspec := range []string{":(exclude,glob)**/*_test.go", ":(exclude,glob)**/testdata/**"} {
+		if !slices.Contains(diff, pathspec) {
+			t.Errorf("the comparison does not exclude %q: %v", pathspec, diff)
+		}
+	}
+}
+
 // A comparison git could not perform proves nothing, and in particular does
 // not prove that the program changed: only a changed program may trigger a
 // self-update.

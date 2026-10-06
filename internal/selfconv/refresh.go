@@ -118,7 +118,8 @@ func Refresh(root string, runner procx.Runner) (string, error) {
 // ProgramPaths are the paths a change to which changes the program itself,
 // as opposed to the release intent the program applies. The release package
 // owns the list, because release.CheckProgramPin checks a program pin against
-// the same paths.
+// the same paths. Tests and test fixtures under them are excluded from the
+// comparison (release.ProgramExclusions): they are not build inputs.
 var ProgramPaths = release.ProgramPaths
 
 // ErrProgramDiffers marks the one VerifyProgram refusal a self-update can
@@ -161,7 +162,7 @@ func VerifyProgram(root, binaryCommit, checkoutCommit string, runner procx.Runne
 				"install the released artifact for %s", binaryCommit, checkoutCommit)
 	}
 	diff := run(append([]string{"diff", "--quiet", binaryCommit, checkoutCommit, "--"},
-		ProgramPaths...)...)
+		release.ProgramPathspec()...)...)
 	// Only git's "differences found" may count as a changed program: that is
 	// what a self-update acts on, and a failed comparison proves nothing.
 	if diff.Err != nil || (diff.Code != 0 && diff.Code != 1) {

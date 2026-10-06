@@ -31,6 +31,18 @@ const ProgramAssetLimit int64 = 256 << 20
 // included because a dependency-only change rebuilds a different binary.
 var ProgramPaths = []string{"go.mod", "go.sum", "cmd", "internal"}
 
+// ProgramExclusions are the git pathspecs, within ProgramPaths, that are not
+// build inputs: tests and their fixtures. A test-only commit builds the same
+// binary, so it must not change the program's identity, or every host would
+// refuse to converge until it ran a binary built from that commit.
+var ProgramExclusions = []string{":(exclude,glob)**/*_test.go", ":(exclude,glob)**/testdata/**"}
+
+// ProgramPathspec is what a program comparison passes to git after "--":
+// ProgramPaths without ProgramExclusions.
+func ProgramPathspec() []string {
+	return append(append([]string{}, ProgramPaths...), ProgramExclusions...)
+}
+
 // ProgramTargets maps a Go architecture to the asset label a pin carries.
 var ProgramTargets = map[string]string{"amd64": "linux-amd64", "arm64": "linux-arm64"}
 
@@ -161,8 +173,8 @@ func (r Release) ProgramPin() (*ProgramPin, error) {
 }
 
 // CheckProgramPin proves that the pinned binary was built from the program a
-// commit holds: no path in ProgramPaths may differ between the pin's source
-// commit and the commit under test. A release whose pin names another program
+// commit holds: no path in ProgramPaths, other than a test or test fixture,
+// may differ between the pin's source commit and the commit under test. A release whose pin names another program
 // is stale: hosts refuse it rather than install it. Code-repository CI does
 // not run this, because a commit that changes the program can only be pinned
 // by a later commit; it is for the configuration repository's CI (M2b) and
@@ -182,7 +194,7 @@ func CheckProgramPin(root, sourceCommit, commit string, runner procx.Runner) err
 		return failure.Validation(
 			"upkeeper.source_commit %s is not in this repository's history", sourceCommit)
 	}
-	diff := git(append([]string{"diff", "--quiet", sourceCommit, commit, "--"}, ProgramPaths...)...)
+	diff := git(append([]string{"diff", "--quiet", sourceCommit, commit, "--"}, ProgramPathspec()...)...)
 	if diff.Err != nil || (diff.Code != 0 && diff.Code != 1) {
 		return failure.Validation("cannot compare the pinned program with %s", commit)
 	}

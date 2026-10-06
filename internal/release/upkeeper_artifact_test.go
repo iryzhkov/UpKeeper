@@ -217,3 +217,40 @@ func TestTheProgramPinMustMatchTheProgramOfTheCommit(t *testing.T) {
 		t.Error("a symbolic source commit was accepted")
 	}
 }
+
+// Tests are not build inputs: a commit that only changes a test or a test
+// fixture builds the same binary, so it must keep the program's identity.
+// Otherwise a test-only fix would make every host refuse to converge until
+// it ran a binary built from the new commit.
+func TestTestOnlyChangesKeepTheProgramIdentity(t *testing.T) {
+	root, commits := gitRepository(t,
+		map[string]string{
+			"go.mod": "module x\n", "go.sum": "",
+			"internal/a/a.go": "package a\n", "internal/a/a_test.go": "package a\n",
+			"internal/a/testdata/fixture.json": "{}\n", "cmd/main.go": "package main\n",
+			"cmd/main_test.go": "package main\n",
+		},
+		map[string]string{"internal/a/a_test.go": "package a // changed\n"},
+		map[string]string{"internal/a/b_test.go": "package a\n", "cmd/main_test.go": "package main // changed\n"},
+		map[string]string{"internal/a/testdata/fixture.json": "{\"changed\": true}\n"},
+		map[string]string{"internal/a/testdata/nested/new.txt": "new\n"},
+		map[string]string{"internal/a/a.go": "package a // changed\n"},
+		map[string]string{"go.sum": "example.invalid/x v1.0.0 h1:x=\n"},
+	)
+	for index, what := range []string{
+		"a changed test", "a new test and a changed command test",
+		"a changed test fixture", "a new nested test fixture",
+	} {
+		if err := release.CheckProgramPin(root, commits[0], commits[index+1], nil); err != nil {
+			t.Errorf("%s changed the program: %v", what, err)
+		}
+	}
+	if err := release.CheckProgramPin(root, commits[4], commits[5], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a non-test change under internal/ kept the program: %v", err)
+	}
+	if err := release.CheckProgramPin(root, commits[5], commits[6], nil); err == nil ||
+		!strings.Contains(err.Error(), "differs") {
+		t.Errorf("a go.sum change kept the program: %v", err)
+	}
+}
