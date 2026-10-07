@@ -42,7 +42,7 @@ func TestCatalogBaselineGitNoLazyFetchLocalPromisor(t *testing.T) {
 	before := baselineTestStoreBytes(t, root)
 	// Only the private fixed read-only wrapper is exercised here. No fabricated
 	// snapshot or public owner grant is created; the donor is entirely local.
-	op := &baselineOriginalOperation{custody: baselineCustody()}
+	op := &baselineOriginalOperation{custody: baselineCustody(), versionCheck: baselineTestQualifiedVersion}
 	defer op.custody.release()
 	if e := op.supported(context.Background(), root); e != nil {
 		t.Fatal("supported Git is mandatory", e)
@@ -105,9 +105,10 @@ func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 				snapshotTestWrite(t, filepath.Join(root, "info/grafts"), []byte(sharedUpstreamCommit+"\n"), 0644)
 			case "replacement":
 				baselineTestGit(t, root, nil, "update-ref", "refs/replace/"+sharedUpstreamCommit, sharedUpstreamCommit)
+				baselineTestPrivateDirectories(t, root)
 			}
 			raw, typed := 0, 0
-			op := &baselineOriginalOperation{objectRead: func(kind string) {
+			op := &baselineOriginalOperation{versionCheck: baselineTestQualifiedVersion, objectRead: func(kind string) {
 				if kind == "compressed" {
 					raw++
 				} else {
@@ -163,7 +164,7 @@ func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 	}
 	root := baselineTestOriginal(t, outer)
 	raw, typed := 0, 0
-	op := &baselineOriginalOperation{objectRead: func(kind string) {
+	op := &baselineOriginalOperation{versionCheck: baselineTestQualifiedVersion, objectRead: func(kind string) {
 		if kind == "compressed" {
 			raw++
 		} else {
@@ -215,7 +216,7 @@ func TestCatalogBaselineOriginalPrivateRoot(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
-			s, e := AcquireCatalogOriginalImportSnapshot(context.Background(), root)
+			s, e := baselineTestAcquireOriginal(context.Background(), root)
 			if s != nil || e == nil {
 				t.Fatal("unsafe original accepted", kind)
 			}
@@ -269,7 +270,7 @@ func TestCatalogBaselineInitialGitCancellation(t *testing.T) {
 			}
 			defer cancel()
 			reached, waited := false, false
-			op := &baselineOriginalOperation{}
+			op := &baselineOriginalOperation{versionCheck: baselineTestQualifiedVersion}
 			op.afterStart = func(cmd *exec.Cmd, args []string) {
 				if args[0] != "cat-file" || reached {
 					return
@@ -333,7 +334,7 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 					if e := os.Rename(f.originalRoot, target); e != nil {
 						t.Fatal(e)
 					}
-					s, e := AcquireCatalogOriginalImportSnapshot(context.Background(), target)
+					s, e := baselineTestAcquireOriginal(context.Background(), target)
 					if e != nil {
 						t.Fatal("genuine nested original", e)
 					}
@@ -769,7 +770,7 @@ func baselineTestOriginal(t *testing.T, outer map[string][]byte) string {
 	if len(used) != 15 {
 		t.Fatal("independent15 ancestor links")
 	}
-	root := filepath.Join(t.TempDir(), "original.git")
+	root := filepath.Join(baselineTestTempDir(t), "original.git")
 	baselineTestGit(t, root, nil, "init", "--bare", "--quiet", "--template=", root)
 	if e := os.Chmod(root, 0700); e != nil {
 		t.Fatal(e)
@@ -787,6 +788,7 @@ func baselineTestOriginal(t *testing.T, outer map[string][]byte) string {
 	baselineTestGit(t, root, nil, "remote", "add", "origin", "https://github.com/iryzhkov/omarchy-setup.git")
 	baselineTestGit(t, root, nil, "update-ref", "refs/heads/baseline", sharedUpstreamCommit)
 	baselineTestGit(t, root, nil, "symbolic-ref", "HEAD", "refs/heads/baseline")
+	baselineTestPrivateDirectories(t, root)
 	return root
 }
 
@@ -801,7 +803,7 @@ type baselineTestOwners struct {
 func baselineTestAcquire(t *testing.T) baselineTestOwners {
 	t.Helper()
 	outer := baselineTestOuter(t)
-	root := t.TempDir()
+	root := baselineTestTempDir(t)
 	f := baselineTestOwners{}
 	f.originalRoot = baselineTestOriginal(t, outer)
 	f.archive = filepath.Join(root, "baseline-evidence.tar.gz")
@@ -821,9 +823,10 @@ func baselineTestAcquire(t *testing.T) baselineTestOwners {
 		t.Fatalf("deterministic fixture commit %v %s", e, b)
 	}
 	o.Commit = snapshotTestGit(t, o.Repository, "rev-parse", "HEAD")
+	baselineTestPrivateDirectories(t, o.Repository)
 	f.catalog = snapshotTestAcquire(t, o)
 	var e error
-	f.original, e = AcquireCatalogOriginalImportSnapshot(context.Background(), f.originalRoot)
+	f.original, e = baselineTestAcquireOriginal(context.Background(), f.originalRoot)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -1117,7 +1120,7 @@ func TestCatalogBaselineCustodyMutationAndClose(t *testing.T) {
 }
 func TestCatalogBaselineArchiveAndObjectRefusals(t *testing.T) {
 	outer := baselineTestOuter(t)
-	root := t.TempDir()
+	root := baselineTestTempDir(t)
 	baseline := outer["evidence/original-inputs/baseline-evidence.tar.gz"]
 	drafts := outer["evidence/original-inputs/drafts.tar.gz"]
 	review := outer["evidence/inputs/baseline-review.md"]
@@ -1164,7 +1167,7 @@ func TestCatalogBaselineArchiveAndObjectRefusals(t *testing.T) {
 	original := baselineTestOriginal(t, outer)
 	baselineTestGit(t, original, nil, "remote", "set-url", "origin", "https://example.invalid/forged")
 	fds := snapshotFDCount(t)
-	s, e := AcquireCatalogOriginalImportSnapshot(context.Background(), original)
+	s, e := baselineTestAcquireOriginal(context.Background(), original)
 	if e == nil || s != nil {
 		t.Fatal("wrong original origin")
 	}
@@ -1260,9 +1263,10 @@ func TestCatalogBaselineOriginalTypedAndPhysicalRefusals(t *testing.T) {
 				snapshotTestWrite(t, filepath.Join(root, "info/grafts"), []byte(sharedUpstreamCommit+"\n"), 0644)
 			case "replacement":
 				baselineTestGit(t, root, nil, "update-ref", "refs/replace/"+sharedUpstreamCommit, sharedUpstreamCommit)
+				baselineTestPrivateDirectories(t, root)
 			}
 			before := snapshotFDCount(t)
-			owner, e := AcquireCatalogOriginalImportSnapshot(context.Background(), root)
+			owner, e := baselineTestAcquireOriginal(context.Background(), root)
 			if e == nil || owner != nil {
 				t.Fatal("forged original acquired", kind)
 			}
