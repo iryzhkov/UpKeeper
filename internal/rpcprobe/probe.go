@@ -126,6 +126,33 @@ func callName(c Call) string {
 // one the tool cut short has no END marker for the redaction to match.
 var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
 
+// Secret shapes a tool's error text plausibly carries that the shared
+// redaction does not: an environment assignment such as OV_API_KEY=... (the
+// shared pattern needs a word boundary before the key word), a JSON-quoted
+// secret field, and a bearer token without its Authorization header.
+var (
+	toolSecretAssignment = regexp.MustCompile(
+		`(?i)([A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?\s*[=:]\s*)(?:'[^']*'|"[^"]*"|[^\s,;]+)`)
+	toolSecretJSON = regexp.MustCompile(
+		`(?i)("[A-Za-z0-9_-]*(?:api_?key|token|secret|password|passwd|credential|authorization)"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+	toolBearer = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
+)
+
+// redactToolText redacts with the shared helper and then the shapes above.
+func redactToolText(text string) string {
+	text = redact.Text(text)
+	text = toolSecretJSON.ReplaceAllString(text, `${1}"`+redact.Placeholder+`"`)
+	text = toolSecretAssignment.ReplaceAllString(text, "${1}"+redact.Placeholder)
+	return toolBearer.ReplaceAllString(text, "${1}"+redact.Placeholder)
+}
+
+// hiddenCharacter reports a character that must not reach a report: a control
+// character, a format character such as a bidi override or a zero-width
+// space, a line or paragraph separator, or the replacement character.
+func hiddenCharacter(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) || r == unicode.ReplacementChar
+}
+
 // toolErrorText is the text a tool gave with an error result: its text content
 // items joined, with control characters made spaces so that nothing they hide
 // or join escapes redaction, secrets redacted, and only then bounded, so that
@@ -140,7 +167,7 @@ func toolErrorText(result map[string]any) string {
 		}
 		text, _ := object["text"].(string)
 		text = strings.TrimSpace(strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) || r == unicode.ReplacementChar {
+			if hiddenCharacter(r) {
 				return ' '
 			}
 			return r
@@ -153,7 +180,9 @@ func toolErrorText(result map[string]any) string {
 	if len(parts) == 0 {
 		return "no error text"
 	}
-	text := redact.Text(strings.Join(parts, "; "))
+	// Items are joined by a space, which the redaction patterns read across,
+	// so a key and its value sent as two items are still seen together.
+	text := redactToolText(strings.Join(parts, " "))
 	if start := privateKeyStart.FindStringIndex(text); start != nil {
 		text = text[:start[0]] + redact.Placeholder
 	}

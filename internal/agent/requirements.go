@@ -85,6 +85,14 @@ func requirementsBlock(c *Context, name string, spec map[string]any, actions *[]
 // adapter has selected a build. A transient service observation is no longer
 // evidence that staging-only prerequisites are unnecessary.
 func requirementsBlockForStaging(c *Context, name string, spec map[string]any, actions *[]string, forceStaging bool) string {
+	// A profile that is not one is the adapter's to refuse, as a failure,
+	// before anything changes: no package is installed for it, and it is not
+	// mistaken for something only the operator can provide.
+	if name == release.ToolingComponent {
+		if _, err := toolProfile(c); err != nil {
+			return ""
+		}
+	}
 	family := prereq.Family(c.Host.OSID)
 	missing := missingPrerequisites(c, name, spec, forceStaging)
 	problems := []string{}

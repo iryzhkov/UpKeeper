@@ -198,6 +198,32 @@ func TestToolingRefusesAMalformedProfileFromThePayload(t *testing.T) {
 	}
 }
 
+// Self-review lens 1: the preflight ran before the adapter refused a
+// malformed profile, so a host that opted in to package installation had
+// packages installed for it, and a missing one made it blocked, not failed.
+func TestAMalformedProfileFailsBeforeAnyPackageIsInstalled(t *testing.T) {
+	h := newProfileHost(t)
+	names := []string{}
+	for _, name := range freshTestCommands {
+		if name != "jq" {
+			names = append(names, name)
+		}
+	}
+	bin := freshTestTools(t, h.home, names...)
+	c := freshTestContext(t, h.home, bin, h.run, []string{release.ToolingComponent},
+		map[string]any{release.ToolingComponent: profileSpec(t)})
+	c.Host.InstallOSPackages = true
+	c.Host.AgentTools = []string{"ollama"}
+	c.Payload.Host = c.Host
+	entry := resultEntry(t, Execute(c), release.ToolingComponent)
+	if message, _ := entry["error"].(string); entry["state"] != "failed" || !strings.Contains(message, "agent_tools") {
+		t.Fatalf("entry = %v", entry)
+	}
+	if found := containsAny(h.commands, "sudo"); len(found) > 0 {
+		t.Fatalf("ran %v for a malformed profile", found)
+	}
+}
+
 func profileExecute(t *testing.T, h *profileHost, tools []string, bin string) map[string]any {
 	t.Helper()
 	c := freshTestContext(t, h.home, bin, h.run, []string{release.ToolingComponent},

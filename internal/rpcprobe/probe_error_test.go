@@ -57,7 +57,7 @@ func TestToolErrorCarriesTheToolsOwnText(t *testing.T) {
 		map[string]any{"type": "image", "data": "aW1hZ2U="},
 		text("set OV_API_KEY or create ~/.config/ov-mcp/key"),
 	})
-	want := "tools/call memory_status failed: OpenViking API key not found; set OV_API_KEY or create ~/.config/ov-mcp/key"
+	want := "tools/call memory_status failed: OpenViking API key not found set OV_API_KEY or create ~/.config/ov-mcp/key"
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err, want)
 	}
@@ -125,6 +125,39 @@ func TestToolErrorTextNeverReportsALongOrUnterminatedPrivateKey(t *testing.T) {
 				t.Fatalf("key material leaked: %q", got)
 			}
 		})
+	}
+}
+
+// Self-review lens 5: shapes the shared redaction does not cover, which a
+// tool's error text plausibly carries, are redacted here too: the ov-memory
+// credential's own variable, JSON-quoted secrets, a bare bearer token, a key
+// and its value sent as separate items, and a token pushed past a bound by
+// padding. Format characters that could disguise a report are removed.
+func TestToolErrorTextRedactsWhatToolsPrint(t *testing.T) {
+	const fake = "FAKEfakeFAKE0123456789secret"
+	for name, items := range map[string][]string{
+		"OV_API_KEY env":     {"startup failed: OV_API_KEY=" + fake + " rejected"},
+		"export":             {"export OPENVIKING_TOKEN='" + fake + "'"},
+		"JSON api_key":       {`config {"api_key": "` + fake + `"}`},
+		"JSON Authorization": {`request headers {"Authorization": "Bearer ` + fake + `"}`},
+		"bare Bearer":        {"401 for Bearer " + fake},
+		"split items":        {"token=", fake},
+		"padded token":       {strings.Repeat(" ", 4780) + "ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
+	} {
+		content := []any{}
+		for _, item := range items {
+			content = append(content, text(item))
+		}
+		got := toolErrorText(map[string]any{"content": content})
+		if strings.Contains(got, fake) || strings.Contains(got, "ghp_abcdefghijklmnop") {
+			t.Errorf("%s leaked: %q", name, got)
+		}
+	}
+	// A bidi override, a line separator, a zero-width space and a BOM.
+	bidi, separator, zeroWidth, bom := string(rune(0x202e)), string(rune(0x2028)), string(rune(0x200b)), string(rune(0xfeff))
+	got := toolErrorText(map[string]any{"content": []any{text("ok " + bidi + "gnp.exe " + separator + "fake" + zeroWidth + " report" + bom + " line")}})
+	if strings.ContainsAny(got, bidi+separator+zeroWidth+bom) || !strings.Contains(got, "gnp.exe") {
+		t.Errorf("format characters pass through: %q", got)
 	}
 }
 

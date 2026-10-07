@@ -65,7 +65,12 @@ target in the active bundle (`ov-memory-mcp`, `local-file-llm-mcp`, or the
 homelab-cli commands), and the MCP registrations of that name that run its
 wrapper in `~/.local/bin`. A binding or registration of the same name that
 points anywhere else was made by someone else and is kept, as are every other
-registration and the host's own credentials and formatting.
+registration and the host's own credentials and formatting. A dropped tool's
+registration is removed whole, including any `env` entries the host added to
+it; the previous harness files stay in that run's journal under
+`~/.local/state/dev-fleet/environments/<run>/prior.json`. Keep the OV key in
+its key file rather than in a harness registration, so that dropping and
+re-adding ov-memory never loses it.
 
 The agent VMs agent-a and agent-b use `["homelab-cli", "ov-memory"]`. They are
 on VLAN 130, which by design cannot reach the Ollama server on omarchy-pc that
