@@ -112,9 +112,8 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     # from the source line of every checkout that a step's uses value names in
     # the node graph, which an alias shares with its anchor. Names, environment
     # values, keys and run blocks are not action references and are ignored.
-    # The comment must follow the checkout on its own line, after at most the
-    # brackets that close a flow-style step, so text in a string cannot pose
-    # as one.
+    # The comment must follow the last scalar or flow collection that ends on
+    # the checkout's line, so text inside a string cannot pose as one.
     pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     text = path.read_text()
     checkouts = [step["uses"] for job in yaml.safe_load(text)["jobs"].values()
@@ -146,8 +145,31 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     def items(node):
         return node.value if isinstance(node, yaml.SequenceNode) else []
 
+    def nodes(node, seen):
+        # Every node once; an alias is the anchored node itself.
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        yield node
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                yield from nodes(item, seen)
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                yield from nodes(key, seen)
+                yield from nodes(value, seen)
+
+    root = yaml.compose(text)
+    # Where YAML content stops on each line. A block collection ends where
+    # the next token starts, so only scalars and flow collections count.
+    ends = {}
+    for node in nodes(root, set()):
+        if isinstance(node, yaml.ScalarNode) or node.flow_style:
+            line = node.end_mark.line
+            ends[line] = max(ends.get(line, 0), node.end_mark.column)
+
     lines = text.splitlines()
-    for job in entries(entries(yaml.compose(text)).get("jobs")).values():
+    for job in entries(entries(root).get("jobs")).values():
         for step in items(entries(job).get("steps")):
             node = entries(step).get("uses")
             if not isinstance(node, yaml.ScalarNode):
@@ -156,7 +178,7 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
                 assert node.value == pinned, node.value
                 line = lines[node.start_mark.line]
                 assert node.end_mark.line == node.start_mark.line, line
-                assert re.fullmatch(r"[\s}\]]*\s# v7\.0\.1", line[node.end_mark.column:]), line
+                assert re.fullmatch(r"\s+# v7\.0\.1", line[ends[node.end_mark.line]:]), line
 
 
 @pytest.mark.parametrize("wrong", [
@@ -246,9 +268,11 @@ def test_node24_checkout_test_reads_the_comment_of_a_merged_checkout(tmp_path):
 @pytest.mark.parametrize("steps", [
     "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,"
     " name: 'x # v7.0.1\n          y'}\n",
+    "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,"
+    " ? 'x # v7.0.1\n          y' : z}\n",
     "      - uses: >- # v7.0.1\n"
     "          actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
-], ids=["comment-inside-a-string", "comment-on-a-block-indicator"])
+], ids=["comment-inside-a-string", "comment-inside-a-key", "comment-on-a-block-indicator"])
 def test_node24_checkout_test_wants_a_real_comment_after_the_checkout(tmp_path, steps):
     # A version comment counts only when it follows the checkout on the line
     # that holds the pinned SHA, not when it is text in a later string.
@@ -283,7 +307,10 @@ def test_node24_checkout_test_accepts_a_commented_flow_style_checkout(tmp_path):
     path.write_text(
         "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
         "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1} # v7.0.1\n"
+        "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,"
+        " with: {fetch-depth: 0}} # v7.0.1\n"
         '      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1\n'
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
     )
     test_github_workflows_check_out_with_the_node24_checkout(path)
 
