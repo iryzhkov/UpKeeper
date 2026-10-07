@@ -42,6 +42,9 @@ func printDoctor(out io.Writer, report map[string]any) {
 			fmt.Fprintf(out, "  blocker: %s needs %s; %s\n",
 				text(blocker["component"]), text(blocker["name"]), text(blocker["install"]))
 		}
+		for _, notice := range stringList(host["notices"]) {
+			fmt.Fprintf(out, "  notice: %s\n", notice)
+		}
 	}
 }
 

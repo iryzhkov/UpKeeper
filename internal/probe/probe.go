@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iryzhkov/UpKeeper/internal/agent"
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
@@ -572,6 +573,9 @@ func components(home string, runner procx.Runner) map[string]any {
 			"service": serviceProperties(runner),
 			"config":  metadata(filepath.Join(home, ".config/t3-steward")),
 			"state":   metadata(filepath.Join(home, ".local/state/t3-steward/state.db")),
+			// A worker restart that waits for an idle worker, read exactly as
+			// the component observes it; nil when none is pending.
+			"worker_restart": agent.ObserveWorkerRestart(home, runner, time.Now()),
 		},
 		"agent99": map[string]any{
 			"checkout":       gitInfo(runner, filepath.Join(home, ".local/share/nvim/lazy/agent99")),

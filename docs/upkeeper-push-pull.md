@@ -211,6 +211,22 @@ out-of-range count fails the pass without restarting. While the running worker's
 executable (`/proc/<MainPID>/exe`) is no longer the file installed at its path, status
 reports the component as drift ("worker restart pending"), and each later pass retries
 the restart under the same idle rule.
+A host that is never idle keeps that restart waiting, so the observation also says since
+when and on what: `worker_restart_pending_since` (UTC) and `worker_restart_waiting` with
+the journal's current counts. The time is the installed binary's modification time, which
+the install writes when it replaces the file; the first pass that defers also records it,
+with the worker's PID, in `~/.local/state/dev-fleet/steward-worker-restart.json`, so a
+second install while the same worker is still busy does not reset it. Status and doctor
+print `worker restart pending since <time> (<age>): <n> dispatched, <m> settle-pending; the
+restart waits for an idle worker`. Past 24 hours they add `this host has not been idle for
+<age>; drain the worker once Steward supports it, or restart it by hand at a quiet moment
+after checking t3-steward worker inspect-journal`. A worker that is already idle is
+reported as restarted by the next pull, and a journal that cannot be read as failing each
+pull until `t3-steward worker inspect-journal` answers; neither gets the never-idle
+advice. The guard reads the dispatched count first, so dispatched attempts beside a
+malformed settle-pending count are reported as `<n> dispatched, settle-pending count
+malformed` and still wait for an idle worker, with the advice past 24 hours. UpKeeper itself never restarts a worker that owns dispatched or settle-pending
+attempts and has no flag that forces it.
 U1 pull retires t3-update.timer/service before component effects on each host,
 even for rollback or component-limited pulls. An active updater is deferred after
 disabling its timer; it is never killed mid-install. Unknown unit state fails.

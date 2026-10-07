@@ -214,7 +214,15 @@ func annotateDriftReasons(document map[string]any, evidence driftEvidence) {
 			if text(component["state"]) != "drift" {
 				continue
 			}
-			component["reason"] = driftReason(name, text(component["name"]), evidence)
+			reason := driftReason(name, text(component["name"]), evidence)
+			// A pending worker restart explains itself, from the host's own
+			// clock and journal, ahead of what the run records say.
+			observed, _ := component["observed"].(map[string]any)
+			waiting, _ := observed["worker_restart_waiting"].(map[string]any)
+			if note := text(waiting["note"]); note != "" {
+				reason = note + "; " + reason
+			}
+			component["reason"] = reason
 		}
 	}
 }

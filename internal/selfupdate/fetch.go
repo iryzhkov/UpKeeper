@@ -29,7 +29,12 @@ const probeTimeout = 10 * time.Second
 // it against the pin. The returned cleanup removes whatever is left of the
 // staging directory and is safe to call on every path, including after the
 // directory has been installed as a generation.
-func (i *Installer) fetch(url string, asset release.ProgramAsset) (string, func(), error) {
+//
+// The asset is asked for anonymously first, so a public release never needs a
+// credential. When github.com answers as it does for a release the caller may
+// not see, the asset is resolved through the API with a credential from this
+// host, and the body it serves is verified exactly as an anonymous one is.
+func (i *Installer) fetch(pin *release.ProgramPin, target string, asset release.ProgramAsset) (string, func(), error) {
 	staging, err := i.stagingDirectory()
 	if err != nil {
 		return "", func() {}, err
@@ -39,11 +44,21 @@ func (i *Installer) fetch(url string, asset release.ProgramAsset) (string, func(
 	if client == nil {
 		client = &http.Client{Timeout: fetchTimeout}
 	}
+	url := pin.URL(i.BaseURL, target)
 	response, err := client.Get(url)
 	if err != nil {
-		return "", cleanup, failure.Value("cannot download %s: %v", url, err)
+		return "", cleanup, failure.Value("cannot download %s: %v", url, withoutQuery(err))
 	}
-	defer func() { _ = response.Body.Close() }()
+	anonymous := response
+	defer func() { _ = anonymous.Body.Close() }()
+	if notPublic(response.StatusCode) && i.apiBase() != "" {
+		authenticated, source, err := i.authenticatedAsset(client, pin, asset, response.StatusCode)
+		if err != nil {
+			return "", cleanup, err
+		}
+		defer func() { _ = authenticated.Body.Close() }()
+		response, url = authenticated, source
+	}
 	if response.StatusCode != http.StatusOK {
 		return "", cleanup, failure.Value("cannot download %s: HTTP %d", url, response.StatusCode)
 	}

@@ -559,11 +559,16 @@ func stewardObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	if digest := c.SHA256File(binary); digest != "" {
 		observed["binary_sha256"] = digest
 	}
-	pending := stewardWorkerRestartPending(c, binary)
-	observed["worker_restart_pending"] = pending
+	found := stewardWorkerRestartPendingSince(c, binary)
+	observed["worker_restart_pending"] = found.pending
 	observed["drift"] = []string{}
-	if pending {
+	if found.pending {
 		observed["drift"] = []string{"worker restart pending"}
+		// A host that is never idle keeps the restart waiting indefinitely;
+		// saying since when, and on what, is what lets an operator act.
+		waiting := stewardWorkerRestartWaiting(c, binary, stewardPendingSince(c, found))
+		observed["worker_restart_pending_since"] = waiting["since"]
+		observed["worker_restart_waiting"] = waiting
 	}
 	return observed, nil
 }
@@ -585,38 +590,45 @@ var stewardWorkerExecutable = func(pid int) (string, os.FileInfo, error) {
 	return strings.TrimSuffix(link, " (deleted)"), info, nil
 }
 
-// stewardWorkerRestartPending reports whether the running persistent worker
-// predates the installed binary: it was started from the installed path, and
-// the file it executes is no longer the file at that path.
+// stewardWorkerRestartPendingSince reports whether the running persistent
+// worker predates the installed binary: it was started from the installed
+// path, and the file it executes is no longer the file at that path.
 //
 // A restart deferred because the worker owned execution leaves exactly this
 // state behind, and the next pass finds the pinned version already installed,
 // so without this check the worker would serve the previous release until
 // something else restarted it. Anything that cannot be proven, such as a worker
 // that is not running or one started from another path, is not pending.
-func stewardWorkerRestartPending(c *Context, binary string) bool {
+//
+// It also reports what stewardPendingSince needs to say since when: the worker
+// process and the modification times of the file it executes and of the
+// installed one.
+func stewardWorkerRestartPendingSince(c *Context, binary string) stewardPendingRestart {
 	if !c.UnitLoaded(stewardWorkerUnit) || !c.UnitActive(stewardWorkerUnit) {
-		return false
+		return stewardPendingRestart{}
 	}
 	result := c.Run([]string{"systemctl", "--user", "show", stewardWorkerUnit,
 		"-p", "MainPID", "--value"}, 10*time.Second, "")
 	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
 	if !result.OK || err != nil || pid <= 0 {
-		return false
+		return stewardPendingRestart{}
 	}
 	installedPath, err := filepath.EvalSymlinks(binary)
 	if err != nil {
-		return false
+		return stewardPendingRestart{}
 	}
 	installed, err := os.Stat(installedPath)
 	if err != nil {
-		return false
+		return stewardPendingRestart{}
 	}
 	startedFrom, running, err := stewardWorkerExecutable(pid)
 	if err != nil || startedFrom != installedPath {
-		return false
+		return stewardPendingRestart{}
 	}
-	return !os.SameFile(running, installed)
+	return stewardPendingRestart{
+		pending: !os.SameFile(running, installed), pid: pid,
+		running: running.ModTime(), installed: installed.ModTime(),
+	}
 }
 
 func stewardApply(
@@ -655,6 +667,7 @@ func stewardApplyPinnedBinary(
 			if restarted {
 				return "updated", nil
 			}
+			stewardRecordDeferredRestart(c, binary)
 			return "converged", nil
 		}
 		// A host without a steward unit has nothing to restart: the binary is
@@ -742,8 +755,12 @@ func stewardApplyPinnedBinary(
 		*actions = append(*actions,
 			"installed verified OpenCode caller hook; loaded by new OpenCode servers")
 	}
-	if _, err := stewardRestartPersistentWorker(c, binary, actions); err != nil {
+	restarted, err := stewardRestartPersistentWorker(c, binary, actions)
+	if err != nil {
 		return "", err
+	}
+	if !restarted {
+		stewardRecordDeferredRestart(c, binary)
 	}
 	return "updated", nil
 }

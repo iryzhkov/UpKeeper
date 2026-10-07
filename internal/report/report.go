@@ -80,6 +80,9 @@ func DoctorWith(
 		// Missing OS prerequisites are blockers for a converge, named with the
 		// command that installs them. They do not change the host's grade.
 		entry["blockers"] = prerequisiteBlockers(observed)
+		// A pending worker restart waits on purpose, so it is a notice for
+		// the operator rather than a check that fails.
+		entry["notices"] = notices(observed)
 		checks := hostChecks(spec, observed)
 		failed := []any{}
 		for _, item := range checks {
@@ -277,6 +280,18 @@ func prerequisiteBlockers(observed map[string]any) []any {
 		}
 	}
 	return blockers
+}
+
+// notices are what doctor tells the operator about a host without grading it:
+// a t3-steward worker restart that waits for an idle worker, in the words the
+// host's own observation chose.
+func notices(observed map[string]any) []any {
+	notices := []any{}
+	restart := object(object(object(observed, "components"), "t3-steward"), "worker_restart")
+	if note, _ := restart["note"].(string); note != "" {
+		notices = append(notices, "t3-steward: "+note)
+	}
+	return notices
 }
 
 func hostChecks(spec inventory.HostSpec, observed map[string]any) []any {
