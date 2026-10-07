@@ -223,7 +223,9 @@ restart waits for an idle worker`. Past 24 hours they add `this host has not bee
 after checking t3-steward worker inspect-journal`. A worker that is already idle is
 reported as restarted by the next pull, and a journal that cannot be read as failing each
 pull until `t3-steward worker inspect-journal` answers; neither gets the never-idle
-advice. UpKeeper itself never restarts a worker that owns dispatched or settle-pending
+advice. The guard reads the dispatched count first, so dispatched attempts beside a
+malformed settle-pending count are reported as `<n> dispatched, settle-pending count
+malformed` and still wait for an idle worker, with the advice past 24 hours. UpKeeper itself never restarts a worker that owns dispatched or settle-pending
 attempts and has no flag that forces it.
 U1 pull retires t3-update.timer/service before component effects on each host,
 even for rollback or component-limited pulls. An active updater is deferred after

@@ -174,6 +174,76 @@ func TestStewardObserveExplainsAPendingWorkerRestart(t *testing.T) {
 	}
 }
 
+// The note follows the guard's own order: a usable positive dispatched count
+// defers the restart before the guard ever reads the settle-pending count, so
+// a malformed settle-pending count beside it is a busy worker with one count
+// unknown, not a journal that fails every pull. With no dispatched attempts
+// the guard does read it, and fails, and so does the note.
+func TestStewardObserveFollowsTheGuardOnAMalformedSettlePendingCount(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		journal    string
+		wantNote   string
+		wantCounts [2]any
+		wantDefer  string
+	}{
+		{
+			name:    "dispatched attempts and a negative settle-pending count",
+			journal: `{"dispatched":2,"settlePending":-1}`,
+			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): 2 dispatched, " +
+				"settle-pending count malformed; the restart waits for an idle worker" + stewardNeverIdleAction,
+			wantCounts: [2]any{2, nil},
+			wantDefer:  "worker restart deferred: 2 dispatched attempt(s) in the journal",
+		},
+		{
+			name:    "dispatched attempts and a settle-pending count that is not a number",
+			journal: `{"dispatched":2,"settlePending":"bad"}`,
+			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): 2 dispatched, " +
+				"settle-pending count malformed; the restart waits for an idle worker" + stewardNeverIdleAction,
+			wantCounts: [2]any{2, nil},
+			wantDefer:  "worker restart deferred: 2 dispatched attempt(s) in the journal",
+		},
+		{
+			name:    "no dispatched attempts and a malformed settle-pending count",
+			journal: `{"dispatched":0,"settlePending":-1}`,
+			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): the worker journal " +
+				"summary is malformed; each pull fails the restart until t3-steward worker " +
+				"inspect-journal answers",
+			wantCounts: [2]any{nil, nil},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			context, spec := stewardPendingHost(t, test.journal, stewardPendingNow.Add(-30*time.Hour))
+			observed, err := stewardObserve(context, spec)
+			if err != nil {
+				t.Fatalf("observe: %v", err)
+			}
+			waiting, _ := observed["worker_restart_waiting"].(map[string]any)
+			if waiting["note"] != test.wantNote {
+				t.Errorf("note\n got %q\nwant %q", waiting["note"], test.wantNote)
+			}
+			if got := [2]any{waiting["dispatched"], waiting["settle_pending"]}; got != test.wantCounts {
+				t.Errorf("counts %v, want %v", got, test.wantCounts)
+			}
+			actions := []string{}
+			restarted, err := stewardRestartPersistentWorker(context,
+				context.Path(".local/bin/t3-steward"), &actions)
+			if restarted {
+				t.Fatalf("the guard restarted the worker")
+			}
+			if test.wantDefer == "" {
+				if err == nil {
+					t.Errorf("the guard did not fail: actions %v", actions)
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(actions, []string{test.wantDefer}) {
+				t.Errorf("guard: err %v, actions %v, want %q", err, actions, test.wantDefer)
+			}
+		})
+	}
+}
+
 // Once the worker runs the installed binary, nothing is pending and nothing
 // about a pending restart is reported.
 func TestStewardObserveClearsAPendingRestartOnceTheWorkerRestarted(t *testing.T) {

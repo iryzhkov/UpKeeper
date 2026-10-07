@@ -121,8 +121,8 @@ func stewardRecordDeferredRestart(c *Context, binary string) {
 
 // stewardWorkerRestartWaiting explains a pending restart: since when it has
 // waited, by this host's clock, and what the worker journal says it waits
-// for. The counts are read the way the restart guard reads them; a count the
-// guard would refuse is reported as missing rather than as zero.
+// for. The counts are read the way the restart guard reads them, in its order;
+// a count the guard would refuse is reported as missing rather than as zero.
 //
 // The note is the sentence status and doctor print, and it says what the
 // guard will do with these counts. Only a worker that owns dispatched or
@@ -152,8 +152,16 @@ func stewardWorkerRestartWaiting(c *Context, binary string, since time.Time) map
 		dispatched, counted := stewardJournalCount(document, "dispatched")
 		_, present := document["settlePending"]
 		settlePending, settleCounted := stewardJournalCount(document, "settlePending")
+		// The cases follow the guard's order: a positive dispatched count
+		// defers the restart before the guard reads the settle-pending count.
 		switch {
-		case !counted || present && !settleCounted:
+		case !counted:
+			counts, outcome = "the worker journal summary is malformed", failing
+		case dispatched != 0 && present && !settleCounted:
+			waiting["dispatched"] = dispatched
+			counts = fmt.Sprintf("%d dispatched, settle-pending count malformed", dispatched)
+			outcome = busy
+		case present && !settleCounted:
 			counts, outcome = "the worker journal summary is malformed", failing
 		case !present:
 			waiting["dispatched"] = dispatched
