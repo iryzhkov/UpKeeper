@@ -255,7 +255,24 @@ runs while the host has a scheduled hold marker.
 2. The asset for this architecture is downloaded from
    `https://github.com/iryzhkov/UpKeeper/releases/download/<tag>/`, and its
    size and sha256 must equal the pin. The `SHA256SUMS` file next to it is
-   not consulted.
+   not consulted. The download is anonymous first. When github.com answers
+   it with 404, 401 or 403, as it does for a private repository, the asset is
+   resolved through the GitHub REST API instead (`GET
+   /repos/<repository>/releases/tags/<tag>`, then `GET
+   /repos/<repository>/releases/assets/<id>` with `Accept:
+   application/octet-stream`) with a credential found on the host, in this
+   order: `GH_TOKEN`, `GITHUB_TOKEN`, then what `gh auth token --hostname
+   github.com` prints (bounded to ten seconds, its stderr discarded). The
+   credential is sent only in the Authorization header to api.github.com,
+   removed from any redirect that leaves that host (the asset redirects to
+   GitHub's storage), and never written to a URL, an error, a report or a
+   file. The authenticated body is held to the same size and sha256. A host
+   with no credential refuses with `cannot download <asset>: the release is
+   not public (HTTP 404) and no GitHub credential is available on this host;
+   run gh auth login on this host or set GH_TOKEN`; a variable that is set
+   but is not a token is refused by name, never by value. A host whose
+   scheduled self-pull runs under systemd needs gh on the unit's `PATH`, or
+   a token in its environment, for this to work unattended.
 3. The staged file runs `version` with an empty `PATH` and a disposable `HOME`,
    and must print exactly `upkeeper <tag> (commit <source_commit>)`.
 4. It is installed read-only as

@@ -559,11 +559,16 @@ func stewardObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	if digest := c.SHA256File(binary); digest != "" {
 		observed["binary_sha256"] = digest
 	}
-	pending := stewardWorkerRestartPending(c, binary)
+	since, pending := stewardWorkerRestartPendingSince(c, binary)
 	observed["worker_restart_pending"] = pending
 	observed["drift"] = []string{}
 	if pending {
 		observed["drift"] = []string{"worker restart pending"}
+		// A host that is never idle keeps the restart waiting indefinitely;
+		// saying since when, and on what, is what lets an operator act.
+		waiting := stewardWorkerRestartWaiting(c, binary, since)
+		observed["worker_restart_pending_since"] = waiting["since"]
+		observed["worker_restart_waiting"] = waiting
 	}
 	return observed, nil
 }
@@ -585,38 +590,43 @@ var stewardWorkerExecutable = func(pid int) (string, os.FileInfo, error) {
 	return strings.TrimSuffix(link, " (deleted)"), info, nil
 }
 
-// stewardWorkerRestartPending reports whether the running persistent worker
-// predates the installed binary: it was started from the installed path, and
-// the file it executes is no longer the file at that path.
+// stewardWorkerRestartPendingSince reports whether the running persistent
+// worker predates the installed binary: it was started from the installed
+// path, and the file it executes is no longer the file at that path.
 //
 // A restart deferred because the worker owned execution leaves exactly this
 // state behind, and the next pass finds the pinned version already installed,
 // so without this check the worker would serve the previous release until
 // something else restarted it. Anything that cannot be proven, such as a worker
 // that is not running or one started from another path, is not pending.
-func stewardWorkerRestartPending(c *Context, binary string) bool {
+//
+// It also says since when: the modification time of the installed binary. The
+// restart became pending when that file replaced the one the worker executes,
+// and the install writes the file's bytes afresh, so its modification time is
+// that moment by this host's clock. No state of UpKeeper's own records it.
+func stewardWorkerRestartPendingSince(c *Context, binary string) (time.Time, bool) {
 	if !c.UnitLoaded(stewardWorkerUnit) || !c.UnitActive(stewardWorkerUnit) {
-		return false
+		return time.Time{}, false
 	}
 	result := c.Run([]string{"systemctl", "--user", "show", stewardWorkerUnit,
 		"-p", "MainPID", "--value"}, 10*time.Second, "")
 	pid, err := strconv.Atoi(strings.TrimSpace(result.Output))
 	if !result.OK || err != nil || pid <= 0 {
-		return false
+		return time.Time{}, false
 	}
 	installedPath, err := filepath.EvalSymlinks(binary)
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
 	installed, err := os.Stat(installedPath)
 	if err != nil {
-		return false
+		return time.Time{}, false
 	}
 	startedFrom, running, err := stewardWorkerExecutable(pid)
 	if err != nil || startedFrom != installedPath {
-		return false
+		return time.Time{}, false
 	}
-	return !os.SameFile(running, installed)
+	return installed.ModTime(), !os.SameFile(running, installed)
 }
 
 func stewardApply(
