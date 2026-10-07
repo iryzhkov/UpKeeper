@@ -144,9 +144,13 @@ ci-local:
 # files changed. It is not the gate; ci-local still runs once per chain. See
 # docs/developer-testing.md.
 .PHONY: test-affected
+# BASE and LIST reach the recipe through the environment, never as shell text,
+# so a quote in either cannot end the argument and run a command.
+test-affected: export TEST_AFFECTED_BASE = $(BASE)
+test-affected: export TEST_AFFECTED_LIST = $(LIST)
 test-affected:
-	@if [ -z "$(BASE)" ]; then echo "usage: make test-affected BASE=<commit> [LIST=1]" >&2; exit 2; fi
-	python3 scripts/test-affected.py --base "$(BASE)" $(if $(LIST),--list)
+	@if [ -z "$$TEST_AFFECTED_BASE" ]; then echo "usage: make test-affected BASE=<commit> [LIST=1]" >&2; exit 2; fi
+	python3 scripts/test-affected.py --base "$$TEST_AFFECTED_BASE" $${TEST_AFFECTED_LIST:+--list}
 
 # Two independent clean Git clones and empty build caches, not a repeat build
 # in the same directory. The helper refuses a dirty tracked source tree.

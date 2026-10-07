@@ -1,12 +1,14 @@
 """Behaviour of scripts/test-affected.py over canned git and go list output.
 
 The planner is pure: every git and go command goes through a runner that these
-tests replace, so nothing here runs the real toolchain or make. Only the change
-set test uses a real temporary Git repository, because the union of committed,
-staged, unstaged and untracked paths is exactly what it has to prove.
+tests replace, so nothing here runs the real Go toolchain. The change set test
+uses a real temporary Git repository, because the union of committed, staged,
+unstaged and untracked paths is exactly what it has to prove, and one test runs
+the Makefile recipe with a base that git refuses before anything else runs.
 """
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -97,6 +99,20 @@ def test_requires_base(capsys):
     assert "usage: make test-affected BASE=<commit> [LIST=1]" in capsys.readouterr().err
     assert run_main(FakeRunner(), "--base", "") == 2
     assert "usage: make test-affected BASE=<commit> [LIST=1]" in capsys.readouterr().err
+
+
+def test_makefile_base_is_never_shell_text(tmp_path):
+    marker = tmp_path / "marker"
+    base = f'x"; touch {marker}; echo "'
+    env = {k: v for k, v in os.environ.items() if k not in {"BASE", "LIST", "MAKEFLAGS"}}
+    done = subprocess.run(
+        ["make", "-s", "-C", str(ROOT), "test-affected", f"BASE={base}", "LIST=1"],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 2
+    assert not marker.exists()
+    # The whole value reached the script as one argument and git refused it.
+    assert f"{base!r} is not a commit" in done.stderr
 
 
 def test_rejects_unknown_base(capsys):

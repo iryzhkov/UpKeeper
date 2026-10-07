@@ -210,7 +210,7 @@ def go_command(
 def plan(runner, root: Path, base: str, environ: Mapping[str, str]) -> list[list[str]] | None:
     """Print the plan and return its commands, or None when nothing is affected."""
     sha = resolve_base(runner, base)
-    paths = changed_paths(runner, base)
+    paths = changed_paths(runner, sha)
     print(f"test-affected: base {sha}")
     if not paths:
         print(f"test-affected: no changes against {sha}; nothing to run")
