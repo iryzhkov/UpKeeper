@@ -360,6 +360,9 @@ language directive stays `go 1.24` to preserve its GODEBUG defaults. Run
 `make ci-local` for the hosted job set and `make go-reproducible` to compare
 two clean clones with separate empty build caches. Both commands should run
 from clean committed source, with `TMPDIR` on an executable filesystem.
+For the edit-test loop, `make test-affected BASE=<commit>` runs only what a
+change can affect; docs/developer-testing.md describes it, the race groups and
+the timing rules for tests.
 
 `upkeeper version` prints the exact source commit the binary was built from.
 

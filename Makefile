@@ -139,6 +139,15 @@ ci-go-gate:
 ci-local:
 	python3 scripts/ci-local.py
 
+# The edit-test loop: the Go packages a change can affect (with their reverse
+# dependencies) under the race detector, and pytest when Python or repository
+# files changed. It is not the gate; ci-local still runs once per chain. See
+# docs/developer-testing.md.
+.PHONY: test-affected
+test-affected:
+	@if [ -z "$(BASE)" ]; then echo "usage: make test-affected BASE=<commit> [LIST=1]" >&2; exit 2; fi
+	python3 scripts/test-affected.py --base "$(BASE)" $(if $(LIST),--list)
+
 # Two independent clean Git clones and empty build caches, not a repeat build
 # in the same directory. The helper refuses a dirty tracked source tree.
 go-reproducible:
