@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -23,7 +22,14 @@ type Call struct {
 	Params any
 }
 
-func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout time.Duration) ([]map[string]any, error) {
+func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout time.Duration) (results []map[string]any, err error) {
+	// All returned errors, including OS errors and caller-supplied call names,
+	// pass through the shared diagnostic gate. Child stderr stays discarded.
+	defer func() {
+		if err != nil {
+			err = redact.Error(err)
+		}
+	}()
 	if len(argv) == 0 {
 		return nil, errors.New("missing probe command")
 	}
@@ -90,7 +96,6 @@ func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout 
 	if err := write(map[string]any{"jsonrpc": "2.0", "method": notification}); err != nil {
 		return nil, err
 	}
-	var results []map[string]any
 	for i, c := range calls {
 		id := i + 2
 		if err := write(map[string]any{"jsonrpc": "2.0", "id": id, "method": c.Method, "params": c.Params}); err != nil {
@@ -124,74 +129,6 @@ func callName(c Call) string {
 		}
 	}
 	return c.Method
-}
-
-// privateKeyStart finds what is left of a private key block after redaction:
-// one the tool cut short has no END marker for the redaction to match.
-var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
-
-// Secret shapes a tool's error text plausibly carries that the shared
-// redaction does not: an environment assignment such as OV_API_KEY=... (the
-// shared pattern needs a word boundary before the key word), a quoted value
-// with spaces (the shared pattern takes only its first word), a JSON- or
-// dict-quoted secret field, and a bearer token without its Authorization
-// header. The key words are the shared redaction's secret key words, an
-// access key, and a key word written with a space, as in "api key".
-const toolSecretWord = `(?:(?:api|access)[\s_-]?key|private[\s_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
-
-// toolSecretValue is a secret's value, tried in order: an authorization
-// scheme and its credential; a value in escaped double quotes, as inside a
-// JSON string; one in double, single (either optionally a Python bytes or raw
-// literal), back or curly quotes; a JSON array or object; or a bare word. A
-// quoted value, array or object the text ends inside of runs to the end, so a
-// tool's own truncation never leaves the rest of a value behind.
-const toolSecretValue = `(?:(?:bearer|basic|token)\s+[^\s,;"'\\]+` +
-	`|\\"(?:[^"\\]|\\[^"])*(?:\\"|\\?$)` +
-	`|[bru]?"(?:[^"\\]|\\.)*(?:"|\\?$)` +
-	`|[bru]?'(?:[^'\\]|\\.)*(?:'|\\?$)` +
-	`|\x60[^\x60]*(?:\x60|$)` +
-	`|“[^”]*(?:”|$)` +
-	`|\[[^\]]*(?:\]|$)` +
-	`|\{[^}]*(?:\}|$)` +
-	`|[^\s,;}\]]+)`
-
-var (
-	// An assignment's key may be a longer name around a key word, such as
-	// OV_API_KEY or AWS_SECRET_ACCESS_KEY, but not a word such as secret-tool.
-	toolSecretAssignment = regexp.MustCompile(
-		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `(?:_[A-Za-z0-9]+)*\s*[=:]\s*)` + toolSecretValue)
-	// A JSON or dict key is quoted, or escaped-quoted inside a JSON string.
-	toolSecretJSON = regexp.MustCompile(
-		`(?i)(\\?["'][A-Za-z0-9_.\s-]*` + toolSecretWord + `[A-Za-z0-9_.-]*\\?["']\s*:\s*)` + toolSecretValue)
-	// A command-line flag gives its value after a space.
-	toolSecretFlag = regexp.MustCompile(
-		`(?i)((?:^|\s)--?[A-Za-z0-9_-]*` + toolSecretWord + `[A-Za-z0-9_-]*\s+)[^\s-]\S*`)
-	// A Cookie header carries several pairs.
-	toolCookie = regexp.MustCompile(`(?i)(\bcookie\s*[=:]\s*)[^\s,;]+(?:;\s*[^\s,;=]+=[^\s,;]*)*`)
-	// Credentials in a URL of any scheme, such as a database's.
-	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
-	toolBearer      = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
-	// privateKeyBlock is the shared redaction's whole private key block.
-	privateKeyBlock = regexp.MustCompile(
-		`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-)
-
-// redactToolText removes private keys first, so that an assignment matcher
-// never takes only a key's BEGIN marker; then the shapes above, before the
-// shared helper can consume an opening quote or an authorization scheme and
-// hide the rest of a value; then the shared helper and the bare bearer token.
-func redactToolText(text string) string {
-	text = privateKeyBlock.ReplaceAllString(text, redact.Placeholder)
-	if start := privateKeyStart.FindStringIndex(text); start != nil {
-		text = text[:start[0]] + redact.Placeholder
-	}
-	text = toolURLUserInfo.ReplaceAllString(text, "${1}"+redact.Placeholder+"@")
-	text = toolCookie.ReplaceAllString(text, "${1}"+redact.Placeholder)
-	text = toolSecretJSON.ReplaceAllString(text, `${1}"`+redact.Placeholder+`"`)
-	text = toolSecretAssignment.ReplaceAllString(text, "${1}"+redact.Placeholder)
-	text = toolSecretFlag.ReplaceAllString(text, "${1}"+redact.Placeholder)
-	text = redact.Text(text)
-	return toolBearer.ReplaceAllString(text, "${1}"+redact.Placeholder)
 }
 
 // hiddenCharacter reports a character that must not reach a report: a control
@@ -241,10 +178,7 @@ func toolErrorText(result map[string]any) string {
 	if capped {
 		text = text[:max(strings.LastIndexFunc(text[:toolRedactLimit], unicode.IsSpace), 0)]
 	}
-	text = redactToolText(text)
-	if start := privateKeyStart.FindStringIndex(text); start != nil {
-		text = text[:start[0]] + redact.Placeholder
-	}
+	text = redact.DiagnosticText(text)
 	if capped {
 		text += " ..."
 	}

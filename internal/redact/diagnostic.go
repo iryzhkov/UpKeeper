@@ -1,0 +1,208 @@
+package redact
+
+import (
+	"regexp"
+	"strings"
+)
+
+// privateKeyStart finds what is left of a private key block after redaction:
+// one the tool cut short has no END marker for the redaction to match.
+var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
+
+// Secret shapes a tool's error text plausibly carries that the shared
+// redaction does not: an environment assignment such as OV_API_KEY=... (the
+// shared pattern needs a word boundary before the key word), a quoted value
+// with spaces (the shared pattern takes only its first word), a JSON- or
+// dict-quoted secret field, and a bearer token without its Authorization
+// header. The key words are the shared redaction's secret key words, an
+// access key, and a key word written with a space, as in "api key".
+const toolSecretWord = `(?:(?:api|access)[\s_-]?key|private[\s_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
+
+// toolSecretValue is a secret's value, tried in order: an authorization
+// scheme and its credential; a value in escaped double quotes, as inside a
+// JSON string; one in double, single (either optionally a Python bytes or raw
+// literal), back or curly quotes; a JSON array or object; or a bare word. A
+// quoted value, array or object the text ends inside of runs to the end, so a
+// tool's own truncation never leaves the rest of a value behind.
+const toolSecretValue = `(?:(?:bearer|basic|token)\s+[^\s,;"'\\]+` +
+	`|\\"(?:[^"\\]|\\[^"])*(?:\\"|\\?$)` +
+	`|[bru]?"(?:[^"\\]|\\.)*(?:"|\\?$)` +
+	`|[bru]?'(?:[^'\\]|\\.)*(?:'|\\?$)` +
+	`|\x60[^\x60]*(?:\x60|$)` +
+	`|“[^”]*(?:”|$)` +
+	`|\[[^\]]*(?:\]|$)` +
+	`|\{[^}]*(?:\}|$)` +
+	`|[^\s,;}\]]+)`
+
+var (
+	diagnosticValue = regexp.MustCompile(`(?i)^` + toolSecretValue)
+
+	// An assignment's key may be a longer name around a key word, such as
+	// OV_API_KEY or AWS_SECRET_ACCESS_KEY, but not a word such as secret-tool.
+	toolSecretAssignment = regexp.MustCompile(
+		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `(?:_[A-Za-z0-9]+)*\s*[=:]\s*)`)
+	// A JSON or dict key is quoted, or escaped-quoted inside a JSON string.
+	toolSecretJSON = regexp.MustCompile(
+		`(?i)(\\*["'][A-Za-z0-9_.\s-]*` + toolSecretWord + `[A-Za-z0-9_.-]*\\*["']\s*:\s*)`)
+	// A command-line flag gives its value after a space.
+	toolSecretFlag = regexp.MustCompile(
+		`(?i)((?:^|\s)--?[A-Za-z0-9_-]*` + toolSecretWord + `[A-Za-z0-9_-]*\s+)`)
+	// A Cookie header carries several pairs.
+	toolCookie = regexp.MustCompile(`(?i)(\bcookie\s*[=:]\s*)[^\s,;]+(?:;\s*[^\s,;=]+=[^\s,;]*)*`)
+	// Credentials in a URL of any scheme, such as a database's.
+	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
+	toolBearer      = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
+	// privateKeyBlock is the shared redaction's whole private key block.
+	privateKeyBlock = regexp.MustCompile(
+		`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+)
+
+// DiagnosticText redacts untrusted diagnostic strings, including nested or
+// truncated structured values. It leaves ordinary operational guidance intact.
+// It removes private keys first, so that an assignment matcher
+// never takes only a key's BEGIN marker; then the shapes above, before the
+// shared helper can consume an opening quote or an authorization scheme and
+// hide the rest of a value; then the shared helper and the bare bearer token.
+func DiagnosticText(text string) string {
+	text = privateKeyBlock.ReplaceAllString(text, Placeholder)
+	if start := privateKeyStart.FindStringIndex(text); start != nil {
+		text = text[:start[0]] + Placeholder
+	}
+	text = toolURLUserInfo.ReplaceAllString(text, "${1}"+Placeholder+"@")
+	text = toolCookie.ReplaceAllString(text, "${1}"+Placeholder)
+	text = replaceDiagnosticValues(text, toolSecretJSON, true)
+	text = replaceDiagnosticValues(text, toolSecretAssignment, false)
+	text = replaceDiagnosticValues(text, toolSecretFlag, false)
+	text = Text(text)
+	return toolBearer.ReplaceAllString(text, "${1}"+Placeholder)
+}
+
+// Error sanitizes the printable diagnostic while preserving errors.Is/As.
+// Callers must print the wrapper, rather than printing its underlying cause.
+func Error(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := DiagnosticText(err.Error())
+	if message == err.Error() {
+		return err
+	}
+	return diagnosticError{cause: err, message: message}
+}
+
+type diagnosticError struct {
+	cause   error
+	message string
+}
+
+func (e diagnosticError) Error() string { return e.message }
+func (e diagnosticError) Unwrap() error { return e.cause }
+
+// replaceDiagnosticValues locates a sensitive prefix before consuming its
+// value. In particular, the opening quote is never lost to a bare-word match.
+func replaceDiagnosticValues(value string, prefix *regexp.Regexp, quoted bool) string {
+	var out strings.Builder
+	for position := 0; position < len(value); {
+		found := prefix.FindStringIndex(value[position:])
+		if found == nil {
+			out.WriteString(value[position:])
+			break
+		}
+		end := position + found[1]
+		out.WriteString(value[position:end])
+		consumed := diagnosticValueEnd(value[end:])
+		if consumed == 0 {
+			position = end
+			continue
+		}
+		if quoted {
+			out.WriteByte('"')
+		}
+		out.WriteString(Placeholder)
+		if quoted {
+			out.WriteByte('"')
+		}
+		position = end + consumed
+	}
+	return out.String()
+}
+
+// diagnosticValueEnd returns the complete value boundary. Escaped diagnostic
+// JSON is decoded only in a scratch view; offsets map back to the original.
+// An uncertain structured boundary consumes the rest rather than leaking it.
+func diagnosticValueEnd(raw string) int {
+	if raw == "" || raw[0] == '-' {
+		return 0
+	}
+	view := raw
+	var offsets []int
+	originalEnd := func(end int) int {
+		if offsets == nil {
+			return end
+		}
+		return offsets[end]
+	}
+	for layer := 0; layer < 8; layer++ {
+		first := strings.IndexByte(view, '"')
+		if first <= 0 || view[first-1] != '\\' {
+			break
+		}
+		// Only unwrap an escaped string or an escaped structured value.
+		if view[0] != '\\' && view[0] != '{' && view[0] != '[' {
+			break
+		}
+		var decoded strings.Builder
+		next := []int{0}
+		for i := 0; i < len(view); {
+			c := view[i]
+			if c == '\\' && i+1 < len(view) && (view[i+1] == '\\' || view[i+1] == '"') {
+				i++
+				c = view[i]
+			}
+			decoded.WriteByte(c)
+			i++
+			next = append(next, originalEnd(i))
+		}
+		view, offsets = decoded.String(), next
+	}
+	if view[0] == '{' || view[0] == '[' {
+		stack := []byte{view[0]}
+		var quote byte
+		for i := 1; i < len(view); i++ {
+			c := view[i]
+			if quote != 0 {
+				if c == '\\' {
+					i++
+					continue
+				}
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			switch c {
+			case '"', '\'':
+				quote = c
+			case '{', '[':
+				stack = append(stack, c)
+			case '}', ']':
+				top := stack[len(stack)-1]
+				if (top == '{' && c != '}') || (top == '[' && c != ']') {
+					return len(raw)
+				}
+				stack = stack[:len(stack)-1]
+				if len(stack) == 0 {
+					return originalEnd(i + 1)
+				}
+			}
+		}
+		return len(raw)
+	}
+	// Quotes use the same balanced/escape-aware primitive patterns as other
+	// diagnostic values. A truncated quote consumes through the end.
+	found := diagnosticValue.FindStringIndex(view)
+	if found == nil {
+		return 0
+	}
+	return originalEnd(found[1])
+}
