@@ -10,6 +10,7 @@ import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -460,22 +461,51 @@ def test_actual_probe_limits_and_process_group_cleanup(tmp_path, mode):
     }[mode]
     program.write_text(f"#!{sys.executable}\n{body}\n")
     program.chmod(0o700)
-    start = time.monotonic()
-    with pytest.raises(bootstrap.Refusal):
-        bootstrap.probe(program, "expected\n", timeout=0.3)
-    assert time.monotonic() - start < 3
+    outcome = {}
+
+    def call():
+        try:
+            bootstrap.probe(program, "expected\n", timeout=0.3)
+        except bootstrap.Refusal as error:
+            outcome["refusal"] = str(error)
+        except BaseException as error:  # reported by the assertion below
+            outcome["error"] = error
+        else:
+            outcome["accepted"] = True
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    # A hang guard only: the probe's own timeout ends it, and the programs
+    # that never exit sleep for 60 s, so a probe that waited for them fails here.
+    worker.join(30)
+    assert not worker.is_alive(), "probe blocked past its own timeout"
+    assert "refusal" in outcome, outcome
+    expected = {
+        "timeout": "version probe timeout",
+        "descendant": "version probe timeout",
+        "overflow": "version probe stdout limit",
+        "wrong": "version output mismatch",
+        "nonzero": "version output mismatch",
+    }[mode]
+    assert expected in outcome["refusal"], outcome
     if pid_file.exists():
         pid = int(pid_file.read_text())
         if pid:
             # Zombie is already killed; reaping is the external subreaper's responsibility.
+            # The process may vanish between any two reads, so a missing entry is gone.
             path = Path(f"/proc/{pid}/stat")
-            for _ in range(20):
-                if not path.exists() or path.read_text().split()[2] == "Z":
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    state = path.read_text().split()[2]
+                except (FileNotFoundError, ProcessLookupError):
                     break
+                if state == "Z":
+                    break
+                if time.monotonic() > deadline:
+                    os.kill(pid, signal.SIGKILL)
+                    pytest.fail("ordinary descendant escaped process-group cleanup")
                 time.sleep(0.01)
-            else:
-                os.kill(pid, signal.SIGKILL)
-                pytest.fail("ordinary descendant escaped process-group cleanup")
 
 
 def test_distinct_approved_requests_race_without_mixed_identity(setup):

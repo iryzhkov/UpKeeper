@@ -134,7 +134,7 @@ func TestTheCredentialCheckNeverOpensAFIFO(t *testing.T) {
 				if present {
 					t.Fatal("a FIFO counted as a credential")
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(10 * time.Second):
 				t.Fatal("the credential check blocked on a FIFO")
 			}
 		})

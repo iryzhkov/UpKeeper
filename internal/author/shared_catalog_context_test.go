@@ -124,8 +124,10 @@ func TestCatalogContextHeldLock(t *testing.T) {
 			if !errors.Is(e, context.DeadlineExceeded) || !empty {
 				t.Fatalf("held lock deadline: %v", e)
 			}
-			// Scheduling margin only; the deadline itself ends the wait.
-			if elapsed < wait || elapsed > wait+5*time.Second {
+			// The deadline itself ends the wait, so it cannot return earlier.
+			// No upper bound: a loaded host may schedule the waiter late, and
+			// the DeadlineExceeded result above already proves the deadline ended it.
+			if elapsed < wait {
 				t.Fatalf("held lock wait %v", elapsed)
 			}
 

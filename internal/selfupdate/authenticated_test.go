@@ -447,7 +447,8 @@ func TestAHungGhLeavesNoProcessBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-	deadline := time.Now().Add(3 * time.Second)
+	// A hang guard: the bound already ended gh; this only waits for the kill.
+	deadline := time.Now().Add(10 * time.Second)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("gh's child %d is still running after the bound", pid)

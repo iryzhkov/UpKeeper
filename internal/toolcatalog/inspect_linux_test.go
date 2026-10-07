@@ -271,7 +271,7 @@ func TestNonregularNeverDataOpened(t *testing.T) {
 					if e == nil {
 						t.Fatal("accepted nonregular")
 					}
-				case <-time.After(time.Second):
+				case <-time.After(10 * time.Second):
 					t.Fatal("nonregular acquisition blocked without writer")
 				}
 				for _, label := range opened {

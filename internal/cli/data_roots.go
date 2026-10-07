@@ -193,8 +193,16 @@ func (r inspectionExecRunner) run(ctx context.Context, c inspectionGitCommand) (
 	return out.Bytes(), stderr.Bytes(), nil
 }
 
+// inspectionWholeBudget bounds one root-pair inspection and every Git command
+// in it; inspectionCommandBudget bounds each command. They are variables only
+// so that tests can lower them; nothing else assigns them.
+var (
+	inspectionWholeBudget   = 15 * time.Second
+	inspectionCommandBudget = 5 * time.Second
+)
+
 func inspectRootPair(ctx context.Context, codePath, dataPath string, runner inspectionGitRunner) (rootPairObservation, error) {
-	parent, cancel := context.WithTimeout(ctx, 15*time.Second)
+	parent, cancel := context.WithTimeout(ctx, inspectionWholeBudget)
 	defer cancel()
 	zero := rootPairObservation{}
 	fail := func(err error) (rootPairObservation, error) {
@@ -245,7 +253,7 @@ func inspectionRun(ctx context.Context, runner inspectionGitRunner, cmd inspecti
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	child, cancel := context.WithTimeout(ctx, 5*time.Second)
+	child, cancel := context.WithTimeout(ctx, inspectionCommandBudget)
 	defer cancel()
 	out, stderr, err := runner.run(child, cmd)
 	if child.Err() != nil {

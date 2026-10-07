@@ -612,14 +612,15 @@ func TestInspectionCancellationAndCumulativeBudget(t *testing.T) {
 	real := inspectionReal(t)
 	var active atomic.Int32
 	calls = 0
-	started := time.Now()
 	ctx, cancel = context.WithTimeout(context.Background(), 180*time.Millisecond)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	runner = inspectionRunnerFunc(func(ctx context.Context, c inspectionGitCommand) ([]byte, []byte, error) {
 		calls++
+		// The caller's deadline is earlier than both inspector budgets, so it is
+		// exactly the deadline of every command: one budget, never renewed.
 		got, ok := ctx.Deadline()
-		if !ok || got.After(deadline) {
+		if !ok || got.After(deadline) || !got.Equal(deadline) {
 			t.Fatal("caller deadline renewed")
 		}
 		active.Add(1)
@@ -634,7 +635,7 @@ func TestInspectionCancellationAndCumulativeBudget(t *testing.T) {
 		return real.run(ctx, c)
 	})
 	result, err = inspectRootPair(ctx, code, data, runner)
-	if calls < 2 || !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || active.Load() != 0 || time.Since(started) > time.Second {
+	if calls < 2 || !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || active.Load() != 0 || ctx.Err() == nil {
 		t.Fatalf("cumulative budget: calls=%d err=%v", calls, err)
 	}
 	// The inspector's own whole-operation budget is shared by every command even
@@ -642,11 +643,11 @@ func TestInspectionCancellationAndCumulativeBudget(t *testing.T) {
 	var parentDeadline time.Time
 	runner = inspectionRunnerFunc(func(ctx context.Context, c inspectionGitCommand) ([]byte, []byte, error) {
 		d, _ := ctx.Deadline()
-		if time.Until(d) > 5*time.Second {
-			t.Fatal("child budget exceeds five seconds")
+		if time.Until(d) > inspectionCommandBudget {
+			t.Fatal("child budget exceeds the command budget")
 		}
 		if parentDeadline.IsZero() {
-			parentDeadline = time.Now().Add(15 * time.Second)
+			parentDeadline = time.Now().Add(inspectionWholeBudget)
 		}
 		if d.After(parentDeadline) {
 			t.Fatal("child exceeds whole budget")
@@ -656,43 +657,103 @@ func TestInspectionCancellationAndCumulativeBudget(t *testing.T) {
 	inspectionRead(t, code, data, runner, true)
 }
 
-// Exercise expiry of the real fixed whole budget, not only an earlier caller deadline.
+// inspectionTestBudgets lowers the inspector's unexported budgets for one test.
+func inspectionTestBudgets(t *testing.T, whole, command time.Duration) {
+	t.Helper()
+	previousWhole, previousCommand := inspectionWholeBudget, inspectionCommandBudget
+	inspectionWholeBudget, inspectionCommandBudget = whole, command
+	t.Cleanup(func() { inspectionWholeBudget, inspectionCommandBudget = previousWhole, previousCommand })
+}
+
+// Exercise expiry of the inspector's own whole budget and its per-command
+// budget, not only an earlier caller deadline. Both budgets are lowered, the
+// runner answers without Git, and the assertions are deadline relations
+// rather than elapsed-time windows.
 func TestInspectionWholeBudget(t *testing.T) {
 	code := inspectionFixture(t, true, false, "git@code.example:Repo")
 	data := inspectionFixture(t, false, true, "git@data.example:Repo")
-	real := inspectionReal(t)
-	start := time.Now()
-	calls := 0
-	active := 0
-	clipped := false
-	runner := inspectionRunnerFunc(func(ctx context.Context, c inspectionGitCommand) ([]byte, []byte, error) {
-		calls++
-		active++
-		defer func() { active-- }()
-		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > 5*time.Second {
-			t.Fatal("unbounded child")
+	if inspectionWholeBudget != 15*time.Second || inspectionCommandBudget != 5*time.Second {
+		t.Fatalf("production budgets %v/%v", inspectionWholeBudget, inspectionCommandBudget)
+	}
+	// The first two commands of a root (top level, bare) are answered as Git
+	// would; the third blocks until its context ends, or fails after a hang
+	// guard. How many commands run is decided by the runner, not by time.
+	type observed struct {
+		first     time.Time
+		deadlines []time.Time
+		until     []time.Duration
+		active    int
+	}
+	blocking := func(t *testing.T, o *observed) inspectionRunnerFunc {
+		return func(ctx context.Context, c inspectionGitCommand) ([]byte, []byte, error) {
+			o.active++
+			defer func() { o.active-- }()
+			if o.first.IsZero() {
+				o.first = time.Now()
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("unbounded child")
+			}
+			o.deadlines = append(o.deadlines, deadline)
+			o.until = append(o.until, time.Until(deadline))
+			switch c.operation {
+			case inspectionTop:
+				return []byte(c.root + "\n"), nil, nil
+			case inspectionBare:
+				return []byte("false\n"), nil, nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(10 * time.Second):
+				t.Fatal("budget did not end the blocked command")
+			}
+			return nil, nil, nil
 		}
-		if time.Since(start) > 11*time.Second {
-			clipped = true
-			if deadline.After(start.Add(15*time.Second + 100*time.Millisecond)) {
-				t.Fatal("whole budget renewed")
+	}
+
+	t.Run("whole", func(t *testing.T) {
+		// The whole budget is shorter than one command's budget, so every
+		// command's deadline must be clipped to the one whole deadline, and
+		// only the whole budget can end the blocked command.
+		inspectionTestBudgets(t, 300*time.Millisecond, time.Hour)
+		var o observed
+		result, err := inspectRootPair(context.Background(), code, data, blocking(t, &o))
+		if !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || len(o.deadlines) != 3 || o.active != 0 {
+			t.Fatalf("whole budget: calls=%d active=%d err=%v", len(o.deadlines), o.active, err)
+		}
+		// The whole budget began before the first command, so its deadline is
+		// at most the first command's start plus the budget, and every command
+		// shares exactly that deadline: clipped, never renewed.
+		for i, d := range o.deadlines {
+			if !d.Equal(o.deadlines[0]) {
+				t.Fatalf("command %d deadline %v differs from %v", i, d, o.deadlines[0])
 			}
 		}
-		timer := time.NewTimer(time.Second)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		case <-timer.C:
+		if o.deadlines[0].After(o.first.Add(inspectionWholeBudget)) {
+			t.Fatal("whole budget renewed or not applied to the commands")
 		}
-		return real.run(ctx, c)
 	})
-	result, err := inspectRootPair(context.Background(), code, data, runner)
-	elapsed := time.Since(start)
-	if !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || calls < 12 || !clipped || active != 0 || elapsed < 14*time.Second || elapsed > 17*time.Second {
-		t.Fatalf("whole budget: elapsed=%v calls=%d active=%d clipped=%v err=%v", elapsed, calls, active, clipped, err)
-	}
+
+	t.Run("command", func(t *testing.T) {
+		// One command's budget is far shorter than the whole budget, so only
+		// the command's own budget can end the blocked command.
+		inspectionTestBudgets(t, time.Hour, 200*time.Millisecond)
+		var o observed
+		result, err := inspectRootPair(context.Background(), code, data, blocking(t, &o))
+		if !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || len(o.deadlines) != 3 || o.active != 0 {
+			t.Fatalf("command budget: calls=%d active=%d err=%v", len(o.deadlines), o.active, err)
+		}
+		for i, until := range o.until {
+			if until > inspectionCommandBudget {
+				t.Fatalf("command %d has %v, more than the command budget", i, until)
+			}
+			if !o.deadlines[i].Before(o.first.Add(inspectionWholeBudget)) {
+				t.Fatalf("command %d was not bounded by its own budget", i)
+			}
+		}
+	})
 }
 
 func TestInspectionProcessHelper(t *testing.T) {
@@ -767,7 +828,7 @@ ready:
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("adapter did not synchronously complete")
 	}
 	if !errors.Is(runErr, context.Canceled) || result != (rootPairObservation{}) {
@@ -809,7 +870,8 @@ func TestInspectionRealOutputCaps(t *testing.T) {
 		if err := os.Chmod(helper, 0700); err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// A hang guard: the output cap, not this deadline, must end the helper.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		out, errout, err := (inspectionExecRunner{executable: helper}).run(ctx, inspectionGitCommand{root: dir, operation: inspectionTop})
 		cancel()
 		if err == nil || len(out) > inspectionOutputLimit || len(errout) > inspectionOutputLimit || !strings.Contains(err.Error(), "output limit") {

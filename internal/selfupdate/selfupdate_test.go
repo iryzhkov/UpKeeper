@@ -112,9 +112,14 @@ func runBinary(t *testing.T, layout Layout) string {
 	t.Helper()
 	var output []byte
 	var err error
-	for attempt := 0; attempt < 5; attempt++ {
+	// ETXTBSY is transient while the just-written binary is still open for
+	// writing somewhere, for example through a descriptor a concurrent fork
+	// inherited. Retry until a deadline rather than a fixed number of short
+	// sleeps, which a loaded host can exhaust.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
 		output, err = exec.Command(layout.Binary(), "version").Output()
-		if !errors.Is(err, syscall.ETXTBSY) {
+		if !errors.Is(err, syscall.ETXTBSY) || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
