@@ -47,9 +47,10 @@ func (i *Installer) fetch(pin *release.ProgramPin, target string, asset release.
 	url := pin.URL(i.BaseURL, target)
 	response, err := client.Get(url)
 	if err != nil {
-		return "", cleanup, failure.Value("cannot download %s: %v", url, err)
+		return "", cleanup, failure.Value("cannot download %s: %v", url, withoutQuery(err))
 	}
-	defer func() { _ = response.Body.Close() }()
+	anonymous := response
+	defer func() { _ = anonymous.Body.Close() }()
 	if notPublic(response.StatusCode) && i.apiBase() != "" {
 		authenticated, source, err := i.authenticatedAsset(client, pin, asset, response.StatusCode)
 		if err != nil {

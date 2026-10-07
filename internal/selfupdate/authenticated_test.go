@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,6 +43,8 @@ type githubAPI struct {
 	body []byte
 	// direct serves the asset from the API itself instead of redirecting.
 	direct bool
+	// redirect, when set, is where the asset redirects instead of storage.
+	redirect string
 
 	requests []string
 	// storageAuthorization records the Authorization header each storage
@@ -96,7 +100,11 @@ func serveGitHub(t *testing.T, body []byte, token string) (*githubAPI, *httptest
 				_, _ = writer.Write(api.body)
 				return
 			}
-			http.Redirect(writer, request, storage.URL+"/blob/upkeeper-linux-amd64", http.StatusFound)
+			target := storage.URL + "/blob/upkeeper-linux-amd64"
+			if api.redirect != "" {
+				target = api.redirect
+			}
+			http.Redirect(writer, request, target, http.StatusFound)
 		default:
 			http.NotFound(writer, request)
 		}
@@ -389,6 +397,62 @@ func TestPrivateDownloadRefusals(t *testing.T) {
 			}
 			assertNoToken(t, err.Error(), target.Layout.Home)
 		})
+	}
+}
+
+// The storage URL an asset redirects to is signed: its query grants access to
+// the private asset for a while. A failure to reach it names the request
+// without that query.
+func TestASignedStorageURLStaysOutOfErrors(t *testing.T) {
+	isolateCredentials(t)
+	t.Setenv("GH_TOKEN", environmentToken)
+	_, releases := serve(t)
+	update := newProgram("v0.1.31", "b")
+	api, apiServer := serveGitHub(t, update.body, environmentToken)
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	api.redirect = closed.URL + "/blob?X-Amz-Signature=SIGNEDSECRET&jwt=JWTSECRET"
+	target := privateInstaller(t, releases, apiServer)
+	_, err := target.Apply(update.pin())
+	if err == nil {
+		t.Fatal("a download from an unreachable storage host succeeded")
+	}
+	if strings.Contains(err.Error(), "SIGNEDSECRET") || strings.Contains(err.Error(), "JWTSECRET") {
+		t.Fatalf("the signed storage URL is in the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/blob") {
+		t.Errorf("the error no longer says which request failed: %v", err)
+	}
+	assertNoToken(t, err.Error(), target.Layout.Home)
+}
+
+// A gh that leaves a process behind does not leave it running past the bound.
+func TestAHungGhLeavesNoProcessBehind(t *testing.T) {
+	bin := isolateCredentials(t)
+	child := filepath.Join(t.TempDir(), "child.pid")
+	fakeGh(t, bin, "/bin/sleep 300 &\necho $! > "+child+"\nwait\n")
+	saved := ghTokenTimeout
+	ghTokenTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { ghTokenTimeout = saved })
+	token, err := gitHubToken()
+	if token != "" || err != nil {
+		t.Fatalf("token found %v, error %v from a gh that hangs", token != "", err)
+	}
+	content, err := os.ReadFile(child)
+	if err != nil {
+		t.Fatalf("the fake gh recorded no child: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("gh's child %d is still running after the bound", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

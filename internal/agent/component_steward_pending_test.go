@@ -80,9 +80,32 @@ func TestStewardObserveExplainsAPendingWorkerRestart(t *testing.T) {
 			journal:     "",
 			installedAt: stewardPendingNow.Add(-30 * time.Hour),
 			wantSince:   "2026-10-04T04:30:00Z",
+			// The guard fails rather than waits on a journal it cannot read,
+			// so the note never blames a busy worker for it.
 			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): the worker journal " +
-				"could not be inspected; the restart waits for an idle worker" + stewardNeverIdleAction,
+				"could not be inspected; each pull fails the restart until t3-steward worker " +
+				"inspect-journal answers",
 			wantCounts: [2]any{nil, nil},
+		},
+		{
+			// An idle worker is restarted by the next pull; it is not waited
+			// for, however long the restart has been pending.
+			name:        "an idle journal",
+			journal:     `{"dispatched":0,"settlePending":0}`,
+			installedAt: stewardPendingNow.Add(-30 * time.Hour),
+			wantSince:   "2026-10-04T04:30:00Z",
+			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): 0 dispatched, " +
+				"0 settle-pending; the worker is idle, so the next pull restarts it",
+			wantCounts: [2]any{0, 0},
+		},
+		{
+			name:        "dispatched attempts and no settle-pending count",
+			journal:     `{"dispatched":2}`,
+			installedAt: stewardPendingNow.Add(-30 * time.Hour),
+			wantSince:   "2026-10-04T04:30:00Z",
+			wantNote: "worker restart pending since 2026-10-04T04:30:00Z (1d6h): 2 dispatched, " +
+				"settle-pending not counted; the restart waits for an idle worker" + stewardNeverIdleAction,
+			wantCounts: [2]any{2, nil},
 		},
 		{
 			name:        "a journal summary that does not count settle-pending attempts",
@@ -90,7 +113,8 @@ func TestStewardObserveExplainsAPendingWorkerRestart(t *testing.T) {
 			installedAt: stewardPendingNow.Add(-45 * time.Minute),
 			wantSince:   "2026-10-05T09:45:00Z",
 			wantNote: "worker restart pending since 2026-10-05T09:45:00Z (45m): 0 dispatched, " +
-				"settle-pending not counted; the restart waits for an idle worker",
+				"settle-pending not counted; the restart waits for a t3-steward whose journal " +
+				"summary counts settle-pending attempts",
 			wantCounts: [2]any{0, nil},
 		},
 		{
@@ -99,7 +123,8 @@ func TestStewardObserveExplainsAPendingWorkerRestart(t *testing.T) {
 			installedAt: stewardPendingNow.Add(-30 * time.Second),
 			wantSince:   "2026-10-05T10:29:30Z",
 			wantNote: "worker restart pending since 2026-10-05T10:29:30Z (under a minute): the worker " +
-				"journal summary is malformed; the restart waits for an idle worker",
+				"journal summary is malformed; each pull fails the restart until t3-steward worker " +
+				"inspect-journal answers",
 			wantCounts: [2]any{nil, nil},
 		},
 		{
@@ -203,5 +228,97 @@ func TestStewardObservingAPendingRestartNeverRestarts(t *testing.T) {
 	ObserveWorkerRestart(context.Home, context.Runner, stewardPendingNow)
 	if restarts != 0 {
 		t.Fatalf("observing ran %d restart command(s)", restarts)
+	}
+	if _, err := os.Stat(context.Path(stewardWorkerRestartRecord)); err == nil {
+		t.Fatalf("observing wrote %s", stewardWorkerRestartRecord)
+	}
+}
+
+// A second install while the worker is still busy rewrites the binary, and so
+// its modification time, but the worker has been waiting since the first:
+// the pass that defers records when the wait began for that worker process,
+// and a later install does not move it. Another worker process starts its
+// own wait.
+func TestStewardPendingSinceSurvivesASecondInstall(t *testing.T) {
+	context, spec := stewardPendingHost(t, `{"dispatched":1,"settlePending":0}`,
+		stewardPendingNow.Add(-30*time.Hour))
+	stewardTestServe(t, nil, "")
+	before, err := stewardObserve(context, spec)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	actions := []string{}
+	if state, err := stewardApply(context, spec, before, &actions); err != nil || state != "converged" {
+		t.Fatalf("deferring pass: %q, %v (actions %v)", state, err, actions)
+	}
+	binary := context.Path(".local/bin/t3-steward")
+	second := stewardPendingNow.Add(-time.Minute)
+	if err := os.Chtimes(binary, second, second); err != nil {
+		t.Fatal(err)
+	}
+	after, err := stewardObserve(context, spec)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if after["worker_restart_pending_since"] != "2026-10-04T04:30:00Z" {
+		t.Errorf("a second install moved pending since to %v", after["worker_restart_pending_since"])
+	}
+	waiting, _ := after["worker_restart_waiting"].(map[string]any)
+	if note, _ := waiting["note"].(string); !strings.HasSuffix(note, stewardNeverIdleAction) {
+		t.Errorf("the never-idle action disappeared after a second install: %q", note)
+	}
+	if probed := ObserveWorkerRestart(context.Home, context.Runner, stewardPendingNow); probed["since"] != "2026-10-04T04:30:00Z" {
+		t.Errorf("doctor's observation says since %v", probed["since"])
+	}
+	// A worker process that is not the one the record names, here one
+	// running another replaced binary, waits from the installed binary's time.
+	other := context.Path("other-t3-steward")
+	adapterTestWrite(t, other, "#!/bin/sh\necho other steward\n")
+	older := stewardPendingNow.Add(-90 * time.Hour)
+	if err := os.Chtimes(other, older, older); err != nil {
+		t.Fatal(err)
+	}
+	stewardTestRunningWorker(t, context, other)
+	another, err := stewardObserve(context, spec)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if another["worker_restart_pending_since"] != "2026-10-05T10:29:00Z" {
+		t.Errorf("another worker inherited the record: since %v", another["worker_restart_pending_since"])
+	}
+}
+
+// A dry run describes; it records nothing.
+func TestStewardDryRunRecordsNoPendingRestart(t *testing.T) {
+	context, spec := stewardPendingHost(t, `{"dispatched":1,"settlePending":0}`,
+		stewardPendingNow.Add(-30*time.Hour))
+	stewardTestServe(t, nil, "")
+	before, err := stewardObserve(context, spec)
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	context.DryRun = true
+	actions := []string{}
+	if _, err := stewardApply(context, spec, before, &actions); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if _, err := os.Stat(context.Path(stewardWorkerRestartRecord)); err == nil {
+		t.Fatalf("a dry run wrote %s", stewardWorkerRestartRecord)
+	}
+}
+
+// A record that cannot be read, or that names nothing usable, is ignored.
+func TestStewardIgnoresAnUnusablePendingRestartRecord(t *testing.T) {
+	for _, content := range []string{"not json", `{"worker_pid":4242}`, `{"worker_pid":4242,"since":"yesterday"}`, ""} {
+		context, spec := stewardPendingHost(t, `{"dispatched":1,"settlePending":0}`,
+			stewardPendingNow.Add(-2*time.Hour))
+		adapterTestWrite(t, context.Path(stewardWorkerRestartRecord), content)
+		observed, err := stewardObserve(context, spec)
+		if err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		if observed["worker_restart_pending_since"] != "2026-10-05T08:30:00Z" {
+			t.Errorf("record %q gave since %v", content, observed["worker_restart_pending_since"])
+		}
 	}
 }

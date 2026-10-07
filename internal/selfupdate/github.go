@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/failure"
@@ -82,7 +83,8 @@ func (i *Installer) authenticatedAsset(
 	releaseURL := repository + "/releases/tags/" + url.PathEscape(pin.Tag)
 	response, err := gitHubRequest(authenticated, releaseURL, "application/vnd.github+json", token)
 	if err != nil {
-		return nil, "", failure.Value("cannot download %s: cannot reach the GitHub API: %v", asset.Asset, err)
+		return nil, "", failure.Value("cannot download %s: cannot reach the GitHub API: %v",
+			asset.Asset, withoutQuery(err))
 	}
 	document, problem, hint := readRelease(response)
 	if problem != "" {
@@ -103,7 +105,7 @@ func (i *Installer) authenticatedAsset(
 	assetURL := repository + "/releases/assets/" + strconv.FormatInt(id, 10)
 	response, err = gitHubRequest(authenticated, assetURL, "application/octet-stream", token)
 	if err != nil {
-		return nil, "", failure.Value("cannot download %s: %v", assetURL, err)
+		return nil, "", failure.Value("cannot download %s: %v", assetURL, withoutQuery(err))
 	}
 	return response, assetURL, nil
 }
@@ -124,7 +126,9 @@ func readRelease(response *http.Response) (document releaseDocument, problem, hi
 		switch response.StatusCode {
 		case http.StatusUnauthorized:
 			hint = "; the GitHub credential on this host was rejected"
-		case http.StatusForbidden, http.StatusNotFound:
+		case http.StatusForbidden:
+			hint = "; the GitHub credential on this host cannot see it, or its API rate limit is spent"
+		case http.StatusNotFound:
 			hint = "; the GitHub credential on this host cannot see it"
 		}
 		return document, "the GitHub API answered HTTP " + strconv.Itoa(response.StatusCode), hint
@@ -141,6 +145,24 @@ func readRelease(response *http.Response) (document releaseDocument, problem, hi
 		return document, "the GitHub API returned an unreadable release document", ""
 	}
 	return document, "", ""
+}
+
+// withoutQuery drops the query from the URL a request error names. A release
+// asset redirects to a signed storage URL whose query grants access to the
+// asset for a while, so it is never repeated in an error or a report.
+func withoutQuery(err error) error {
+	var failed *url.Error
+	if !errors.As(err, &failed) {
+		return err
+	}
+	cleaned := *failed
+	if parsed, parseErr := url.Parse(failed.URL); parseErr == nil {
+		parsed.RawQuery, parsed.Fragment, parsed.User = "", "", nil
+		cleaned.URL = parsed.String()
+	} else {
+		cleaned.URL = "(unparsable URL)"
+	}
+	return &cleaned
 }
 
 // gitHubRequest sends one authenticated GET to the API.
@@ -204,6 +226,10 @@ func gitHubToken() (string, error) {
 	// gh's diagnostics are discarded rather than kept: nothing it says is
 	// reported, so nothing it says can carry a credential into a report.
 	command.Stderr = io.Discard
+	// gh runs in its own process group, and the whole group is killed at the
+	// bound, so nothing it started outlives the lookup.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error { return syscall.Kill(-command.Process.Pid, syscall.SIGKILL) }
 	command.WaitDelay = time.Second
 	output, err := command.Output()
 	if err != nil {
