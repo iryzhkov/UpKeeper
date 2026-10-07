@@ -219,3 +219,80 @@ func TestToolErrorTextRedactsAnAssignedPrivateKey(t *testing.T) {
 		})
 	}
 }
+
+// Self-review of the fix round: secret shapes the quote-aware matchers still
+// missed, and a regression the reordering caused, where the assignment matcher
+// took only the scheme of an Authorization header and left its credential.
+func TestToolErrorTextRedactsTheShapesTheFixRoundMissed(t *testing.T) {
+	for name, input := range map[string]string{
+		"authorization bearer header": "upstream 401: Authorization: Bearer FAKEopaqueTOKEN1234567890",
+		"authorization basic header":  "request headers Authorization: Basic RkFLRV9VU0VSOkZBS0VfUEFTUw==",
+		"escaped JSON key":            `{"error": "{\"api_key\": \"alpha FAKE_SECRET omega\"}"}`,
+		"escaped JSON password":       `upstream body: {\"password\": \"alpha FAKE_SECRET omega\"}`,
+		"unterminated double quote":   `config error: password="alpha FAKE_SECRET omega`,
+		"unterminated single quote":   `config error: password='alpha FAKE_SECRET omega`,
+		"unterminated JSON value":     `{"password": "alpha FAKE_SECRET omega`,
+		"JSON value ending in escape": `{"password": "alpha FAKE_SECRET \`,
+		"escaped single quote":        `password='it\'s FAKE_SECRET omega'`,
+		"backtick quote":              "password=`alpha FAKE_SECRET omega`",
+		"curly quote":                 "password=“alpha FAKE_SECRET omega”",
+		"JSON array":                  `{"api_key": ["FAKE_SECRET_ONE", "FAKE_SECRET_TWO omega"]}`,
+		"JSON number":                 `{"token": 98765432109876543210}`,
+		"python bytes":                `{'password': b'FAKE_SECRET_BYTES omega'}`,
+		"compound key name":           "AWS_SECRET_ACCESS_KEY=FAKEAWSSECRET1234567890",
+		"access key":                  `{"access_key": "FAKE_OPAQUE_ACCESS omega"}`,
+		"cookie pairs":                "Cookie: a=1; session=FAKESESSIONVALUE123; theme=omega",
+		"command line flag":           "ov --api-key FAKE_OPAQUE_OV_KEY_1234567890 failed",
+		"spaced JSON key":             `{"api key": "alpha FAKE_SECRET omega"}`,
+		"database URL":                "dial postgres://ov:FAKE_DB_PASSWORD@db:5432 failed",
+		"zero-width in key":           "pass​word=FAKE_SECRET_ZW",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := exchangeToolError(t, []any{text(input)}).Error()
+			if strings.Contains(got, "FAKE") || strings.Contains(got, "omega") ||
+				strings.Contains(got, "98765") || strings.Contains(got, "RkFLRV") {
+				t.Fatalf("secret material reached error: %q", got)
+			}
+		})
+	}
+}
+
+// Text a tool can print that only looks like a secret's neighbour still
+// reaches the operator.
+func TestToolErrorTextKeepsWhatIsNotASecret(t *testing.T) {
+	for _, input := range []string{
+		"token count exceeded 4096",
+		"secret-tool not found",
+		"secret-tool: cannot find /usr/bin/secret-tool",
+		"OV_API_KEY is not set",
+		"authorization failed: 401",
+		"api key missing in ~/.config/ov-mcp/key",
+	} {
+		if got := toolErrorText(map[string]any{"content": []any{text(input)}}); got != input {
+			t.Errorf("toolErrorText(%q) = %q", input, got)
+		}
+	}
+}
+
+// Redaction reads the whole text before the bound, so an enormous text is cut
+// to a size redaction handles quickly first, and never in a way that leaves
+// the start of a secret the cut made unrecognisable.
+func TestToolErrorTextCapsWhatItRedacts(t *testing.T) {
+	huge := strings.Repeat("password=\"", 400000) + " ok"
+	start := time.Now()
+	toolErrorText(map[string]any{"content": []any{text(huge)}})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("redacting %d bytes took %s", len(huge), elapsed)
+	}
+	// A private key's body redacts to a placeholder, which would pull a token
+	// cut at the cap into the reported bound.
+	begin, end := "k -----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY----- "
+	token := "ghp_" + strings.Repeat("Q", 36)
+	for _, shift := range []int{1, 5, 17, 39} {
+		body := strings.Repeat("A", toolRedactLimit-shift-len(begin)-len(end))
+		got := toolErrorText(map[string]any{"content": []any{text(begin + body + end + token)}})
+		if strings.Contains(got, "ghp_QQ") || strings.Contains(got, "QQQQQQ") {
+			t.Fatalf("shift %d: a token cut at the cap leaked: %q", shift, got)
+		}
+	}
+}

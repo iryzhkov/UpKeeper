@@ -143,3 +143,19 @@ func TestToolingRegistrationsWithoutAProfileAreTheBase(t *testing.T) {
 		}
 	}
 }
+
+// Self-review of the fix round, lens 5: a home given with a trailing slash, as
+// $HOME may be, wrote the wrapper path with a doubled slash, which the exact
+// comparison did not recognise as UpKeeper's own, so an excluded tool stayed
+// registered with its credential environment.
+func TestToolingProfileRemovesTheDroppedToolFromAHomeWithATrailingSlash(t *testing.T) {
+	normalized, target := toolingTarget(t)
+	home := target + "/"
+	apply(t, normalized, home, "all-tools", false, nil)
+	applyWithout(t, normalized, home, "profile", []string{"ov-memory"})
+	for _, path := range toolingRegistrationFiles {
+		if content := readHomeFile(t, target, path); strings.Contains(content, "ov-memory-mcp") {
+			t.Errorf("%s still registers the excluded ov-memory:\n%s", path, content)
+		}
+	}
+}

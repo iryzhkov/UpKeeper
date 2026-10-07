@@ -124,14 +124,19 @@ func (d dropping) registrations(servers map[string]any, opencode bool) []string 
 		if !ok {
 			continue
 		}
+		// The release's paths are rebased onto the home as given, so one with a
+		// trailing slash wrote the wrapper with a doubled slash: compare clean.
 		wrapper := filepath.Join(d.home, ".local/bin", name+"-mcp")
-		owned := false
+		command := server["command"]
 		if opencode {
-			command, _ := server["command"].([]any)
-			owned = len(command) == 1 && command[0] == wrapper
-		} else {
-			owned = server["command"] == wrapper
+			list, _ := server["command"].([]any)
+			command = nil
+			if len(list) == 1 {
+				command = list[0]
+			}
 		}
+		path, _ := command.(string)
+		owned := path != "" && filepath.Clean(path) == wrapper
 		if owned {
 			delete(servers, name)
 			removed = append(removed, name)

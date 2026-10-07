@@ -112,6 +112,10 @@ func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout 
 // reports.
 const ToolErrorLimit = 300
 
+// toolRedactLimit bounds, in bytes, the text redaction reads, so that an
+// enormous error text costs no more than this to redact.
+const toolRedactLimit = 64 << 10
+
 // callName names a call the way an operator would: a tool call by its tool.
 func callName(c Call) string {
 	if params, ok := c.Params.(map[string]any); ok && c.Method == "tools/call" {
@@ -131,34 +135,61 @@ var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
 // shared pattern needs a word boundary before the key word), a quoted value
 // with spaces (the shared pattern takes only its first word), a JSON- or
 // dict-quoted secret field, and a bearer token without its Authorization
-// header. The key words are the shared redaction's secret key words.
-const toolSecretWord = `(?:api[_-]?key|private[_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
+// header. The key words are the shared redaction's secret key words, an
+// access key, and a key word written with a space, as in "api key".
+const toolSecretWord = `(?:(?:api|access)[\s_-]?key|private[\s_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
+
+// toolSecretValue is a secret's value, tried in order: an authorization
+// scheme and its credential; a value in escaped double quotes, as inside a
+// JSON string; one in double, single (either optionally a Python bytes or raw
+// literal), back or curly quotes; a JSON array or object; or a bare word. A
+// quoted value, array or object the text ends inside of runs to the end, so a
+// tool's own truncation never leaves the rest of a value behind.
+const toolSecretValue = `(?:(?:bearer|basic|token)\s+[^\s,;"'\\]+` +
+	`|\\"(?:[^"\\]|\\[^"])*(?:\\"|\\?$)` +
+	`|[bru]?"(?:[^"\\]|\\.)*(?:"|\\?$)` +
+	`|[bru]?'(?:[^'\\]|\\.)*(?:'|\\?$)` +
+	`|\x60[^\x60]*(?:\x60|$)` +
+	`|“[^”]*(?:”|$)` +
+	`|\[[^\]]*(?:\]|$)` +
+	`|\{[^}]*(?:\}|$)` +
+	`|[^\s,;}\]]+)`
 
 var (
-	// A value is double-quoted, double-quoted with escaped quotes as inside a
-	// JSON string, single-quoted, or a bare word.
+	// An assignment's key may be a longer name around a key word, such as
+	// OV_API_KEY or AWS_SECRET_ACCESS_KEY, but not a word such as secret-tool.
 	toolSecretAssignment = regexp.MustCompile(
-		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `\s*[=:]\s*)` +
-			`(?:"(?:[^"\\]|\\.)*"|\\"(?:[^"\\]|\\[^"])*\\"|'[^']*'|[^\s,;]+)`)
+		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `(?:_[A-Za-z0-9]+)*\s*[=:]\s*)` + toolSecretValue)
+	// A JSON or dict key is quoted, or escaped-quoted inside a JSON string.
 	toolSecretJSON = regexp.MustCompile(
-		`(?i)(["'][A-Za-z0-9_.-]*` + toolSecretWord + `[A-Za-z0-9_.-]*["']\s*:\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
-	toolBearer = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
+		`(?i)(\\?["'][A-Za-z0-9_.\s-]*` + toolSecretWord + `[A-Za-z0-9_.-]*\\?["']\s*:\s*)` + toolSecretValue)
+	// A command-line flag gives its value after a space.
+	toolSecretFlag = regexp.MustCompile(
+		`(?i)((?:^|\s)--?[A-Za-z0-9_-]*` + toolSecretWord + `[A-Za-z0-9_-]*\s+)[^\s-]\S*`)
+	// A Cookie header carries several pairs.
+	toolCookie = regexp.MustCompile(`(?i)(\bcookie\s*[=:]\s*)[^\s,;]+(?:;\s*[^\s,;=]+=[^\s,;]*)*`)
+	// Credentials in a URL of any scheme, such as a database's.
+	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
+	toolBearer      = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
 	// privateKeyBlock is the shared redaction's whole private key block.
 	privateKeyBlock = regexp.MustCompile(
 		`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
 )
 
 // redactToolText removes private keys first, so that an assignment matcher
-// never takes only a key's BEGIN marker; then the quote-aware shapes above,
-// before the shared helper can consume an opening quote and hide the rest of a
-// quoted value; then the shared helper and the bare bearer token.
+// never takes only a key's BEGIN marker; then the shapes above, before the
+// shared helper can consume an opening quote or an authorization scheme and
+// hide the rest of a value; then the shared helper and the bare bearer token.
 func redactToolText(text string) string {
 	text = privateKeyBlock.ReplaceAllString(text, redact.Placeholder)
 	if start := privateKeyStart.FindStringIndex(text); start != nil {
 		text = text[:start[0]] + redact.Placeholder
 	}
+	text = toolURLUserInfo.ReplaceAllString(text, "${1}"+redact.Placeholder+"@")
+	text = toolCookie.ReplaceAllString(text, "${1}"+redact.Placeholder)
 	text = toolSecretJSON.ReplaceAllString(text, `${1}"`+redact.Placeholder+`"`)
 	text = toolSecretAssignment.ReplaceAllString(text, "${1}"+redact.Placeholder)
+	text = toolSecretFlag.ReplaceAllString(text, "${1}"+redact.Placeholder)
 	text = redact.Text(text)
 	return toolBearer.ReplaceAllString(text, "${1}"+redact.Placeholder)
 }
@@ -171,9 +202,10 @@ func hiddenCharacter(r rune) bool {
 }
 
 // toolErrorText is the text a tool gave with an error result: its text content
-// items joined, with control characters made spaces so that nothing they hide
-// or join escapes redaction, secrets redacted, and only then bounded, so that
-// the bound never hides a secret's end from the redaction.
+// items joined, with format characters removed so that one inside a key word
+// cannot split it, other control characters made spaces so that nothing they
+// hide or join escapes redaction, secrets redacted, and only then bounded, so
+// that the bound never hides a secret's end from the redaction.
 func toolErrorText(result map[string]any) string {
 	items, _ := result["content"].([]any)
 	parts := []string{}
@@ -184,6 +216,9 @@ func toolErrorText(result map[string]any) string {
 		}
 		text, _ := object["text"].(string)
 		text = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if unicode.In(r, unicode.Cf) {
+				return -1
+			}
 			if hiddenCharacter(r) {
 				return ' '
 			}
@@ -199,9 +234,19 @@ func toolErrorText(result map[string]any) string {
 	}
 	// Items are joined by a space, which the redaction patterns read across,
 	// so a key and its value sent as two items are still seen together.
-	text := redactToolText(strings.Join(parts, " "))
+	text := strings.Join(parts, " ")
+	// Text past the redaction limit is dropped, back to a space, so that a
+	// word the cut would split is dropped whole rather than reported in part.
+	capped := len(text) > toolRedactLimit
+	if capped {
+		text = text[:max(strings.LastIndexFunc(text[:toolRedactLimit], unicode.IsSpace), 0)]
+	}
+	text = redactToolText(text)
 	if start := privateKeyStart.FindStringIndex(text); start != nil {
 		text = text[:start[0]] + redact.Placeholder
+	}
+	if capped {
+		text += " ..."
 	}
 	if len(text) <= ToolErrorLimit {
 		return text
