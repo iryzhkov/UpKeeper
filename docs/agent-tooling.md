@@ -32,6 +32,57 @@ Empty lists still disable routes; explicit names still restrict them.
 Client updates and normal provider-cache refresh make new models available
 without another UpKeeper manifest release.
 
+## Agent tool profiles
+
+An inventory host may declare which agent tools it gets with `agent_tools` in
+`inventory/hosts.yml`, a list drawn from `homelab-cli`, `ov-memory` and
+`local-file-llm`:
+
+```json
+"agent-a": { "...": "...", "agent_tools": ["homelab-cli", "ov-memory"] }
+```
+
+Without the key a host gets every tool, exactly as before profiles existed: the
+same staged release directory, bindings, MCP registrations and health checks.
+An empty list, an unknown name, a name given twice, a non-string entry or an
+explicit `null` is refused when the inventory is loaded, and the agent checks the
+profile it receives again before it changes anything.
+
+With a profile, the tooling component stages only the selected tools' sources
+and dependencies (no `npm ci` without local-file-llm, no OV virtualenv without
+ov-memory), binds only their commands, and health-checks only them, so a tool a
+host does not have is never started and nothing it would contact is reached. The
+agent-environment component registers only the selected tools' MCP servers in
+the Claude, Codex and OpenCode configuration on that host. The release is shared
+by every host, so this filtering happens per host when the agent applies it, not
+when the release is captured. The staged release directory's name includes the
+effective profile, so changing a profile stages afresh; naming all three tools
+is the same as declaring none.
+
+When a tool is dropped from a profile, UpKeeper removes what it made for that
+tool: the command bindings in `~/.local/bin` that are symlinks to its own
+target in the active bundle (`ov-memory-mcp`, `local-file-llm-mcp`, or the
+homelab-cli commands), and the MCP registrations of that name that run its
+wrapper in `~/.local/bin`. A binding or registration of the same name that
+points anywhere else was made by someone else and is kept, as are every other
+registration and the host's own credentials and formatting.
+
+The agent VMs agent-a and agent-b use `["homelab-cli", "ov-memory"]`. They are
+on VLAN 130, which by design cannot reach the Ollama server on omarchy-pc that
+local-file-llm uses, so its health check could only fail there; the firewall
+stays closed and the VMs simply do not get the tool.
+
+Credentials follow the profile. The OpenViking API key is required only on a
+host whose profile includes ov-memory; it may be `OV_API_KEY`, `api_key` in
+`~/.config/ov-mcp/config.toml`, the key file `~/.config/ov-mcp/key`, or the
+keyring. When it is missing the component is `blocked: credential missing ...`
+with the instructions to create it, before anything is staged or probed.
+`secret-tool` is a prerequisite only when ov-memory is selected and the key is
+none of the first three, so the keyring is the only place it could be; Debian's
+`python3-venv` is a prerequisite only with ov-memory. A failed health check
+reports the tool's own error text, bounded and with secrets redacted, as
+`<tool> health check: tools/call <name> failed: <text>`.
+
 ## Capture and rollout
 
 Bootstrap with `upkeeper push --components agent-tooling agent-environment`

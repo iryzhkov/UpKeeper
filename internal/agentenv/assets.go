@@ -1087,6 +1087,16 @@ type Observation struct {
 // ObserveEnvironment renders what every managed path would become and reports
 // the drift, without changing anything.
 func ObserveEnvironment(component map[string]any, home, identity string) (*Observation, error) {
+	return ObserveEnvironmentWithout(component, home, identity, nil)
+}
+
+// ObserveEnvironmentWithout is ObserveEnvironment for a host whose agent tool
+// profile leaves out the named tooling MCP servers: they are not registered,
+// and the registrations UpKeeper made for them are removed.
+func ObserveEnvironmentWithout(component map[string]any, home, identity string, without []string) (*Observation, error) {
+	if err := checkWithout(without); err != nil {
+		return nil, err
+	}
 	decoded, err := DecodeComponent(component)
 	if err != nil {
 		return nil, err
@@ -1109,7 +1119,7 @@ func ObserveEnvironment(component map[string]any, home, identity string) (*Obser
 		} else {
 			prior[file.Path] = nil
 		}
-		rendered, err := render(file, prior[file.Path], decoded.SourceHome, home)
+		rendered, err := render(file, prior[file.Path], decoded.SourceHome, home, dropping{names: without, home: home})
 		if err != nil {
 			return nil, err
 		}
@@ -1188,7 +1198,15 @@ type ApplyResult struct {
 func ApplyEnvironment(
 	component map[string]any, home, runID string, dryRun bool, fault func(string) error,
 ) (*ApplyResult, error) {
-	observation, err := ObserveEnvironment(component, home, runID)
+	return ApplyEnvironmentWithout(component, home, runID, dryRun, fault, nil)
+}
+
+// ApplyEnvironmentWithout is ApplyEnvironment for a host whose agent tool
+// profile leaves out the named tooling MCP servers.
+func ApplyEnvironmentWithout(
+	component map[string]any, home, runID string, dryRun bool, fault func(string) error, without []string,
+) (*ApplyResult, error) {
+	observation, err := ObserveEnvironmentWithout(component, home, runID, without)
 	if err != nil {
 		return nil, err
 	}
@@ -1474,7 +1492,7 @@ func restore(
 //
 // Every mode but "file" merges into a document the harness also writes, so the
 // host's own keys, accounts and formatting survive the projection.
-func render(file File, old []byte, sourceHome, home string) ([]byte, error) {
+func render(file File, old []byte, sourceHome, home string, drop dropping) ([]byte, error) {
 	if file.Mode == "file" {
 		return file.Content, nil
 	}
@@ -1493,7 +1511,7 @@ func render(file File, old []byte, sourceHome, home string) ([]byte, error) {
 		return nil, errors.New("an owned registration payload must be an object")
 	}
 	if file.Mode == "codex-mcp" {
-		return renderCodex(text, old, owned)
+		return renderCodex(text, old, drop.owned(owned), drop)
 	}
 	if file.Mode == "codex-settings" {
 		if err := validateCodexSettings(owned); err != nil {
@@ -1504,9 +1522,17 @@ func render(file File, old []byte, sourceHome, home string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return renderCodex(projected, []byte(projected), objectOf(owned["mcp_servers"]))
+		return renderCodex(projected, []byte(projected), drop.owned(objectOf(owned["mcp_servers"])), drop)
 	}
-	return renderJSON(file.Mode, text, old, owned)
+	if file.Mode == "claude-mcp" {
+		owned = drop.owned(owned)
+	}
+	if file.Mode == "opencode" {
+		if servers, present := owned["mcp"]; present {
+			owned["mcp"] = drop.owned(objectOf(servers))
+		}
+	}
+	return renderJSON(file.Mode, text, old, owned, drop)
 }
 
 func renderClaudeBlock(payload []byte, text string) ([]byte, error) {
@@ -1528,7 +1554,7 @@ func renderClaudeBlock(payload []byte, text string) ([]byte, error) {
 
 // renderCodex projects the owned MCP registrations into the Codex TOML file
 // while leaving every unrelated table exactly as the host wrote it.
-func renderCodex(text string, old []byte, owned map[string]any) ([]byte, error) {
+func renderCodex(text string, old []byte, owned map[string]any, drop dropping) ([]byte, error) {
 	root, err := ParseTOML(text)
 	if err != nil {
 		return nil, err
@@ -1546,6 +1572,7 @@ func renderCodex(text string, old []byte, owned map[string]any) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	removed := drop.registrations(merged, false)
 	same, err := sameJSON(current, merged)
 	if err != nil {
 		return nil, err
@@ -1568,7 +1595,7 @@ func renderCodex(text string, old []byte, owned map[string]any) ([]byte, error) 
 		}
 		entries = append(entries, ServerEntry{Name: name, Table: table})
 	}
-	rendered, err := ProjectServerTables(text, entries)
+	rendered, err := projectServerTables(text, entries, removed)
 	if err != nil {
 		return nil, err
 	}
@@ -1633,7 +1660,7 @@ func mergeServerEntry(previous *Table, owned map[string]any) (*Table, error) {
 }
 
 // renderJSON merges the owned keys into a JSON document the harness shares.
-func renderJSON(mode, text string, old []byte, owned map[string]any) ([]byte, error) {
+func renderJSON(mode, text string, old []byte, owned map[string]any, drop dropping) ([]byte, error) {
 	source := text
 	if source == "" {
 		source = "{}"
@@ -1648,9 +1675,15 @@ func renderJSON(mode, text string, old []byte, owned map[string]any) ([]byte, er
 	case "claude-mcp":
 		var servers map[string]any
 		servers, err = MergeRegistrations(objectOf(current["mcpServers"]), owned)
+		if err == nil {
+			drop.registrations(servers, false)
+		}
 		current["mcpServers"] = servers
 	case "opencode":
 		err = mergeOpenCode(current, owned)
+		if err == nil {
+			drop.registrations(objectOf(current["mcp"]), true)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported owned projection mode: %s", mode)
 	}

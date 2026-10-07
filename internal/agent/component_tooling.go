@@ -34,15 +34,145 @@ func toolingIdentity(spec map[string]any) string {
 	return agentenv.Digest(b)
 }
 
+// toolProfile is the set of agent tools this host's profile selects. A host
+// without a profile selects every tool. The controller validated the profile
+// against the inventory; the agent validates it again rather than trust it.
+func toolProfile(c *Context) (map[string]bool, error) {
+	selected := map[string]bool{}
+	if c.Host.AgentTools == nil {
+		for _, tool := range release.AgentTools {
+			selected[tool] = true
+		}
+		return selected, nil
+	}
+	if err := release.CheckAgentTools(c.Host.AgentTools); err != nil {
+		return nil, Failf("host agent_tools %v", err)
+	}
+	for _, tool := range c.Host.AgentTools {
+		selected[tool] = true
+	}
+	return selected, nil
+}
+
+// toolSelected reports whether this host's profile selects a tool. A profile
+// that is not valid selects nothing; the adapter refuses it before acting.
+func toolSelected(c *Context, tool string) bool {
+	selected, err := toolProfile(c)
+	return err == nil && selected[tool]
+}
+
+// toolingIdentityFor names this host's staged release. A host whose effective
+// profile is every tool keeps the release's own identity, so a host converged
+// before profiles existed never re-stages; any other profile is part of the
+// identity, so changing it stages afresh.
+func toolingIdentityFor(c *Context, spec map[string]any) (string, error) {
+	selected, err := toolProfile(c)
+	if err != nil {
+		return "", err
+	}
+	if len(selected) == len(release.AgentTools) {
+		return toolingIdentity(spec), nil
+	}
+	tools := []any{}
+	for _, tool := range release.AgentTools {
+		if selected[tool] {
+			tools = append(tools, tool)
+		}
+	}
+	b, err := canonjson.Compact(map[string]any{"agent_tools": tools, "release": spec})
+	if err != nil {
+		return "", err
+	}
+	return agentenv.Digest(b), nil
+}
+
+// profileTooling is the part of a release this host's profile selects: the
+// source files of its tools only.
+func profileTooling(c *Context, t *release.Tooling) *release.Tooling {
+	if c.Host.AgentTools == nil {
+		return t
+	}
+	selected := *t
+	selected.Files = nil
+	for _, f := range t.Files {
+		tool, _, _ := strings.Cut(f.Path, "/")
+		if toolSelected(c, tool) {
+			selected.Files = append(selected.Files, f)
+		}
+	}
+	return &selected
+}
+
+// toolingDroppedBindings finds the command bindings UpKeeper made for tools
+// this host's profile no longer selects, as path -> the target that proves
+// UpKeeper made it. Only a symlink to exactly the target UpKeeper binds counts;
+// anything else at those names is somebody else's and is left alone.
+func toolingDroppedBindings(c *Context, base string) (map[string]string, error) {
+	dropped := map[string]string{}
+	if c.Host.AgentTools == nil {
+		return dropped, nil
+	}
+	bin, err := agentenv.TargetPath(c.Home, ".local/bin")
+	if err != nil {
+		return nil, err
+	}
+	owned := func(name, target string) error {
+		path := filepath.Join(bin, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if actual, err := os.Readlink(path); err == nil && actual == target {
+				dropped[path] = target
+			}
+		}
+		return nil
+	}
+	for _, name := range agentenv.ToolingServers {
+		if !toolSelected(c, name) {
+			if err := owned(name+"-mcp", filepath.Join(base, "current", name, "run")); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if !toolSelected(c, "homelab-cli") {
+		// Every homelab-cli command any release bound points into the active
+		// bundle under its own name, so the bindings themselves say which they
+		// are. t3-backlog keeps its own retirement.
+		entries, err := os.ReadDir(bin)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.Name() == "t3-backlog" {
+				continue
+			}
+			if err := owned(entry.Name(), filepath.Join(base, "current", "homelab-cli/bin", entry.Name())); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return dropped, nil
+}
+
 func toolingObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	t, err := release.DecodeTooling(spec)
 	if err != nil {
 		return nil, err
 	}
+	identity, err := toolingIdentityFor(c, spec)
+	if err != nil {
+		return nil, err
+	}
+	t = profileTooling(c, t)
 	base := c.Path(".local/share/upkeeper-tools")
 	current := filepath.Join(base, "current")
 	resolved, _ := filepath.EvalSymlinks(current)
-	expected := filepath.Join(base, "releases", toolingIdentity(spec))
+	expected := filepath.Join(base, "releases", identity)
 	drift := []string{}
 	if resolved != expected {
 		drift = append(drift, "active tooling bundle differs")
@@ -52,11 +182,18 @@ func toolingObserve(c *Context, spec map[string]any) (map[string]any, error) {
 	} else if err := toolingProbe(c, expected, t); err != nil {
 		drift = append(drift, err.Error())
 	}
-	for name, target := range toolingLinks(t, base) {
+	for name, target := range toolingLinks(c, t, base) {
 		link, err := os.Readlink(c.Path(".local/bin", name))
 		if err != nil || link != target {
 			drift = append(drift, "command binding differs: "+name)
 		}
+	}
+	dropped, err := toolingDroppedBindings(c, base)
+	if err != nil {
+		drift = append(drift, "dropped tool bindings: "+err.Error())
+	}
+	for path := range dropped {
+		drift = append(drift, "dropped tool binding remains: "+filepath.Base(path))
 	}
 	_, retirement, err := toolingBacklogRetirement(c, base, t)
 	if err != nil {
@@ -93,7 +230,7 @@ func verifyToolFiles(c *Context, dir string, t *release.Tooling) error {
 			return fmt.Errorf("tool source differs: %s", f.Path)
 		}
 	}
-	for path, file := range toolingGeneratedFiles(t) {
+	for path, file := range toolingGeneratedFiles(c, t) {
 		target := filepath.Join(dir, path)
 		info, err := os.Lstat(target)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != file.mode || c.SHA256File(target) != agentenv.Digest(file.data) {
@@ -108,16 +245,20 @@ type generatedToolFile struct {
 	mode os.FileMode
 }
 
-func toolingGeneratedFiles(t *release.Tooling) map[string]generatedToolFile {
+func toolingGeneratedFiles(c *Context, t *release.Tooling) map[string]generatedToolFile {
 	files := map[string]generatedToolFile{
-		"ov-memory/requirements.lock": {[]byte(strings.Join(t.Python, "\n") + "\n"), 0600},
-		".complete":                   {[]byte("staged\n"), 0600},
+		".complete": {[]byte("staged\n"), 0600},
+	}
+	if toolSelected(c, "ov-memory") {
+		files["ov-memory/requirements.lock"] = generatedToolFile{[]byte(strings.Join(t.Python, "\n") + "\n"), 0600}
 	}
 	for name, body := range map[string]string{
 		"ov-memory":      "exec \"$root/venv/bin/python\" \"$root/server.py\" \"$@\"\n",
 		"local-file-llm": "exec \"$HOME/.local/share/mise/shims/node\" \"$root/server.mjs\" \"$@\"\n",
 	} {
-		files[name+"/run"] = generatedToolFile{[]byte("#!/bin/sh\nroot=$(dirname -- \"$(readlink -f -- \"$0\")\")\n" + body), 0755}
+		if toolSelected(c, name) {
+			files[name+"/run"] = generatedToolFile{[]byte("#!/bin/sh\nroot=$(dirname -- \"$(readlink -f -- \"$0\")\")\n" + body), 0755}
+		}
 	}
 	return files
 }
@@ -163,10 +304,12 @@ func toolingBacklogRetirement(c *Context, base string, t *release.Tooling) (stri
 	return path, "preserved foreign binding", nil
 }
 
-func toolingLinks(t *release.Tooling, base string) map[string]string {
-	links := map[string]string{
-		"ov-memory-mcp":      filepath.Join(base, "current/ov-memory/run"),
-		"local-file-llm-mcp": filepath.Join(base, "current/local-file-llm/run"),
+func toolingLinks(c *Context, t *release.Tooling, base string) map[string]string {
+	links := map[string]string{}
+	for _, name := range agentenv.ToolingServers {
+		if toolSelected(c, name) {
+			links[name+"-mcp"] = filepath.Join(base, "current", name, "run")
+		}
 	}
 	for _, f := range t.Files {
 		if strings.HasPrefix(f.Path, "homelab-cli/bin/") && f.Mode == 0755 {
@@ -181,6 +324,11 @@ func toolingApply(c *Context, spec, before map[string]any, actions *[]string) (s
 	if err != nil {
 		return "", err
 	}
+	identity, err := toolingIdentityFor(c, spec)
+	if err != nil {
+		return "", err
+	}
+	t = profileTooling(c, t)
 	if c.DryRun {
 		*actions = append(*actions, "would run mise upgrade --yes --no-prune (host version ranges and release-age policy)")
 		if drift, _ := before["drift"].([]string); len(drift) > 0 {
@@ -206,7 +354,7 @@ func toolingApply(c *Context, spec, before map[string]any, actions *[]string) (s
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "releases", toolingIdentity(spec))
+	dir := filepath.Join(base, "releases", identity)
 	if err := stageTooling(c, dir, t); err != nil {
 		return "", err
 	}
@@ -231,13 +379,10 @@ func toolingApply(c *Context, spec, before map[string]any, actions *[]string) (s
 }
 
 func stageTooling(c *Context, dir string, t *release.Tooling) error {
-	// A staged release is only verified. The CLI check is for staging, as the
-	// preflight's staging-only prerequisites are.
+	// A staged release is only verified. The commands staging needs are the
+	// requirements preflight's to check, each by name, before this runs.
 	if _, err := os.Stat(filepath.Join(dir, ".complete")); err == nil {
 		return verifyToolFiles(c, dir, t)
-	}
-	if _, err := c.Must([]string{"bash", "-c", "command -v bash curl jq python3 ssh readlink secret-tool >/dev/null"}, 15*time.Second, c.Home, "CLI prerequisites"); err != nil {
-		return err
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if err := setAsideOwnFailedStage(c, dir); err != nil {
@@ -258,23 +403,28 @@ func stageTooling(c *Context, dir string, t *release.Tooling) error {
 			return err
 		}
 	}
-	lock := filepath.Join(dir, "ov-memory/requirements.lock")
-	if err := agentenv.AtomicWrite(lock, []byte(strings.Join(t.Python, "\n")+"\n"), 0600); err != nil {
-		return err
+	// Dependencies are installed for the profile's tools only.
+	if toolSelected(c, "ov-memory") {
+		lock := filepath.Join(dir, "ov-memory/requirements.lock")
+		if err := agentenv.AtomicWrite(lock, []byte(strings.Join(t.Python, "\n")+"\n"), 0600); err != nil {
+			return err
+		}
+		venv := filepath.Join(dir, "ov-memory/venv")
+		if _, err := c.Must([]string{"python3", "-m", "venv", venv}, 2*time.Minute, c.Home, "OV memory virtualenv"); err != nil {
+			return err
+		}
+		if _, err := c.Must([]string{filepath.Join(venv, "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:", "-r", lock}, 10*time.Minute, c.Home, "OV memory dependencies"); err != nil {
+			return err
+		}
 	}
-	venv := filepath.Join(dir, "ov-memory/venv")
-	if _, err := c.Must([]string{"python3", "-m", "venv", venv}, 2*time.Minute, c.Home, "OV memory virtualenv"); err != nil {
-		return err
-	}
-	if _, err := c.Must([]string{filepath.Join(venv, "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", "--only-binary=:all:", "-r", lock}, 10*time.Minute, c.Home, "OV memory dependencies"); err != nil {
-		return err
-	}
-	if _, err := c.Must([]string{"npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"}, 5*time.Minute, filepath.Join(dir, "local-file-llm"), "local-file-llm dependencies"); err != nil {
-		return err
+	if toolSelected(c, "local-file-llm") {
+		if _, err := c.Must([]string{"npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"}, 5*time.Minute, filepath.Join(dir, "local-file-llm"), "local-file-llm dependencies"); err != nil {
+			return err
+		}
 	}
 	// Wrappers find their immutable bundle through readlink, so a running process
 	// never crosses from one release's script to another release's library.
-	for path, file := range toolingGeneratedFiles(t) {
+	for path, file := range toolingGeneratedFiles(c, t) {
 		if path == ".complete" {
 			continue
 		}
@@ -521,25 +671,32 @@ func ownFailedStage(dir, name string) bool {
 }
 
 func probeTooling(c *Context, dir string, t *release.Tooling) error {
+	// Only the profile's tools are probed: a tool a host does not have is
+	// never started, so nothing it would reach is ever contacted.
 	// CLI help never invokes a service action or requires copying credentials.
 	for _, name := range []string{"ha", "toolfeedback", "feed", "pve", "unifi", "t3-backlog"} {
-		if name == "t3-backlog" && !toolingHasBacklog(t) {
+		if !toolSelected(c, "homelab-cli") || name == "t3-backlog" && !toolingHasBacklog(t) {
 			continue
 		}
 		if _, err := c.Must([]string{filepath.Join(dir, "homelab-cli/bin", name), "--help"}, 15*time.Second, c.Home, name+" help"); err != nil {
 			return err
 		}
 	}
-	if _, err := c.Must([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "check"}, 30*time.Second, c.Home, "OV dependency check"); err != nil {
-		return err
+	if toolSelected(c, "ov-memory") {
+		if _, err := c.Must([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "check"}, 30*time.Second, c.Home, "OV dependency check"); err != nil {
+			return err
+		}
+		frozen := c.Run([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "freeze"}, 30*time.Second, c.Home)
+		actual := strings.Split(strings.TrimSpace(frozen.Output), "\n")
+		sort.Strings(actual)
+		if !frozen.OK || !reflect.DeepEqual(actual, t.Python) {
+			return Failf("OV Python installed versions differ from release lock")
+		}
 	}
-	frozen := c.Run([]string{filepath.Join(dir, "ov-memory/venv/bin/python"), "-m", "pip", "freeze"}, 30*time.Second, c.Home)
-	actual := strings.Split(strings.TrimSpace(frozen.Output), "\n")
-	sort.Strings(actual)
-	if !frozen.OK || !reflect.DeepEqual(actual, t.Python) {
-		return Failf("OV Python installed versions differ from release lock")
-	}
-	for _, name := range []string{"ov-memory", "local-file-llm"} {
+	for _, name := range agentenv.ToolingServers {
+		if !toolSelected(c, name) {
+			continue
+		}
 		env, err := agentenv.MCPEnvironment(c.Spec("agent-environment"), c.Home, name, c.Env)
 		if err != nil {
 			return Failf("%s environment could not be rendered", name)
@@ -611,7 +768,7 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		return err
 	}
 	links := map[string]string{filepath.Join(base, "current"): dir}
-	for name, target := range toolingLinks(t, base) {
+	for name, target := range toolingLinks(c, t, base) {
 		links[filepath.Join(bin, name)] = target
 	}
 	retiredPath, retirement, err := toolingBacklogRetirement(c, base, t)
@@ -622,6 +779,14 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 	// private snapshot and compensation scope as current and desired links.
 	if retirement == "owned" {
 		links[retiredPath] = ""
+	}
+	// The bindings of tools the profile dropped are retired the same way.
+	dropped, err := toolingDroppedBindings(c, base)
+	if err != nil {
+		return err
+	}
+	for path := range dropped {
+		links[path] = ""
 	}
 	keys := make([]string, 0, len(links))
 	for path := range links {
@@ -637,6 +802,10 @@ func activateTooling(c *Context, base, dir string, t *release.Tooling) error {
 		if path == retiredPath && retirement == "owned" &&
 			(s.Mode&uint32(os.ModeSymlink) == 0 || s.Target != filepath.Join(base, "current", toolingBacklogSource)) {
 			return Failf("concurrent t3-backlog binding change; preserved %s", path)
+		}
+		if target, ok := dropped[path]; ok &&
+			(s.Mode&uint32(os.ModeSymlink) == 0 || s.Target != target) {
+			return Failf("concurrent %s binding change; preserved %s", filepath.Base(path), path)
 		}
 		prior = append(prior, s)
 	}

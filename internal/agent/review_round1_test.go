@@ -73,26 +73,37 @@ func TestReviewConvergedHostWithoutOptionalKeyringCLI(t *testing.T) {
 	}
 }
 
-// Staging still runs the bundle's CLI prerequisite check, which includes the
-// keyring CLI, so a host that has to stage is told about it up front.
+// A host that has to stage, and whose OV key could only come from the
+// keyring, is told about the keyring CLI up front. One whose key is in the
+// key file does not need the keyring CLI at all.
 func TestReviewStagingHostIsStillToldAboutTheKeyringCLI(t *testing.T) {
-	home := t.TempDir()
-	names := []string{}
-	for _, name := range freshTestCommands {
-		if name != "secret-tool" {
-			names = append(names, name)
+	for _, keyFile := range []bool{false, true} {
+		home := t.TempDir()
+		names := []string{}
+		for _, name := range freshTestCommands {
+			if name != "secret-tool" {
+				names = append(names, name)
+			}
 		}
-	}
-	bin := freshTestTools(t, home, names...)
-	adapterTestWrite(t, filepath.Join(home, ".config/ov-mcp/key"), "redacted\n")
-	ran := stubTooling(t)
-	c := freshTestContext(t, home, bin, func(procx.Command) procx.Result { return procx.Result{} },
-		[]string{release.ToolingComponent}, map[string]any{release.ToolingComponent: validToolingSpec(t)})
-	entry := resultEntry(t, Execute(c), release.ToolingComponent)
-	message, _ := entry["error"].(string)
-	if *ran || entry["state"] != "blocked" || !strings.Contains(message, "secret-tool") ||
-		!strings.Contains(message, "libsecret-tools") {
-		t.Fatalf("a host that stages without secret-tool = %v", entry)
+		bin := freshTestTools(t, home, names...)
+		if keyFile {
+			adapterTestWrite(t, filepath.Join(home, ".config/ov-mcp/key"), "redacted\n")
+		}
+		ran := stubTooling(t)
+		c := freshTestContext(t, home, bin, func(procx.Command) procx.Result { return procx.Result{} },
+			[]string{release.ToolingComponent}, map[string]any{release.ToolingComponent: validToolingSpec(t)})
+		entry := resultEntry(t, Execute(c), release.ToolingComponent)
+		message, _ := entry["error"].(string)
+		if keyFile {
+			if !*ran || entry["state"] != "updated" || strings.Contains(message, "secret-tool") {
+				t.Fatalf("a host with a key file that stages without secret-tool = %v", entry)
+			}
+			continue
+		}
+		if *ran || entry["state"] != "blocked" || !strings.Contains(message, "secret-tool") ||
+			!strings.Contains(message, "libsecret-tools") {
+			t.Fatalf("a host that stages without secret-tool = %v", entry)
+		}
 	}
 }
 

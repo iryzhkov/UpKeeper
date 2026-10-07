@@ -76,6 +76,70 @@ func MCPEnvironment(raw map[string]any, home, name string, base []string) ([]str
 	return result, nil
 }
 
+// ToolingServers are the MCP servers the tooling component provides. Each is
+// named for the agent tool that provides it.
+var ToolingServers = []string{"ov-memory", "local-file-llm"}
+
+// checkWithout refuses to drop any registration but a tooling server's: every
+// other one belongs to the release or to the host.
+func checkWithout(without []string) error {
+	for _, name := range without {
+		known := false
+		for _, server := range ToolingServers {
+			known = known || name == server
+		}
+		if !known {
+			return fmt.Errorf("%q is not a tooling MCP server a profile can leave out", name)
+		}
+	}
+	return nil
+}
+
+// dropping is what a host's agent tool profile leaves out of the shared
+// release: the tooling MCP servers not to register, and the home whose
+// wrappers mark a registration of one as UpKeeper's own. The zero value drops
+// nothing, which is a host without a profile.
+type dropping struct {
+	names []string
+	home  string
+}
+
+// owned removes the dropped servers from a release's owned registrations.
+func (d dropping) owned(servers map[string]any) map[string]any {
+	for _, name := range d.names {
+		delete(servers, name)
+	}
+	return servers
+}
+
+// registrations removes from a harness's merged registrations each dropped
+// server that UpKeeper registered: one that runs the tooling wrapper the
+// tooling component binds in this home, and nothing else. A registration of
+// the same name a person made, for another command, is theirs and stays. It
+// returns the names it removed.
+func (d dropping) registrations(servers map[string]any, opencode bool) []string {
+	removed := []string{}
+	for _, name := range d.names {
+		server, ok := servers[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		wrapper := filepath.Join(d.home, ".local/bin", name+"-mcp")
+		owned := false
+		if opencode {
+			command, _ := server["command"].([]any)
+			owned = len(command) == 1 && command[0] == wrapper
+		} else {
+			owned = server["command"] == wrapper
+		}
+		if owned {
+			delete(servers, name)
+			removed = append(removed, name)
+		}
+	}
+	return removed
+}
+
 // WithTooling connects all three harnesses to the portable runtimes in the
 // release. Only these two known local servers are normalized; remote endpoints
 // and host-local credentials remain under the existing registration merge.

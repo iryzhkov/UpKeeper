@@ -39,6 +39,10 @@ type HostRef struct {
 	// prerequisites installed with passwordless sudo. Omitted when false, so a
 	// payload for a host that did not opt in is exactly what it always was.
 	InstallOSPackages bool `json:"install_os_packages,omitempty"`
+	// AgentTools is the host's agent tool profile: the tools the tooling
+	// component installs, registers and probes. Nil means every tool, and is
+	// omitted, so a payload for a host without a profile is what it always was.
+	AgentTools []string `json:"agent_tools,omitempty"`
 }
 
 // Payload is the complete instruction set for one host in one run.

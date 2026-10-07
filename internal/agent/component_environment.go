@@ -21,7 +21,11 @@ func init() {
 // environmentObserve renders what every managed path would become and reports
 // the drift, without changing anything on the target.
 func environmentObserve(c *Context, spec map[string]any) (map[string]any, error) {
-	observation, err := agentenv.ObserveEnvironment(spec, c.Home, environmentPendingIdentity)
+	without, err := environmentWithout(c)
+	if err != nil {
+		return nil, err
+	}
+	observation, err := agentenv.ObserveEnvironmentWithout(spec, c.Home, environmentPendingIdentity, without)
 	if err != nil {
 		return nil, environmentFailure(err)
 	}
@@ -37,7 +41,11 @@ func environmentObserve(c *Context, spec map[string]any) (map[string]any, error)
 func environmentApply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
-	result, err := agentenv.ApplyEnvironment(spec, c.Home, c.RunID, c.DryRun, nil)
+	without, err := environmentWithout(c)
+	if err != nil {
+		return "", err
+	}
+	result, err := agentenv.ApplyEnvironmentWithout(spec, c.Home, c.RunID, c.DryRun, nil, without)
 	if err != nil {
 		return "", environmentFailure(err)
 	}
@@ -47,6 +55,26 @@ func environmentApply(
 		*actions = append(*actions, "restored and verified the complete previous environment")
 	}
 	return result.State, nil
+}
+
+// environmentWithout names the tooling MCP servers this host's agent tool
+// profile leaves out. The release every host shares registers them all, so
+// the filtering happens here, per host, when the environment is projected.
+func environmentWithout(c *Context) ([]string, error) {
+	if c.Host.AgentTools == nil {
+		return nil, nil
+	}
+	selected, err := toolProfile(c)
+	if err != nil {
+		return nil, err
+	}
+	without := []string{}
+	for _, name := range agentenv.ToolingServers {
+		if !selected[name] {
+			without = append(without, name)
+		}
+	}
+	return without, nil
 }
 
 // environmentPendingIdentity names the staging directory an observation would
