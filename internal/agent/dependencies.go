@@ -4,8 +4,8 @@ import "github.com/iryzhkov/UpKeeper/internal/fleet"
 
 // A component that does not complete (it is blocked, deferred, rolled back or
 // failed) makes only its dependents skip; every independent component after it
-// still runs. Only the abort class stops the host: a failed rollback, an
-// unknown adapter, or a legacy updater retirement that failed or deferred.
+// still runs. Only the abort class stops the host: a failed or incomplete
+// rollback (restorationIncomplete), an unknown adapter, or a legacy updater retirement that failed or deferred.
 //
 // componentDependencies names, for each component, the earlier components it
 // cannot be converged without. An edge exists only where the later adapter

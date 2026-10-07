@@ -32,7 +32,7 @@ contain sensitive customer or task data. Journals and environment values are not
 Future mutation must acquire every selected target lock before preflight, use versioned immutable
 installs and atomic activation, preserve at least two healthy versions, back up schema-sensitive
 state, skip every component that depends on a failed one, and stop the host after a failed
-rollback. Dirty or unmanaged paths require explicit adoption and a verified backup. Stale locks, active agent99 bridges, and schema incompatibility require explicit
+or incomplete rollback. Dirty or unmanaged paths require explicit adoption and a verified backup. Stale locks, active agent99 bridges, and schema incompatibility require explicit
 operator decisions.
 
 ## Known residual risks at the Phase 1 gate

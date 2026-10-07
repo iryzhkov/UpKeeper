@@ -73,10 +73,11 @@ func TestCompletionValues(t *testing.T) {
 		{"every host none", []any{none, none}, "none"},
 		{"one partial host", []any{complete, partial}, "partial"},
 		{"complete beside none", []any{complete, none}, "partial"},
-		// A host the run deliberately did not dispatch to is not counted,
-		// just as it does not change the exit code.
-		{"complete beside a self-managed host", []any{selfManaged, complete}, "complete"},
-		{"complete beside a skipped unreachable host", []any{skippedUnreachable, complete}, "complete"},
+		// Every host counts, including one the run deliberately did not
+		// dispatch to: its components did not converge in this run.
+		{"complete beside a self-managed host", []any{selfManaged, complete}, "partial"},
+		{"complete beside a skipped unreachable host", []any{skippedUnreachable, complete}, "partial"},
+		{"only hosts not dispatched to", []any{selfManaged, skippedUnreachable}, "none"},
 		{"no hosts", []any{}, "complete"},
 	}
 	for _, testCase := range reports {

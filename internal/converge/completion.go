@@ -54,16 +54,14 @@ func HostCompletion(host map[string]any) string {
 // each of which already carries its own completion: complete when every host
 // is complete, none when every host is none, and partial otherwise.
 //
-// A host the run deliberately did not dispatch to, because it is self-managed
-// or was skipped as unreachable on request, is not counted, just as it does
-// not change the exit code. A run with no counted host is complete.
+// Every host counts. A host the run deliberately did not dispatch to, because
+// it is self-managed or was skipped as unreachable on request, is none: it
+// does not change the exit code, but nothing on it converged in this run. A
+// run with no host is complete.
 func ReportCompletion(hosts []any) string {
 	seen := map[string]bool{}
 	for _, item := range hosts {
 		host, _ := item.(map[string]any)
-		if boolField(host, "self_managed") || boolField(host, "skipped_unreachable") {
-			continue
-		}
 		completion, _ := host["completion"].(string)
 		seen[completion] = true
 	}

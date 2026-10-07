@@ -8,8 +8,8 @@
 //
 // The agent observes every selected component, changes only what differs and
 // verifies the result. A component it could not complete skips only the
-// components that depend on it; a failed rollback, an unknown adapter or a
-// legacy updater it could not retire stops the host. It holds the target-side
+// components that depend on it; a failed or incomplete rollback, an unknown
+// adapter or a legacy updater it could not retire stops the host. It holds the target-side
 // half of the deployment lock for the whole run.
 package agent
 
@@ -499,9 +499,9 @@ func Execute(context *Context) map[string]any {
 		if dependencyStates[state] {
 			unavailable[name], roots[name] = state, name
 		}
-		// A failed rollback leaves the host in a state the run neither found
-		// nor restored, so nothing else is applied on top of it.
-		if state == "rollback-failed" {
+		// A failed or incomplete rollback leaves the host in a state the run
+		// neither found nor restored, so nothing else is applied on top of it.
+		if restorationIncomplete(state, entryError) {
 			abortedBy, abortState = name, state
 		}
 		if after, err := observeQuietly(context, handler, spec); err != nil {
@@ -564,6 +564,35 @@ func classify(err error) (string, string) {
 func rollbackFailed(message string) bool {
 	return strings.Contains(message, "rollback failed") ||
 		strings.Contains(message, "rollback incomplete")
+}
+
+// restorationIncomplete reports whether a component outcome leaves the host
+// unrestored, which stops the host. That is every rollback-failed outcome, and
+// every failure that says a rollback or restoration did not finish without the
+// words "rollback failed": "files restored; previous service restoration
+// failed" (T3), "steward restored but session hook restoration failed", a
+// restore error joined to its cause (the Steward unit), and a rollback that
+// stopped at a concurrent change and left it in place ("concurrent state
+// preserved for recovery", "concurrent entry point preserved").
+//
+// A successful compensation is a typed RolledBack and never reaches this as a
+// failure, so any failure that mentions a rollback or restoration is one that
+// did not complete. Matching one too many only stops the host, which is what
+// every failure did before a failure could skip only its dependents.
+func restorationIncomplete(state, message string) bool {
+	if state == "rollback-failed" {
+		return true
+	}
+	if state != "failed" {
+		return false
+	}
+	lower := strings.ToLower(message)
+	for _, marker := range []string{"rollback", "restor", "preserved"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func observeQuietly(

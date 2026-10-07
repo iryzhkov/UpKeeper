@@ -242,7 +242,13 @@ the run cannot vouch for. This abort class is a legacy updater retirement that `
 host in a state the run neither found nor restored. A failure is `rollback-failed` when its
 message says `rollback failed` or `rollback incomplete` anywhere, because some adapters
 name what they restored first (`Jocasta rollback failed; inspect ...`), so such a failure
-now exits 50 rather than 40. Every later component is `skipped`.
+now exits 50 rather than 40. The agent-environment restore reports every error it meets,
+an I/O error included, as `rollback failed`. A `failed` component whose message mentions
+a rollback or a restoration, or a concurrent change left `preserved`, also stops the host
+while keeping its `failed` state and exit 40: a successful compensation is reported as
+`rolled-back`, so such a failure is one whose restoration did not finish, as in T3's
+`files restored; previous service restoration failed`. Every later component is
+`skipped`.
 The refusals before any component runs are unchanged: preflight, the controller or target
 lock, the program fence, and a self-pull program update or moved checkout.
 
@@ -270,9 +276,10 @@ at its failure gets one too:
   unreachable before its components ran.
 
 It is set on every host entry, on the report and in the run record's details; the run
-is `complete` when every host is, `none` when every host is, and `partial` otherwise. A
-self-managed host left to its local timer, or one skipped with `--skip-unreachable`, is
-not counted, just as it does not change the exit code. `status` reports no completion.
+is `complete` when every host is, `none` when every host is, and `partial` otherwise.
+Every host counts: a self-managed host left to its local timer, or one skipped with
+`--skip-unreachable`, does not change the exit code but is `none`, so a run beside it is
+`partial`. `status` reports no completion.
 The text output adds ` completion=<value>` to the run line and ` (completion <value>)` to
 the host line only when the value is not `complete`; a scheduled run adds one stderr line
 per partial host, `upkeeper <command>: <host> partial: N succeeded, M not completed, K
