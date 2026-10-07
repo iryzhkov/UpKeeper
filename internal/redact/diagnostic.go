@@ -2,6 +2,7 @@ package redact
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -18,20 +19,16 @@ var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
 // access key, and a key word written with a space, as in "api key".
 const toolSecretWord = `(?:(?:api|access)[\s_-]?key|private[\s_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
 
-// toolSecretValue is a secret's value, tried in order: an authorization
-// scheme and its credential; a value in escaped double quotes, as inside a
-// JSON string; one in double, single (either optionally a Python bytes or raw
-// literal), back or curly quotes; a JSON array or object; or a bare word. A
-// quoted value, array or object the text ends inside of runs to the end, so a
-// tool's own truncation never leaves the rest of a value behind.
+// toolSecretValue handles scalar values: authorization schemes, escaped or
+// ordinary quotes (including Python literals), back/curly quotes and bare
+// words. Unterminated quotes consume the rest. Structured values are scanned
+// separately by diagnosticValueEnd with a delimiter stack and quote state.
 const toolSecretValue = `(?:(?:bearer|basic|token)\s+[^\s,;"'\\]+` +
 	`|\\"(?:[^"\\]|\\[^"])*(?:\\"|\\?$)` +
 	`|[bru]?"(?:[^"\\]|\\.)*(?:"|\\?$)` +
 	`|[bru]?'(?:[^'\\]|\\.)*(?:'|\\?$)` +
 	`|\x60[^\x60]*(?:\x60|$)` +
 	`|“[^”]*(?:”|$)` +
-	`|\[[^\]]*(?:\]|$)` +
-	`|\{[^}]*(?:\}|$)` +
 	`|[^\s,;}\]]+)`
 
 var (
@@ -42,8 +39,8 @@ var (
 	toolSecretAssignment = regexp.MustCompile(
 		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `(?:_[A-Za-z0-9]+)*\s*[=:]\s*)`)
 	// A JSON or dict key is quoted, or escaped-quoted inside a JSON string.
-	toolSecretJSON = regexp.MustCompile(
-		`(?i)(\\*["'][A-Za-z0-9_.\s-]*` + toolSecretWord + `[A-Za-z0-9_.-]*\\*["']\s*:\s*)`)
+	toolSecretJSON      = regexp.MustCompile(`\\*["'][A-Za-z0-9_.\s\\-]*\\*["']\s*:\s*`)
+	diagnosticSecretKey = regexp.MustCompile(`(?i)^[A-Za-z0-9_.\s-]*` + toolSecretWord + `[A-Za-z0-9_.-]*$`)
 	// A command-line flag gives its value after a space.
 	toolSecretFlag = regexp.MustCompile(
 		`(?i)((?:^|\s)--?[A-Za-z0-9_-]*` + toolSecretWord + `[A-Za-z0-9_-]*\s+)`)
@@ -52,9 +49,6 @@ var (
 	// Credentials in a URL of any scheme, such as a database's.
 	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
 	toolBearer      = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
-	// privateKeyBlock is the shared redaction's whole private key block.
-	privateKeyBlock = regexp.MustCompile(
-		`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
 )
 
 // DiagnosticText redacts untrusted diagnostic strings, including nested or
@@ -64,15 +58,15 @@ var (
 // shared helper can consume an opening quote or an authorization scheme and
 // hide the rest of a value; then the shared helper and the bare bearer token.
 func DiagnosticText(text string) string {
-	text = privateKeyBlock.ReplaceAllString(text, Placeholder)
+	text = privateKeyPattern.ReplaceAllString(text, Placeholder)
 	if start := privateKeyStart.FindStringIndex(text); start != nil {
 		text = text[:start[0]] + Placeholder
 	}
 	text = toolURLUserInfo.ReplaceAllString(text, "${1}"+Placeholder+"@")
-	text = toolCookie.ReplaceAllString(text, "${1}"+Placeholder)
 	text = replaceDiagnosticValues(text, toolSecretJSON, true)
 	text = replaceDiagnosticValues(text, toolSecretAssignment, false)
 	text = replaceDiagnosticValues(text, toolSecretFlag, false)
+	text = toolCookie.ReplaceAllString(text, "${1}"+Placeholder)
 	text = Text(text)
 	return toolBearer.ReplaceAllString(text, "${1}"+Placeholder)
 }
@@ -108,8 +102,12 @@ func replaceDiagnosticValues(value string, prefix *regexp.Regexp, quoted bool) s
 			out.WriteString(value[position:])
 			break
 		}
-		end := position + found[1]
+		start, end := position+found[0], position+found[1]
 		out.WriteString(value[position:end])
+		if quoted && !diagnosticJSONSecretKey(value[start:end]) {
+			position = end
+			continue
+		}
 		consumed := diagnosticValueEnd(value[end:])
 		if consumed == 0 {
 			position = end
@@ -127,11 +125,30 @@ func replaceDiagnosticValues(value string, prefix *regexp.Regexp, quoted bool) s
 	return out.String()
 }
 
+// A JSON key can encode a known sensitive name with legal Unicode escapes.
+// Decode its escape layers before classification, while preserving the original
+// key spelling in the report. Uncertain encoded names are suppressed.
+func diagnosticJSONSecretKey(prefix string) bool {
+	key := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(prefix), ":"))
+	key = strings.Trim(key, "\\\"'")
+	for layer := 0; layer < 8 && strings.Contains(key, "\\"); layer++ {
+		decoded, err := strconv.Unquote("\"" + key + "\"")
+		if err != nil {
+			return true
+		}
+		key = decoded
+	}
+	if strings.Contains(key, "\\") {
+		return true
+	}
+	return diagnosticSecretKey.MatchString(key)
+}
+
 // diagnosticValueEnd returns the complete value boundary. Escaped diagnostic
 // JSON is decoded only in a scratch view; offsets map back to the original.
 // An uncertain structured boundary consumes the rest rather than leaking it.
 func diagnosticValueEnd(raw string) int {
-	if raw == "" || raw[0] == '-' {
+	if raw == "" {
 		return 0
 	}
 	view := raw

@@ -26,6 +26,7 @@ func FuzzDiagnosticSecretValues(f *testing.F) {
 	for _, padding := range []string{"", `"}]\"`, "line\nbreak", "\\", "☃", "'"} {
 		f.Add(padding, uint8(3), uint8(2))
 	}
+	f.Add("alpha ", uint8(1), uint8(11))
 	f.Fuzz(func(t *testing.T, padding string, depth, escapes uint8) {
 		if len(padding) > 1024 {
 			t.Skip()
@@ -40,7 +41,7 @@ func FuzzDiagnosticSecretValues(f *testing.F) {
 			t.Fatal(err)
 		}
 		input := string(bytes)
-		for i := 0; i < int(escapes%5); i++ {
+		for i := 0; i < int(escapes%12); i++ {
 			bytes, _ = json.Marshal(input)
 			input = string(bytes)
 		}

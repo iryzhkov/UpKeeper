@@ -66,20 +66,27 @@ func TestRound1EveryExchangeErrorUsesSharedRedaction(t *testing.T) {
 // Every review reproduction exercises the actual child-process Exchange path.
 func TestRound1ReviewSecretBoundaries(t *testing.T) {
 	for name, input := range map[string]string{
-		"quoted flag":          `ov --api-key "alpha FAKE_SECRET_SUFFIX omega" failed`,
-		"quoted password flag": `tool --password 'alpha FAKE_SECRET_SUFFIX omega' failed`,
-		"unterminated flag":    `ov --api-key "alpha FAKE_SECRET_SUFFIX omega`,
-		"nested object":        `{"credential": {"nested": {"value":"alpha"}, "second":"FAKE_SECRET_SUFFIX omega"}}`,
-		"nested array":         `{"credential": [["alpha"], {"second":"FAKE_SECRET_SUFFIX omega"}]}`,
-		"quoted delimiters":    `{"credential": {"nested": ["} ] \" alpha"], "second":"FAKE_SECRET_SUFFIX omega"}} retry`,
-		"truncated object":     `{"credential": {"nested": {}, "second":"FAKE_SECRET_SUFFIX omega`,
-		"escaped nested JSON":  `{\"credential\": {\"nested\": {}, \"second\":\"FAKE_SECRET_SUFFIX omega\"}}`,
-		"URL":                  "postgres://user:FAKE_SECRET_SUFFIX@db failed",
-		"environment":          `OV_API_KEY='alpha FAKE_SECRET_SUFFIX omega' failed`,
+		"quoted flag":            `ov --api-key "alpha FAKE_SECRET_SUFFIX omega" failed`,
+		"quoted password flag":   `tool --password 'alpha FAKE_SECRET_SUFFIX omega' failed`,
+		"unterminated flag":      `ov --api-key "alpha FAKE_SECRET_SUFFIX omega`,
+		"nested object":          `{"credential": {"nested": {"value":"alpha"}, "second":"FAKE_SECRET_SUFFIX omega"}}`,
+		"nested array":           `{"credential": [["alpha"], {"second":"FAKE_SECRET_SUFFIX omega"}]}`,
+		"quoted delimiters":      `{"credential": {"nested": ["} ] \" alpha"], "second":"FAKE_SECRET_SUFFIX omega"}} retry`,
+		"truncated object":       `{"credential": {"nested": {}, "second":"FAKE_SECRET_SUFFIX omega`,
+		"escaped nested JSON":    `{\"credential\": {\"nested\": {}, \"second\":\"FAKE_SECRET_SUFFIX omega\"}}`,
+		"quoted cookie":          `cookie="alpha FAKE_SECRET_SUFFIX omega"`,
+		"quoted cookie header":   `Cookie: "alpha FAKE_SECRET_SUFFIX omega"`,
+		"dash flag":              `tool --password -FAKE_SECRET_SUFFIX failed`,
+		"dash API key flag":      `ov --api-key -FAKE_SECRET_SUFFIX failed`,
+		"negative JSON password": `{"password": -123456789987654321}`,
+		"negative JSON":          `{"token": -98765432109876543210}`,
+		"unicode JSON key":       `{"api_\u006bey":"FAKE_SECRET_SUFFIX"}`,
+		"URL":                    "postgres://user:FAKE_SECRET_SUFFIX@db failed",
+		"environment":            `OV_API_KEY='alpha FAKE_SECRET_SUFFIX omega' failed`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := exchangeToolError(t, []any{text(input)}).Error()
-			if strings.Contains(got, "FAKE_SECRET_SUFFIX") || strings.Contains(got, "omega") {
+			if strings.Contains(got, "FAKE_SECRET_SUFFIX") || strings.Contains(got, "omega") || strings.Contains(got, "987654321") || strings.Contains(got, "123456789987654321") {
 				t.Fatalf("secret reached error: %q", got)
 			}
 		})
