@@ -229,7 +229,24 @@ func diagnosticWordEnd(value string, shell bool) int {
 		quoteEscapes = c != '\'' || !shell || (i > 0 && value[i-1] == '$') ||
 			(i == 1 && strings.ContainsRune("bruBRU", rune(value[0])))
 	}
-	var substitutions []byte
+	// Each substitution parses with its own quote state and restores the
+	// enclosing word's state when it closes. Quotes in $(...) are independent
+	// of the surrounding double quotes.
+	type substitution struct {
+		opening      byte
+		quote        byte
+		quoteEscapes bool
+	}
+	var substitutions []substitution
+	pushSubstitution := func(opening byte) {
+		substitutions = append(substitutions, substitution{opening, quote, quoteEscapes})
+		quote, quoteEscapes = 0, false
+	}
+	popSubstitution := func() {
+		top := substitutions[len(substitutions)-1]
+		quote, quoteEscapes = top.quote, top.quoteEscapes
+		substitutions = substitutions[:len(substitutions)-1]
+	}
 	curly := false
 	for i := 0; i < len(value); i++ {
 		c := value[i]
@@ -251,6 +268,25 @@ func diagnosticWordEnd(value string, shell bool) int {
 			}
 			continue
 		}
+		// Shell expansions are active inside double quotes too; escaped
+		// expansion markers and single-quoted literals were handled above.
+		if shell && (quote == 0 || quote == '"') {
+			if c == '`' {
+				if quote == 0 && len(substitutions) > 0 && substitutions[len(substitutions)-1].opening == '`' {
+					popSubstitution()
+				} else {
+					pushSubstitution('`')
+				}
+				continue
+			}
+			if i+1 < len(value) &&
+				((c == '$' && (value[i+1] == '(' || value[i+1] == '{')) ||
+					(quote == 0 && (c == '<' || c == '>') && value[i+1] == '(')) {
+				pushSubstitution(value[i+1])
+				i++
+				continue
+			}
+		}
 		if quote != 0 {
 			if c == quote {
 				quote = 0
@@ -262,22 +298,16 @@ func diagnosticWordEnd(value string, shell bool) int {
 			i += len("“") - 1
 			continue
 		}
-		if shell && i+1 < len(value) &&
-			((value[i+1] == '(' && (c == '$' || c == '<' || c == '>')) || (c == '$' && value[i+1] == '{')) {
-			substitutions = append(substitutions, value[i+1])
-			i++
-			continue
-		}
 		if len(substitutions) > 0 {
 			switch c {
 			case '(', '{':
-				substitutions = append(substitutions, c)
+				pushSubstitution(c)
 			case ')', '}':
-				top := substitutions[len(substitutions)-1]
-				if (top == '(' && c != ')') || (top == '{' && c != '}') {
+				top := substitutions[len(substitutions)-1].opening
+				if (top == '(' && c != ')') || (top == '{' && c != '}') || top == '`' {
 					return len(value)
 				}
-				substitutions = substitutions[:len(substitutions)-1]
+				popSubstitution()
 			case '\'', '"', '`':
 				setQuote(c, i)
 			}
