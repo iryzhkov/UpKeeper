@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -37,13 +39,29 @@ func guidanceTestInflate(t *testing.T, s string) []byte {
 	}
 	return b
 }
+
+// guidanceTestInputsCache holds the decoded originals, inflated once per test
+// process; it is never changed after it is filled.
+var guidanceTestInputsCache struct {
+	sync.Mutex
+	data map[string]string
+}
+
+// guidanceTestInputs returns the caller's own map of the original encodings.
+// Strings are immutable, so a copy of the map is a complete copy.
 func guidanceTestInputs(t *testing.T) map[string]string {
 	t.Helper()
-	v := map[string]string{}
-	if e := json.Unmarshal(guidanceTestInflate(t, guidanceOriginalInputsGzip), &v); e != nil {
-		t.Fatal(e)
+	c := &guidanceTestInputsCache
+	c.Lock()
+	defer c.Unlock()
+	if c.data == nil {
+		v := map[string]string{}
+		if e := json.Unmarshal(guidanceTestInflate(t, guidanceOriginalInputsGzip), &v); e != nil {
+			t.Fatal(e)
+		}
+		c.data = v
 	}
-	return v
+	return maps.Clone(c.data)
 }
 func guidanceTestValue(t *testing.T, p string) map[string]any {
 	t.Helper()
@@ -128,6 +146,7 @@ func TestCatalogGuidanceInputAuthoritativeSchemas(t *testing.T) {
 	}
 }
 func TestCatalogGuidanceInputEveryClosedField(t *testing.T) {
+	t.Parallel()
 	count := 0
 	for p, k := range guidanceInputKinds() {
 		base := guidanceTestValue(t, p)
@@ -137,6 +156,7 @@ func TestCatalogGuidanceInputEveryClosedField(t *testing.T) {
 			for key := range catalogTestAt(base, path) {
 				for _, mutation := range []string{"missing", "null", "bool", "wrong-type", "duplicate"} {
 					t.Run(fmt.Sprintf("%s/object%d/%s/%s", p, i, key, mutation), func(t *testing.T) {
+						t.Parallel()
 						v := guidanceTestValue(t, p)
 						o := catalogTestAt(v, path)
 						raw := []byte(nil)
@@ -174,6 +194,7 @@ func TestCatalogGuidanceInputEveryClosedField(t *testing.T) {
 				}
 			}
 			t.Run(fmt.Sprintf("%s/object%d/unknown", p, i), func(t *testing.T) {
+				t.Parallel()
 				v := guidanceTestValue(t, p)
 				catalogTestAt(v, path)["unexpected"] = json.Number("1")
 				if e := ValidateCatalogGuidanceInputEncoding(k, guidanceTestBytes(t, v)); e == nil {

@@ -53,6 +53,7 @@ func guidanceFrozenDecode(raw []byte) (map[string]any, error) {
 	return canonjson.DecodeObject(raw)
 }
 func TestCatalogGuidanceSnapshotActualCustody(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	s := snapshotTestAcquire(t, o)
 	a, e := InspectCatalogGuidanceSnapshot(s)
@@ -102,6 +103,7 @@ func TestCatalogGuidanceSnapshotActualCustody(t *testing.T) {
 	}
 }
 func TestCatalogGuidanceSnapshotRelationships(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, want string
 		edit       func(*testing.T, *CatalogSnapshotOptions)
@@ -205,6 +207,7 @@ func TestCatalogGuidanceSnapshotRelationships(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			c.edit(t, &o)
 			snapshotTestCommit(t, &o)
@@ -220,6 +223,7 @@ func TestCatalogGuidanceSnapshotRelationships(t *testing.T) {
 	}
 }
 func TestCatalogGuidanceSnapshotConcurrentClose(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	s := snapshotTestAcquire(t, o)
 	var wg sync.WaitGroup
@@ -249,6 +253,7 @@ func TestCatalogGuidanceSnapshotConcurrentClose(t *testing.T) {
 	}
 }
 func TestCatalogGuidanceSnapshotCustodyRefusal(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	s := snapshotTestAcquire(t, o)
 	path := filepath.Join(o.InputRoot, "inputs/guidance-profile.json")
@@ -260,8 +265,10 @@ func TestCatalogGuidanceSnapshotCustodyRefusal(t *testing.T) {
 	}
 }
 func TestCatalogGuidanceSnapshotOptionalMetadata(t *testing.T) {
+	t.Parallel()
 	for i, labels := range [][3]string{{"unknown", "visible", "denied"}, {"unavailable", "visible", "declaration-only"}, {"observed", "hidden", "unknown"}} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			guidanceSnapshotEdit(t, &o, "inputs/guidance-profile.json", func(v map[string]any) {
 				r := catalogObject(catalogArray(v["tools"])[1])

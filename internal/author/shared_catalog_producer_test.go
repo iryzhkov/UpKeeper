@@ -7,9 +7,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
@@ -17,13 +19,28 @@ import (
 
 const producerOriginalInputsGzip = "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"
 
+// producerTestInputsCache holds the decoded originals, inflated once per test
+// process; it is never changed after it is filled.
+var producerTestInputsCache struct {
+	sync.Mutex
+	data map[string]string
+}
+
+// producerTestInputs returns the caller's own map of the original encodings.
+// Strings are immutable, so a copy of the map is a complete copy.
 func producerTestInputs(t *testing.T) map[string]string {
 	t.Helper()
-	v := map[string]string{}
-	if e := json.Unmarshal(guidanceTestInflate(t, producerOriginalInputsGzip), &v); e != nil {
-		t.Fatal(e)
+	c := &producerTestInputsCache
+	c.Lock()
+	defer c.Unlock()
+	if c.data == nil {
+		v := map[string]string{}
+		if e := json.Unmarshal(guidanceTestInflate(t, producerOriginalInputsGzip), &v); e != nil {
+			t.Fatal(e)
+		}
+		c.data = v
 	}
-	return v
+	return maps.Clone(c.data)
 }
 func producerTestValue(t *testing.T, p string) map[string]any {
 	t.Helper()
@@ -152,6 +169,7 @@ func TestCatalogProducerDocumentAuthoritativeSchemas(t *testing.T) {
 	}
 }
 func TestCatalogProducerDocumentEveryClosedField(t *testing.T) {
+	t.Parallel()
 	count := 0
 	for p, k := range producerTestKinds() {
 		base := producerTestValue(t, p)
@@ -165,6 +183,7 @@ func TestCatalogProducerDocumentEveryClosedField(t *testing.T) {
 				}
 				for _, mutation := range mutations {
 					t.Run(fmt.Sprintf("%s/object%d/%s/%s", p, i, key, mutation), func(t *testing.T) {
+						t.Parallel()
 						v := producerTestValue(t, p)
 						o := catalogTestAt(v, path)
 						var raw []byte
@@ -201,6 +220,7 @@ func TestCatalogProducerDocumentEveryClosedField(t *testing.T) {
 				}
 			}
 			t.Run(fmt.Sprintf("%s/object%d/unknown", p, i), func(t *testing.T) {
+				t.Parallel()
 				v := producerTestValue(t, p)
 				catalogTestAt(v, path)["unexpected"] = json.Number("1")
 				if e := ValidateCatalogProducerDocumentEncoding(k, guidanceTestBytes(t, v)); e == nil {

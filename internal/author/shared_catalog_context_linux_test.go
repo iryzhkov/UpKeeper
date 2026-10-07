@@ -32,6 +32,7 @@ func contextTestWrap(s *CatalogSnapshot, wrap func(real func(context.Context) er
 // Context frontdoors return byte-identical audits to the legacy frontdoors
 // under one sequential parent, and the acquisition context is not retained.
 func TestCatalogContextActualParity(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	acquisition, cancelAcquisition := context.WithCancel(context.Background())
 	s, e := AcquireCatalogSnapshot(acquisition, o)
@@ -81,6 +82,7 @@ func TestCatalogContextActualParity(t *testing.T) {
 
 // Real held custody changes are refused by every context and legacy frontdoor.
 func TestCatalogContextActualMutations(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(*testing.T, CatalogSnapshotOptions){
 		"input": func(t *testing.T, o CatalogSnapshotOptions) {
 			p := filepath.Join(o.InputRoot, "inputs/guidance-profile.json")
@@ -100,6 +102,7 @@ func TestCatalogContextActualMutations(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			s := snapshotTestAcquire(t, o)
 			if e := s.VerifyContext(context.Background()); e != nil {
@@ -127,6 +130,7 @@ func TestCatalogContextActualMutations(t *testing.T) {
 // Cancellation observed after a real, successful recheck (the first one or
 // the final one) still yields no audit.
 func TestCatalogContextActualFinalStage(t *testing.T) {
+	t.Parallel()
 	s := snapshotTestAcquire(t, snapshotFixture(t))
 	for _, f := range contextTestFrontdoors() {
 		stages := []int{1, 2}
@@ -264,6 +268,7 @@ func TestCatalogContextGitCommandCancellation(t *testing.T) {
 // Context and legacy frontdoors, getters and Close share one owner without
 // deadlock, partial audits or use after Close.
 func TestCatalogContextActualConcurrency(t *testing.T) {
+	t.Parallel()
 	s := snapshotTestAcquire(t, snapshotFixture(t))
 	var wg sync.WaitGroup
 	started := make(chan struct{})

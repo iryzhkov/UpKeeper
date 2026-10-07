@@ -561,6 +561,7 @@ func snapshotTestSourceEdit(t *testing.T, o *CatalogSnapshotOptions, path string
 }
 
 func TestCatalogSnapshotHeldMutations(t *testing.T) {
+	t.Parallel()
 	const input = "inputs/guidance-profile.json"
 	const source = "shared/catalog-guidance/guidance/huyang.json"
 	cases := map[string]func(*testing.T, CatalogSnapshotOptions){
@@ -646,6 +647,7 @@ func TestCatalogSnapshotHeldMutations(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			s := snapshotTestAcquire(t, o)
 			before := s.InputBytes(input)

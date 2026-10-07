@@ -38,6 +38,7 @@ func producerSnapshotRebind(t *testing.T, o *CatalogSnapshotOptions, manifest bo
 	snapshotTestCommit(t, o)
 }
 func TestCatalogProducerSnapshotActualCustody(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	s := snapshotTestAcquire(t, o)
 	if e := s.Verify(); e != nil {
@@ -99,6 +100,7 @@ func TestCatalogProducerSnapshotActualCustody(t *testing.T) {
 	}
 }
 func TestCatalogProducerSnapshotReboundRelationships(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, want string
 		manifest   bool
@@ -192,6 +194,7 @@ func TestCatalogProducerSnapshotReboundRelationships(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			c.edit(t, &o)
 			producerSnapshotRebind(t, &o, c.manifest)
@@ -215,8 +218,10 @@ func jsonNumber420() any { v, _ := canonjson.DecodeObject([]byte("{\"n\":420}"))
 func jsonNumber493() any { v, _ := canonjson.DecodeObject([]byte("{\"n\":493}")); return v["n"] }
 
 func TestCatalogProducerSnapshotRawPins(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"catalog_sha256", "input_sha256"} {
 		t.Run(key, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			guidanceSnapshotEdit(t, &o, "inputs/tool-producer-receipt.json", func(v map[string]any) { v[key] = strings.Repeat("0", 64) })
 			guidanceSnapshotEdit(t, &o, "inputs/tool-guidance-manifest.json", func(v map[string]any) {
@@ -238,6 +243,7 @@ func TestCatalogProducerSnapshotRawPins(t *testing.T) {
 	}
 }
 func TestCatalogProducerSnapshotReboundArtifactDigest(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	guidanceSnapshotEdit(t, &o, "inputs/tool-producer-receipt.json", func(v map[string]any) {
 		for _, x := range catalogArray(v["artifacts"]) {
@@ -262,6 +268,7 @@ func TestCatalogProducerSnapshotReboundArtifactDigest(t *testing.T) {
 }
 
 func TestCatalogProducerSnapshotMissingProvenance(t *testing.T) {
+	t.Parallel()
 	o := snapshotFixture(t)
 	guidanceSnapshotEdit(t, &o, "inputs/tool-producer-receipt.json", func(v map[string]any) {
 		p := catalogObject(v["producer_source"])
@@ -284,8 +291,10 @@ func TestCatalogProducerSnapshotMissingProvenance(t *testing.T) {
 	}
 }
 func TestCatalogProducerSnapshotCustody(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"input-inode", "source-inode", "mode", "bytes"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			o := snapshotFixture(t)
 			s := snapshotTestAcquire(t, o)
 			if _, e := InspectCatalogProducerSnapshot(s); e != nil {
@@ -319,6 +328,7 @@ func TestCatalogProducerSnapshotCustody(t *testing.T) {
 	}
 }
 func TestCatalogProducerSnapshotConcurrentClose(t *testing.T) {
+	t.Parallel()
 	for round := 0; round < 3; round++ {
 		o := snapshotFixture(t)
 		s := snapshotTestAcquire(t, o)

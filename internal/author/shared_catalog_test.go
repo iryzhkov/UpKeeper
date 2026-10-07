@@ -1215,23 +1215,27 @@ func catalogTestAt(v any, path []catalogTestStep) map[string]any {
 	return v.(map[string]any)
 }
 func TestCatalogEveryClosedObject(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []CatalogDocumentKind{CatalogOwner5, CatalogRequest4, CatalogSummary4, CatalogReceipt5} {
 		base := catalogFixture(t, kind)
 		var paths [][]catalogTestStep
 		catalogObjectPaths(base, nil, &paths)
 		for i, path := range paths {
 			t.Run(fmt.Sprintf("%s/object%d", kind, i), func(t *testing.T) {
+				t.Parallel()
 				v := catalogFixture(t, kind)
 				o := catalogTestAt(v, path)
 				o["unknown_wire_key"] = true
 				catalogReject(t, kind, v)
 				for key := range catalogTestAt(base, path) {
 					t.Run("missing/"+key, func(t *testing.T) {
+						t.Parallel()
 						v := catalogFixture(t, kind)
 						delete(catalogTestAt(v, path), key)
 						catalogReject(t, kind, v)
 					})
 					t.Run("duplicate/"+key, func(t *testing.T) {
+						t.Parallel()
 						v := catalogFixture(t, kind)
 						catalogTestAt(v, path)["zz_duplicate_marker"] = nil
 						raw := catalogTestBytes(t, v)

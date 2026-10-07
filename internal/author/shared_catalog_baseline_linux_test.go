@@ -28,6 +28,7 @@ import (
 )
 
 func TestCatalogBaselineGitNoLazyFetchLocalPromisor(t *testing.T) {
+	t.Parallel()
 	outer := baselineTestOuter(t)
 	donor := baselineTestOriginal(t, outer)
 	root := baselineTestOriginal(t, outer)
@@ -197,9 +198,11 @@ func TestCatalogBaselineMetadataBarrier(t *testing.T) {
 	}
 }
 func TestCatalogBaselineOriginalPrivateRoot(t *testing.T) {
+	t.Parallel()
 	outer := baselineTestOuter(t)
 	for _, kind := range []string{"root0755", "unsafe-child", "hardlink"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			root := baselineTestOriginal(t, outer)
 			switch kind {
 			case "root0755":
@@ -311,6 +314,7 @@ func TestCatalogBaselineInitialGitCancellation(t *testing.T) {
 	}
 }
 func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
+	t.Parallel()
 	// The input root is held as a stable, closed directory, so creating a
 	// nested owner inside it is refused by the earlier catalog custody
 	// verification, before the overlap predicate runs. Only the repository
@@ -322,6 +326,7 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 	for _, rootKind := range []string{"repository", "inputs"} {
 		for _, kind := range []string{"original", "generated", "history"} {
 			t.Run(rootKind+"/"+kind, func(t *testing.T) {
+				t.Parallel()
 				f := baselineTestAcquire(t)
 				root := f.catalog.resources[0].endpoint.path
 				if rootKind == "inputs" {
@@ -390,6 +395,7 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 	}
 	for _, kind := range []string{"missing", "incomplete", "stale", "closed"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := baselineTestAcquire(t)
 			switch kind {
 			case "missing":
@@ -420,6 +426,7 @@ func TestCatalogBaselineNestedResourcesAndMetadata(t *testing.T) {
 }
 
 func TestCatalogBaselineClosedArchiveGrammar(t *testing.T) {
+	t.Parallel()
 	outer := baselineTestOuter(t)
 	raw := outer["evidence/original-inputs/baseline-evidence.tar.gz"]
 	gz, e := gzip.NewReader(bytes.NewReader(raw))
@@ -449,6 +456,7 @@ func TestCatalogBaselineClosedArchiveGrammar(t *testing.T) {
 	gz.Close()
 	for _, kind := range []string{"missing", "extra", "duplicate", "traversal", "absolute", "backslash", "link", "special", "sparse", "member-bound", "bad-mode", "manifest-duplicate", "manifest-size", "manifest-hash"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			var compressed bytes.Buffer
 			z := gzip.NewWriter(&compressed)
 			tw := tar.NewWriter(z)
@@ -532,6 +540,7 @@ func TestCatalogBaselineClosedArchiveGrammar(t *testing.T) {
 	}
 }
 func TestCatalogBaselineGeneratedAndLineageDrift(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
 	for _, path := range []string{
 		"generated/run-0/.codex/AGENTS.md",
@@ -583,7 +592,31 @@ func baselineTestSHA(kind string, raw []byte) string {
 	h.Write(raw)
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
+
+// baselineTestOuterCache holds the validated outer fixture, decoded once per
+// test process; it is never changed after it is filled.
+var baselineTestOuterCache struct {
+	sync.Mutex
+	data map[string][]byte
+}
+
+// baselineTestOuter returns the caller's own copy of the validated outer
+// fixture, so a test may change any of its bytes.
 func baselineTestOuter(t *testing.T) map[string][]byte {
+	t.Helper()
+	c := &baselineTestOuterCache
+	c.Lock()
+	defer c.Unlock()
+	if c.data == nil {
+		c.data = baselineTestDecodeOuter(t)
+	}
+	out := make(map[string][]byte, len(c.data))
+	for name, b := range c.data {
+		out[name] = bytes.Clone(b)
+	}
+	return out
+}
+func baselineTestDecodeOuter(t *testing.T) map[string][]byte {
 	t.Helper()
 	raw, e := base64.StdEncoding.DecodeString(baselineFixtureEvidence)
 	if e != nil {
@@ -866,6 +899,7 @@ func baselineTestZero(t *testing.T, a CatalogBaselineAudit, e error) {
 	}
 }
 func TestCatalogBaselineActualAcquisitionRelocation(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
 	a, e := f.audit(context.Background())
 	if e != nil {
@@ -931,6 +965,7 @@ func TestCatalogBaselineActualAcquisitionRelocation(t *testing.T) {
 	}
 }
 func TestCatalogBaselineFourLockCancellation(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
 	locks := []*sync.Mutex{&f.catalog.mu, &f.original.owner.mu, &f.generated.owner.mu, &f.history.owner.mu}
 	for i, mu := range locks {
@@ -971,6 +1006,7 @@ func TestCatalogBaselineFourLockCancellation(t *testing.T) {
 	}
 }
 func TestCatalogBaselineInFlightAndConsumedDeadline(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
 	original := f.catalog.verify
 	for _, stage := range []int{1, 2, 3, 4, 5} {
@@ -1014,8 +1050,11 @@ func TestCatalogBaselineInFlightAndConsumedDeadline(t *testing.T) {
 			}
 		})
 	}
-	parent, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// The parent's deadline is a fixed value that the test ends at the gated
+	// stage, so the consumed deadline does not depend on how long genuine
+	// custody and guidance work take on a loaded host.
+	parent := newBaselineTestDeadline(catalogContextLimit / 2)
+	defer parent.expire()
 	deadline, _ := parent.Deadline()
 	calls := 0
 	f.catalog.verify = func(ctx context.Context) error {
@@ -1031,6 +1070,7 @@ func TestCatalogBaselineInFlightAndConsumedDeadline(t *testing.T) {
 			return original(ctx)
 		}
 		if calls == 2 {
+			parent.expire()
 			<-ctx.Done()
 			return ctx.Err()
 		}
@@ -1043,6 +1083,33 @@ func TestCatalogBaselineInFlightAndConsumedDeadline(t *testing.T) {
 	}
 	f.catalog.verify = original
 }
+
+// baselineTestDeadline is a parent context whose deadline is fixed when it is
+// created but which expires only when the test calls expire. It lets a test
+// end a deadline at an exact stage instead of waiting for real time to pass;
+// derived contexts see its Deadline and, once expired, DeadlineExceeded.
+type baselineTestDeadline struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newBaselineTestDeadline(d time.Duration) *baselineTestDeadline {
+	return &baselineTestDeadline{Context: context.Background(), deadline: time.Now().Add(d), done: make(chan struct{})}
+}
+func (c *baselineTestDeadline) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *baselineTestDeadline) Done() <-chan struct{}       { return c.done }
+func (c *baselineTestDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (c *baselineTestDeadline) expire() { c.once.Do(func() { close(c.done) }) }
+
 func baselineTestRewrite(t *testing.T, path string, raw []byte, mode os.FileMode) {
 	t.Helper()
 	if e := os.Chmod(path, 0600); e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -1177,8 +1244,12 @@ func TestCatalogBaselineArchiveAndObjectRefusals(t *testing.T) {
 }
 
 func TestCatalogBaselineOneInheritedContextAllStages(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
-	parent, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The deadline's value is what is checked, not its expiry: the whole
+	// catalog limit keeps a loaded host from ending the audit early, and a
+	// parent no later than that limit is inherited unchanged.
+	parent, cancel := context.WithTimeout(context.Background(), catalogContextLimit)
 	defer cancel()
 	want, _ := parent.Deadline()
 	var inherited context.Context
@@ -1281,6 +1352,7 @@ func TestCatalogBaselineOriginalTypedAndPhysicalRefusals(t *testing.T) {
 }
 
 func TestCatalogBaselineConcurrentReadAuditVerifyClose(t *testing.T) {
+	t.Parallel()
 	f := baselineTestAcquire(t)
 	start := make(chan struct{})
 	var wg sync.WaitGroup

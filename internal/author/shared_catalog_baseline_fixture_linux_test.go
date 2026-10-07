@@ -99,6 +99,7 @@ func TestCatalogBaselineProductionGitVersionFloor(t *testing.T) {
 // This reproduction must exercise the real object store even when ci-local's
 // /usr/bin/git predates the separately qualified production version floor.
 func TestCatalogBaselineHermeticGitQualification(t *testing.T) {
+	t.Parallel()
 	root := baselineTestOriginal(t, baselineTestOuter(t))
 	original, err := baselineTestAcquireOriginal(context.Background(), root)
 	if err != nil {
