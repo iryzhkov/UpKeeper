@@ -22,7 +22,7 @@ jobs:
     runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
@@ -48,7 +48,7 @@ jobs:
         group: [author-baseline, author-catalog, author-other, other-packages]
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
@@ -65,7 +65,7 @@ jobs:
     runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # V1 compatibility fixtures require the complete repository history.
           fetch-depth: 0
@@ -84,7 +84,7 @@ jobs:
     runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Every required Go check passed
         env:
           MANIFEST_RESULT: ${{ needs.manifest-gate.result }}
@@ -96,7 +96,7 @@ jobs:
     runs-on: [self-hosted, upkeeper]
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No setup-python: it has no Python builds for the runner's Debian 13. The
       # host python3 only bootstraps uv, and `uv sync --python 3.11` (make
       # ci-python) provides the pinned interpreter itself.
