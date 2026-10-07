@@ -246,8 +246,10 @@ now exits 50 rather than 40. Every adapter keeps that wording for every restorat
 did not finish, finished unverified, or stopped at a concurrent change it left in place:
 the agent-environment restore for an I/O error, a T3 transaction left at `files restored`
 (`rollback incomplete: files restored; previous service health not verified; ...`), the
-Steward unit and session hook restores, and the Jocasta and controlled Codex rollbacks that
-met a concurrent change. A refusal before any effect never says so, even when it names
+Steward unit and session hook restores, a new Steward binary or hook that could not be
+removed, a Huyang bootstrap whose unproven service could not be stopped, a controlled Codex
+tree that could not be moved back, and the Jocasta and controlled Codex rollbacks that met
+a concurrent change. A refusal before any effect never says so, even when it names
 what it preserved, and only skips the component's dependents. Every later component is
 `skipped`.
 The refusals before any component runs are unchanged: preflight, the controller or target

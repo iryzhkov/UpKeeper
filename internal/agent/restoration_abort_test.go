@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/iryzhkov/UpKeeper/internal/procx"
@@ -67,6 +68,36 @@ func TestAFailedStewardUnitRestoreStopsTheHost(t *testing.T) {
 	}
 	if state, _ := classify(err); state != "rollback-failed" {
 		t.Fatalf("an unrestored Steward unit classified %s: %v", state, err)
+	}
+	abortsTheHost(t, err)
+}
+
+// Huyang bootstrap: the fresh service failed its probe and stopping it failed
+// too, so an unproven service may still run and start at boot.
+func TestAFailedHuyangBootstrapStopStopsTheHost(t *testing.T) {
+	runner := &adapterTestRunner{}
+	c := adapterTestContext(t, runner)
+	c.Components["huyang"] = huyangTestSpec()
+	c.Env = []string{"PATH=" + freshTestTools(t, c.Home, "git", "go", "make")}
+	huyangTestPatch(t, huyangTestProbe(false, 0))
+	runner.handle = func(command procx.Command) procx.Result {
+		switch {
+		case adapterTestMatches(command.Argv, "git", "clone"):
+			candidate := command.Argv[len(command.Argv)-1]
+			adapterTestWrite(t, filepath.Join(candidate, ".git/HEAD"), "ref: refs/heads/main\n")
+		case adapterTestMatches(command.Argv, "enable", "--now"):
+			adapterTestWrite(t, huyangSocket(c), "")
+		case adapterTestMatches(command.Argv, "disable", "--now"):
+			return procx.Result{Code: 1, Stderr: "Failed to connect to bus"}
+		}
+		return procx.Result{}
+	}
+	_, err := huyangBootstrap(c, c.Spec("huyang"), &[]string{})
+	if err == nil {
+		t.Fatal("a bootstrap whose service failed its probe succeeded")
+	}
+	if state, _ := classify(err); state != "rollback-failed" {
+		t.Fatalf("an unstopped Huyang bootstrap classified %s: %v", state, err)
 	}
 	abortsTheHost(t, err)
 }

@@ -870,7 +870,9 @@ func stewardRestorePrevious(
 		}
 	}
 	if !state.existed {
-		_ = os.Remove(state.binary)
+		if err := os.Remove(state.binary); (err != nil && !errors.Is(err, fs.ErrNotExist)) || hookRestoreFailed {
+			return Failf("rollback failed: new steward failed; the unverified binary or session hook could not be removed")
+		}
 		return Failf("new steward failed; removed unverified binary")
 	}
 	if err := stewardRestoreBinary(c, before, state); err != nil {
