@@ -74,10 +74,19 @@ class Runner:
     def call(self, argv: list[str]) -> int:
         sys.stdout.flush()
         try:
-            return subprocess.call(argv, cwd=self.root)
+            child = subprocess.Popen(argv, cwd=self.root)
         except OSError as error:
             print(f"test-affected: cannot run {argv[0]}: {error}", file=sys.stderr)
             return 127
+        try:
+            return child.wait()
+        except KeyboardInterrupt:
+            # The terminal interrupted the whole process group. Let the child
+            # finish its own cleanup (go test removes its work directory, the
+            # policy wrapper its fixtures) instead of killing it, as
+            # subprocess.call would.
+            child.wait()
+            raise
 
 
 class Classified(NamedTuple):
@@ -302,7 +311,11 @@ def main(
     failed = []
     for command in commands:
         print(f"test-affected: running {shlex.join(command)}", flush=True)
-        status = runner.call(command)
+        try:
+            status = runner.call(command)
+        except KeyboardInterrupt:
+            print("test-affected: interrupted", file=sys.stderr)
+            return 130
         if status != 0:
             failed.append(f"{command[0] if command[0] != 'bash' else 'go'} exited {status}")
     if failed:

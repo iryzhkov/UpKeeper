@@ -9,7 +9,10 @@ the Makefile recipe with a base that git refuses before anything else runs.
 
 import importlib.util
 import os
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -259,6 +262,46 @@ def test_command_that_cannot_start_fails_and_the_rest_still_run(tmp_path, capsys
     runner = affected.Runner(tmp_path)
     assert runner.call([str(tmp_path / "missing-program")]) == 127
     assert "cannot run" in capsys.readouterr().err
+
+
+INTERRUPTED_CHILD = """
+import pathlib, signal, sys, time
+def stop(*_):
+    time.sleep(1)  # cleanup that takes longer than an impatient parent waits
+    pathlib.Path(sys.argv[1]).write_text("cleaned")
+    sys.exit(1)
+signal.signal(signal.SIGINT, stop)
+pathlib.Path(sys.argv[2]).write_text("ready")
+time.sleep(30)
+"""
+
+INTERRUPTED_DRIVER = """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("test_affected", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+sys.exit(module.Runner(sys.argv[2]).call([sys.executable, *sys.argv[3:]]))
+"""
+
+
+def test_interrupt_lets_the_running_command_clean_up(tmp_path):
+    child, driver = tmp_path / "child.py", tmp_path / "driver.py"
+    child.write_text(INTERRUPTED_CHILD)
+    driver.write_text(INTERRUPTED_DRIVER)
+    cleaned, ready = tmp_path / "cleaned", tmp_path / "ready"
+    # Its own process group stands in for a terminal's foreground group.
+    process = subprocess.Popen(
+        [sys.executable, str(driver), str(SCRIPT), str(tmp_path), str(child),
+         str(cleaned), str(ready)],
+        start_new_session=True, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 30
+    while not ready.exists():
+        assert process.poll() is None and time.monotonic() < deadline
+        time.sleep(0.05)
+    os.killpg(process.pid, signal.SIGINT)
+    assert process.wait(timeout=30) != 0
+    assert cleaned.read_text() == "cleaned"
 
 
 def test_no_changes_exits_zero(capsys):
