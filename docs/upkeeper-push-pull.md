@@ -242,12 +242,13 @@ the run cannot vouch for. This abort class is a legacy updater retirement that `
 host in a state the run neither found nor restored. A failure is `rollback-failed` when its
 message says `rollback failed` or `rollback incomplete` anywhere, because some adapters
 name what they restored first (`Jocasta rollback failed; inspect ...`), so such a failure
-now exits 50 rather than 40. The agent-environment restore reports every error it meets,
-an I/O error included, as `rollback failed`. A `failed` component whose message mentions
-a rollback or a restoration, or a concurrent change left `preserved`, also stops the host
-while keeping its `failed` state and exit 40: a successful compensation is reported as
-`rolled-back`, so such a failure is one whose restoration did not finish, as in T3's
-`files restored; previous service restoration failed`. Every later component is
+now exits 50 rather than 40. Every adapter keeps that wording for every restoration that
+did not finish, finished unverified, or stopped at a concurrent change it left in place:
+the agent-environment restore for an I/O error, a T3 transaction left at `files restored`
+(`rollback incomplete: files restored; previous service health not verified; ...`), the
+Steward unit and session hook restores, and the Jocasta and controlled Codex rollbacks that
+met a concurrent change. A refusal before any effect never says so, even when it names
+what it preserved, and only skips the component's dependents. Every later component is
 `skipped`.
 The refusals before any component runs are unchanged: preflight, the controller or target
 lock, the program fence, and a self-pull program update or moved checkout.

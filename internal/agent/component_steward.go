@@ -877,7 +877,7 @@ func stewardRestorePrevious(
 		return Failf("rollback failed: steward restoration failed")
 	}
 	if hookRestoreFailed {
-		return Failf("steward restored but session hook restoration failed")
+		return Failf("rollback failed: steward restored but session hook restoration failed")
 	}
 	return RolledBackf("restored previous steward binary, service and session hook")
 }

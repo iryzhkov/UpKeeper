@@ -208,11 +208,11 @@ func jocastaApply(c *Context, raw, before map[string]any, actions *[]string) (st
 		for i := activated - 1; i >= 0; i-- {
 			p := prior[i]
 			if e := jocastaSafeTarget(c, p.path); e != nil {
-				return "", Failf("Jocasta rollback target changed; preserve recovery at %s", backup)
+				return "", Failf("rollback failed: Jocasta rollback target changed; preserve recovery at %s", backup)
 			}
 			current, e := os.ReadFile(p.path)
 			if e != nil || !bytes.Equal(current, desired[i]) {
-				return "", Failf("Jocasta activation failed; concurrent state preserved for recovery at %s", backup)
+				return "", Failf("rollback failed: Jocasta activation failed; concurrent state preserved for recovery at %s", backup)
 			}
 			if p.exists {
 				e = agentenv.AtomicWrite(p.path, p.data, p.mode)

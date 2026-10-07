@@ -501,7 +501,7 @@ func Execute(context *Context) map[string]any {
 		}
 		// A failed or incomplete rollback leaves the host in a state the run
 		// neither found nor restored, so nothing else is applied on top of it.
-		if restorationIncomplete(state, entryError) {
+		if state == "rollback-failed" {
 			abortedBy, abortState = name, state
 		}
 		if after, err := observeQuietly(context, handler, spec); err != nil {
@@ -556,43 +556,17 @@ func classify(err error) (string, string) {
 }
 
 // rollbackFailed reports whether a failure says the component could not put
-// back what the run found. Most adapters lead with "rollback failed", but some
-// name what they restored first ("Jocasta rollback failed; inspect ...",
-// "controlled Codex tree rollback failed"), and an interrupted T3 transaction
-// says "rollback incomplete". Every such failure stops the host: a component
-// that ran after it would build on a state nobody can vouch for.
+// back what the run found. That is the contract every adapter keeps: a
+// restoration that did not finish, or finished unverified, or stopped at a
+// concurrent change it left in place, says "rollback failed" or, for a T3
+// transaction, "rollback incomplete", anywhere in its message, because some
+// name what they restored first ("Jocasta rollback failed; inspect ...").
+// Every such failure stops the host: a component that ran after it would
+// build on a state nobody can vouch for. A refusal before any effect never
+// says so, and only skips the component's dependents.
 func rollbackFailed(message string) bool {
 	return strings.Contains(message, "rollback failed") ||
 		strings.Contains(message, "rollback incomplete")
-}
-
-// restorationIncomplete reports whether a component outcome leaves the host
-// unrestored, which stops the host. That is every rollback-failed outcome, and
-// every failure that says a rollback or restoration did not finish without the
-// words "rollback failed": "files restored; previous service restoration
-// failed" (T3), "steward restored but session hook restoration failed", a
-// restore error joined to its cause (the Steward unit), and a rollback that
-// stopped at a concurrent change and left it in place ("concurrent state
-// preserved for recovery", "concurrent entry point preserved").
-//
-// A successful compensation is a typed RolledBack and never reaches this as a
-// failure, so any failure that mentions a rollback or restoration is one that
-// did not complete. Matching one too many only stops the host, which is what
-// every failure did before a failure could skip only its dependents.
-func restorationIncomplete(state, message string) bool {
-	if state == "rollback-failed" {
-		return true
-	}
-	if state != "failed" {
-		return false
-	}
-	lower := strings.ToLower(message)
-	for _, marker := range []string{"rollback", "restor", "preserved"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func observeQuietly(

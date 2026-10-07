@@ -828,6 +828,11 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 			}
 			tx.restoration = result
 			message := fmt.Sprintf("%s; backup %s; cause %s", result, tx.dir, tx.cause)
+			// Every outcome settled here left the restoration unfinished or
+			// unverified, so the agent must stop the host after it.
+			if !strings.HasPrefix(result, "rollback incomplete") {
+				message = "rollback incomplete: " + message
+			}
 			if e := journal(phase); e != nil {
 				return "", fmt.Errorf("%s; journal persistence failed: %w", message, e)
 			}
@@ -843,7 +848,7 @@ func t3ControlledApply(c *Context, spec, before map[string]any, actions *[]strin
 		tx.restoration = "files restored; service restoration unverified"
 		journalErr = errors.Join(journalErr, journal("files-restored"))
 		if journalErr != nil {
-			return "", fmt.Errorf("files restored; service restoration unverified; journal persistence failed; backup %s; cause %s: %w", tx.dir, tx.cause, journalErr)
+			return "", fmt.Errorf("rollback incomplete: files restored; service restoration unverified; journal persistence failed; backup %s; cause %s: %w", tx.dir, tx.cause, journalErr)
 		}
 		// Dependents active before the transaction must be active again whether or
 		// not they survived the failed restart.

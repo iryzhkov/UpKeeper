@@ -173,7 +173,7 @@ func stewardApplyPinned(c *Context, spec, before map[string]any, actions *[]stri
 	if activateErr != nil {
 		current, readErr := stewardReadUnit(c)
 		if readErr != nil || !bytes.Equal(current, replacement) {
-			return "", errors.Join(activateErr, Failf("unit rollback refused changed destination"))
+			return "", errors.Join(activateErr, Failf("rollback failed: unit rollback refused changed destination"))
 		}
 		restoreErr := fsatomic.WriteFile(p, original, 0644)
 		if restoreErr == nil {
@@ -181,6 +181,11 @@ func stewardApplyPinned(c *Context, spec, before map[string]any, actions *[]stri
 		}
 		if restoreErr == nil {
 			_, restoreErr = c.Must([]string{"systemctl", "--user", "restart", "t3-steward.service"}, 0, "", "restart restored Steward unit")
+		}
+		// The original unit is not back in force, so the host needs a person:
+		// the agent stops it for a failure that says its rollback failed.
+		if restoreErr != nil {
+			restoreErr = fmt.Errorf("rollback failed: restoring the original Steward unit: %w", restoreErr)
 		}
 		return "", errors.Join(activateErr, restoreErr)
 	}

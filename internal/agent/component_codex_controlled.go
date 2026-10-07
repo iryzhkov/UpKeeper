@@ -525,7 +525,7 @@ func controlledCodexApply(c *Context, raw, before map[string]any, actions *[]str
 	}
 	current, _ := os.Readlink(link)
 	if current != wanted {
-		return "", Failf("controlled Codex activation failed; concurrent entry point preserved")
+		return "", Failf("rollback failed: controlled Codex activation failed; concurrent entry point preserved")
 	}
 	if hadPrevious {
 		e = controlledAtomicSymlink(previous, link)
