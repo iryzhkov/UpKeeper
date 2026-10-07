@@ -112,6 +112,9 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     # from the source line of every checkout that a step's uses value names in
     # the node graph, which an alias shares with its anchor. Names, environment
     # values, keys and run blocks are not action references and are ignored.
+    # The comment must follow the checkout on its own line, after at most the
+    # brackets that close a flow-style step, so text in a string cannot pose
+    # as one.
     pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     text = path.read_text()
     checkouts = [step["uses"] for job in yaml.safe_load(text)["jobs"].values()
@@ -121,10 +124,13 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     for uses in checkouts:
         assert uses == pinned, uses
 
+    loader = yaml.SafeLoader("")
+
     def entries(node):
-        # The key/value nodes safe_load would build, merge keys included: a
-        # later << overrides an earlier one, the first mapping of a merged
-        # sequence wins, and the mapping's own keys override every merge.
+        # The value nodes safe_load would build, under the keys it would
+        # construct, merge keys included: a later << overrides an earlier one,
+        # the first mapping of a merged sequence wins, and the mapping's own
+        # keys override every merge.
         if not isinstance(node, yaml.MappingNode):
             return {}
         merged, own = {}, {}
@@ -134,7 +140,7 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
                 for source in reversed(sources):
                     merged.update(entries(source))
             elif isinstance(key, yaml.ScalarNode):
-                own[key.value] = value
+                own[loader.construct_object(key)] = value
         return {**merged, **own}
 
     def items(node):
@@ -149,7 +155,8 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
             if node.value.split("@")[0].lower() == "actions/checkout":
                 assert node.value == pinned, node.value
                 line = lines[node.start_mark.line]
-                assert re.search(r"\s# v7\.0\.1$", line), line
+                assert node.end_mark.line == node.start_mark.line, line
+                assert re.fullmatch(r"[\s}\]]*\s# v7\.0\.1", line[node.end_mark.column:]), line
 
 
 @pytest.mark.parametrize("wrong", [
@@ -234,6 +241,51 @@ def test_node24_checkout_test_reads_the_comment_of_a_merged_checkout(tmp_path):
     )
     with pytest.raises(AssertionError):
         test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+@pytest.mark.parametrize("steps", [
+    "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,"
+    " name: 'x # v7.0.1\n          y'}\n",
+    "      - uses: >- # v7.0.1\n"
+    "          actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n",
+], ids=["comment-inside-a-string", "comment-on-a-block-indicator"])
+def test_node24_checkout_test_wants_a_real_comment_after_the_checkout(tmp_path, steps):
+    # A version comment counts only when it follows the checkout on the line
+    # that holds the pinned SHA, not when it is text in a later string.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n" + steps
+    )
+    assert yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"][0]["uses"] == (
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    )
+    with pytest.raises(AssertionError):
+        test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+def test_node24_checkout_test_keeps_job_names_apart_as_safe_load_does(tmp_path):
+    # "on" is a string and a plain on is a boolean, so these are two jobs.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n"
+        '  "on":\n    runs-on: [self-hosted, upkeeper]\n    steps:\n'
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+        "  on:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    )
+    assert len(yaml.safe_load(path.read_text())["jobs"]) == 2
+    with pytest.raises(AssertionError):
+        test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+def test_node24_checkout_test_accepts_a_commented_flow_style_checkout(tmp_path):
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - {uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1} # v7.0.1\n"
+        '      - uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" # v7.0.1\n'
+    )
+    test_github_workflows_check_out_with_the_node24_checkout(path)
 
 
 @pytest.mark.parametrize("status,conclusion,sha,event,expected", [
