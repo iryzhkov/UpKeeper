@@ -108,8 +108,9 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     # GitHub deprecates and forces onto Node 24 with a warning on every job.
     # Read the steps from parsed YAML, as the full-SHA test does, so quoting or
     # flow style cannot hide a checkout; GitHub matches owner and repository
-    # case-insensitively. YAML drops comments, so the version comment is
-    # counted in the text: one per checkout step.
+    # case-insensitively. YAML drops comments, so the version comment is read
+    # from the source line of every checkout scalar in the node graph, which
+    # an alias shares with its anchor and a run block never contributes to.
     pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     text = path.read_text()
     checkouts = [step["uses"] for job in yaml.safe_load(text)["jobs"].values()
@@ -118,10 +119,24 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     assert checkouts
     for uses in checkouts:
         assert uses == pinned, uses
-    commented = re.findall(
-        rf"^\s*(?:-\s+)?uses:\s+{re.escape(pinned)}\s+# v7\.0\.1$", text, re.M
-    )
-    assert len(commented) == len(checkouts)
+
+    def scalars(node):
+        if isinstance(node, yaml.ScalarNode):
+            yield node
+        elif isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                yield from scalars(item)
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                yield from scalars(key)
+                yield from scalars(value)
+
+    lines = text.splitlines()
+    for node in scalars(yaml.compose(text)):
+        if node.value.split("@")[0].lower() == "actions/checkout":
+            assert node.value == pinned, node.value
+            line = lines[node.start_mark.line]
+            assert re.search(r"\s# v7\.0\.1$", line), line
 
 
 @pytest.mark.parametrize("wrong", [
@@ -142,6 +157,31 @@ def test_node24_checkout_test_rejects_every_other_checkout_spelling(tmp_path, wr
     assert len(yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"]) == 2
     with pytest.raises(AssertionError):
         test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+def test_node24_checkout_test_reads_the_version_comment_from_the_checkout_line(tmp_path):
+    # Text in a run block is not a version comment for an uncommented checkout.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+        "      - run: |\n"
+        "          uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    )
+    with pytest.raises(AssertionError):
+        test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+def test_node24_checkout_test_accepts_a_correct_checkout_reused_by_alias(tmp_path):
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - &checkout\n"
+        "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+        "      - *checkout\n"
+    )
+    assert len(yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"]) == 2
+    test_github_workflows_check_out_with_the_node24_checkout(path)
 
 
 @pytest.mark.parametrize("status,conclusion,sha,event,expected", [
