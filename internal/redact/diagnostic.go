@@ -257,6 +257,12 @@ func diagnosticWordEnd(value string, shell bool) int {
 		if c == '\\' && (quote != '\'' || quoteEscapes ||
 			(i+1 < len(value) && value[i+1] == '\'' && !apostropheSplice)) {
 			if i+1 < len(value) {
+				// A line continuation can split a shell keyword. Diagnostic
+				// callers may normalize newlines to spaces before this scanner,
+				// so escaped whitespace inside an expansion is uncertain too.
+				if len(substitutions) > 0 && strings.ContainsRune(" \t\n\r\v\f", rune(value[i+1])) {
+					return len(value)
+				}
 				i++
 			}
 			continue
@@ -299,6 +305,16 @@ func diagnosticWordEnd(value string, shell bool) int {
 			continue
 		}
 		if len(substitutions) > 0 {
+			// This is a word-boundary scanner, not a shell parser. Case
+			// patterns, comments and here-documents can hide delimiters;
+			// suppress the uncertain remainder instead of guessing where
+			// their substitution ends.
+			wordStart := i == 0 || strings.ContainsRune(" \t\n\r;|&(){}", rune(value[i-1]))
+			if (c == '#' && wordStart) || strings.HasPrefix(value[i:], "<<") ||
+				(wordStart && strings.HasPrefix(value[i:], "case") &&
+					(i+4 == len(value) || strings.ContainsRune(" \t\n\r", rune(value[i+4])))) {
+				return len(value)
+			}
 			switch c {
 			case '(', '{':
 				pushSubstitution(c)
