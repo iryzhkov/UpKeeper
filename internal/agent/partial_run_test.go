@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -206,6 +207,36 @@ func TestAbortClassOutcomesStillStopTheHost(t *testing.T) {
 			name: "rollback-failed",
 			prepare: func(run *partialRun, _ *Context) {
 				run.outcomes["b"] = failWith("rollback failed: the previous build is gone")
+			},
+			selected: []string{"a", "b", "c", "d"}, later: []string{"c", "d"},
+			abortedBy: "b", reason: "skipped: run aborted after rollback-failed b",
+			result: "rollback-failed",
+		},
+		// Adapters that name what they restored before saying it failed.
+		{
+			name: "jocasta rollback failed",
+			prepare: func(run *partialRun, _ *Context) {
+				run.outcomes["b"] = failWith("Jocasta rollback failed; inspect /home/x/.local/share/jocasta.backup")
+			},
+			selected: []string{"a", "b", "c", "d"}, later: []string{"c", "d"},
+			abortedBy: "b", reason: "skipped: run aborted after rollback-failed b",
+			result: "rollback-failed",
+		},
+		{
+			name: "controlled codex rollback failed",
+			prepare: func(run *partialRun, _ *Context) {
+				run.outcomes["b"] = func() (string, error) {
+					return "", errors.New("controlled Codex tree rollback failed")
+				}
+			},
+			selected: []string{"a", "b", "c", "d"}, later: []string{"c", "d"},
+			abortedBy: "b", reason: "skipped: run aborted after rollback-failed b",
+			result: "rollback-failed",
+		},
+		{
+			name: "t3 rollback incomplete",
+			prepare: func(run *partialRun, _ *Context) {
+				run.outcomes["b"] = failWith("rollback incomplete; backup /home/x/t3-tx; cause restart failed")
 			},
 			selected: []string{"a", "b", "c", "d"}, later: []string{"c", "d"},
 			abortedBy: "b", reason: "skipped: run aborted after rollback-failed b",

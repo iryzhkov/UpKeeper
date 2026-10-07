@@ -543,13 +543,27 @@ func classify(err error) (string, string) {
 	case *RolledBack:
 		return "rolled-back", typed.Message
 	case *StepFailed:
-		if strings.HasPrefix(typed.Message, "rollback failed") {
+		if rollbackFailed(typed.Message) {
 			return "rollback-failed", typed.Message
 		}
 		return "failed", typed.Message
 	default:
+		if rollbackFailed(err.Error()) {
+			return "rollback-failed", err.Error()
+		}
 		return "failed", err.Error()
 	}
+}
+
+// rollbackFailed reports whether a failure says the component could not put
+// back what the run found. Most adapters lead with "rollback failed", but some
+// name what they restored first ("Jocasta rollback failed; inspect ...",
+// "controlled Codex tree rollback failed"), and an interrupted T3 transaction
+// says "rollback incomplete". Every such failure stops the host: a component
+// that ran after it would build on a state nobody can vouch for.
+func rollbackFailed(message string) bool {
+	return strings.Contains(message, "rollback failed") ||
+		strings.Contains(message, "rollback incomplete")
 }
 
 func observeQuietly(

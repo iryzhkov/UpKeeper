@@ -239,7 +239,10 @@ The audit of every other component (2026-10-07) found no further edge:
 A few outcomes still stop the host, because applying anything more would build on a state
 the run cannot vouch for. This abort class is a legacy updater retirement that `failed` or
 `deferred`, a selected component with no adapter, and `rollback-failed`, which leaves the
-host in a state the run neither found nor restored. Every later component is `skipped`.
+host in a state the run neither found nor restored. A failure is `rollback-failed` when its
+message says `rollback failed` or `rollback incomplete` anywhere, because some adapters
+name what they restored first (`Jocasta rollback failed; inspect ...`), so such a failure
+now exits 50 rather than 40. Every later component is `skipped`.
 The refusals before any component runs are unchanged: preflight, the controller or target
 lock, the program fence, and a self-pull program update or moved checkout.
 
