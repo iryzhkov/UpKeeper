@@ -106,12 +106,42 @@ def test_workflows_derive_exact_compiler_from_go_mod():
 def test_github_workflows_check_out_with_the_node24_checkout(path):
     # v7.0.1 runs on Node 24. The earlier 11d5960a pin targets Node 20, which
     # GitHub deprecates and forces onto Node 24 with a warning on every job.
-    pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
-    lines = [line.strip() for line in path.read_text().splitlines()
-             if re.search(r"\buses:\s*actions/checkout@", line)]
-    assert lines
-    for line in lines:
-        assert line.removeprefix("- ") == f"uses: {pinned}", line
+    # Read the steps from parsed YAML, as the full-SHA test does, so quoting or
+    # flow style cannot hide a checkout; GitHub matches owner and repository
+    # case-insensitively. YAML drops comments, so the version comment is
+    # counted in the text: one per checkout step.
+    pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    text = path.read_text()
+    checkouts = [step["uses"] for job in yaml.safe_load(text)["jobs"].values()
+                 for step in job.get("steps", [])
+                 if step.get("uses", "").split("@")[0].lower() == "actions/checkout"]
+    assert checkouts
+    for uses in checkouts:
+        assert uses == pinned, uses
+    commented = re.findall(
+        rf"^\s*(?:-\s+)?uses:\s+{re.escape(pinned)}\s+# v7\.0\.1$", text, re.M
+    )
+    assert len(commented) == len(checkouts)
+
+
+@pytest.mark.parametrize("wrong", [
+    '- uses: "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"',
+    "- uses: 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'",
+    "- {uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262}",
+    "- uses: Actions/Checkout@11d5960a326750d5838078e36cf38b85af677262 # v7.0.1",
+    "- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+])
+def test_node24_checkout_test_rejects_every_other_checkout_spelling(tmp_path, wrong):
+    # One correct checkout must not hide another that YAML still reads as a checkout.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+        f"      {wrong}\n"
+    )
+    assert len(yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"]) == 2
+    with pytest.raises(AssertionError):
+        test_github_workflows_check_out_with_the_node24_checkout(path)
 
 
 @pytest.mark.parametrize("status,conclusion,sha,event,expected", [
