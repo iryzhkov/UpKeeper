@@ -138,8 +138,11 @@ writes the base unit first, then removes the drop-in and the emptied `.d`
 directory, then reloads systemd, and reports what it removed in its output and
 in `--json`. An interrupted install leaves the unit running the binary through
 the new unit, the drop-in or both, and running the installer again finishes
-the job. Any other drop-in, including a modified copy of the legacy one,
-refuses the install before anything is written and names the file to inspect.
+the job. Any other drop-in, including a modified copy of the legacy one, a
+symbolic link under its name or a `.d` directory that is itself a symbolic
+link, refuses the install before anything is written and names the file to
+inspect and why. A failure after something changed (for example a failed
+`daemon-reload`) exits 20 and still reports what was written and removed.
 
 > Retired 2026-10-07: the Python canary rollback. Hosts first moved onto the
 > binary by copying `scripts/upkeeper-self.service.d/10-upkeeper-binary.conf`

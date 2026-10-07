@@ -10,11 +10,13 @@ package units
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/failure"
@@ -216,11 +218,26 @@ func verifyCheckout(root string, runner procx.Runner, expected, requiredHost str
 // UpKeeper's own legacy drop-in only repeated the binary's ExecStart, so it is
 // removed. Any other drop-in would silently change the unit the installer is
 // about to write, so the installer stops before any effect and names the file.
+//
+// The drop-in directory is never followed through a symbolic link: removing a
+// file through one would change whatever tree the link points into, such as a
+// release checkout.
 func legacyDropInsOf(destination, unit string) ([]string, error) {
 	directory := filepath.Join(destination, unit+".d")
-	entries, err := os.ReadDir(directory)
+	info, err := os.Lstat(directory)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
+	}
+	if err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return nil, failure.Validation(
+			"the drop-in directory of %s is a symbolic link: %s. The installer does not "+
+				"change drop-ins through a link, so nothing was installed. Inspect it, "+
+				"replace it with a plain directory or remove it, then run the installer again",
+			unit, directory)
+	}
+	var entries []fs.DirEntry
+	if err == nil {
+		entries, err = os.ReadDir(directory)
 	}
 	if err != nil {
 		return nil, failure.Validation(
@@ -232,45 +249,72 @@ func legacyDropInsOf(destination, unit string) ([]string, error) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
-		if entry.Name() == legacyDropInName && isLegacyDropIn(unit, path) {
+		reason := "UpKeeper never shipped a drop-in with this name"
+		if entry.Name() == legacyDropInName {
+			reason = legacyMismatch(unit, path)
+		}
+		if reason == "" {
 			legacy = append(legacy, path)
 			continue
 		}
 		return nil, failure.Validation(
-			"%s has a drop-in UpKeeper did not ship: %s. It would override the unit "+
-				"this installer writes, so nothing was installed. Inspect that file; "+
-				"move it out of %s if the embedded unit should run as written, then "+
-				"run the installer again", unit, path, directory)
+			"%s has a drop-in the installer will not remove: %s (%s). It would override "+
+				"the unit this installer writes, so nothing was installed. Inspect that "+
+				"file; move it out of %s if the embedded unit should run as written, then "+
+				"run the installer again", unit, path, reason, directory)
 	}
 	return legacy, nil
 }
 
-// isLegacyDropIn reports whether path holds, byte for byte, a drop-in
-// UpKeeper shipped for unit. A file that cannot be read is not UpKeeper's.
-func isLegacyDropIn(unit, path string) bool {
+// legacyMismatch says why path is not, byte for byte, a drop-in UpKeeper
+// shipped for unit, or returns "" when it is. Only a regular file is opened,
+// so that a FIFO or device under the drop-in's name cannot block the install.
+func legacyMismatch(unit, path string) string {
 	known := legacyDropIns[unit]
 	if len(known) == 0 {
-		return false
+		return "UpKeeper never shipped a drop-in for this unit"
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Sprintf("it cannot be inspected: %v", err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return "it is a symbolic link, and UpKeeper shipped a file"
+	}
+	if !info.Mode().IsRegular() {
+		return "it is not a regular file"
 	}
 	limit := 0
 	for _, content := range known {
 		limit = max(limit, len(content))
 	}
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return false
+		return fmt.Sprintf("it cannot be read: %v", err)
 	}
 	defer file.Close()
 	content, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
-		return false
+		return fmt.Sprintf("it cannot be read: %v", err)
 	}
 	for _, candidate := range known {
 		if bytes.Equal(content, []byte(candidate)) {
-			return true
+			return ""
 		}
 	}
-	return false
+	return "its content is not the drop-in UpKeeper shipped for this unit"
+}
+
+// removeStaleTemporaries removes what writeUnit leaves behind when it is
+// killed between creating its temporary file and renaming it.
+func removeStaleTemporaries(path string) {
+	pattern := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	matches, _ := filepath.Glob(pattern)
+	for _, match := range matches {
+		if info, err := os.Lstat(match); err == nil && info.Mode().IsRegular() {
+			_ = os.Remove(match)
+		}
+	}
 }
 
 // writeUnit replaces path through a rename, so that an interrupted install
@@ -340,6 +384,7 @@ func install(
 	}
 	for _, definition := range definitions {
 		path := filepath.Join(destination, definition.Name)
+		removeStaleTemporaries(path)
 		if err := writeUnit(path, definition.Content); err != nil {
 			return done, err
 		}
@@ -353,16 +398,18 @@ func install(
 			}
 			if err != nil {
 				return done, failure.Validation(
-					"wrote %s but could not remove the legacy drop-in %s: %v; "+
-						"run the installer again once it can be removed",
-					definition.Name, path, err)
+					"wrote the units but could not remove the legacy drop-in %s: %v; "+
+						"run the installer again once it can be removed", path, err)
 			}
 			done.Removed = append(done.Removed, path)
 		}
-		if len(legacy[definition.Name]) > 0 {
+		// The drop-in directory of a unit that ever had a legacy drop-in goes
+		// once it is empty, also when an earlier run was killed between
+		// removing the drop-in and removing the directory. A directory that
+		// still holds anything is left as it is.
+		if _, known := legacyDropIns[definition.Name]; known {
 			directory := filepath.Join(destination, definition.Name+".d")
 			if info, err := os.Lstat(directory); err == nil && info.IsDir() {
-				// A directory that still holds anything is left as it is.
 				if os.Remove(directory) == nil {
 					done.Removed = append(done.Removed, directory)
 				}

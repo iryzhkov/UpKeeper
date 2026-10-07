@@ -366,7 +366,8 @@ func installTimerHelp(program, command string) string {
 		"Rolling back the binary is `" + program + " self rollback`.\n\n" +
 		"options:\n" + helpOption + "\n" +
 		describe("  --json", "") +
-		"\nexit codes: 0 installed, 2 malformed command line, 30 refused\n"
+		"\nexit codes: 0 installed, 2 malformed command line, 20 partial (the report " +
+		"names what changed before the failure), 30 refused (nothing written)\n"
 }
 
 func plainHelp(program, command string) string {
