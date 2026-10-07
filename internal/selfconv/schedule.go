@@ -210,7 +210,7 @@ func PostReport(report map[string]any, runner procx.Runner) error {
 	}
 	summary := map[string]any{}
 	for _, key := range []string{
-		"run_id", "controller", "desired_manifest_commit", "exit_code", "error",
+		"run_id", "controller", "desired_manifest_commit", "exit_code", "error", "completion",
 	} {
 		if value, present := report[key]; present {
 			summary[key] = value
@@ -232,10 +232,14 @@ func PostReport(report map[string]any, runner procx.Runner) error {
 				"error": component["error"],
 			})
 		}
-		entries = append(entries, map[string]any{
+		summarised := map[string]any{
 			"host": host["host"], "result": host["result"],
 			"error": host["error"], "components": interesting,
-		})
+		}
+		if completion, present := host["completion"]; present {
+			summarised["completion"] = completion
+		}
+		entries = append(entries, summarised)
 	}
 	summary["hosts"] = entries
 	body, err := canonjson.Marshal(redact.Value(summary))
