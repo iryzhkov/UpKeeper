@@ -28,6 +28,11 @@ type Installer struct {
 	Client *http.Client
 	// BaseURL replaces https://github.com, so that a test serves the assets.
 	BaseURL string
+	// APIBaseURL replaces https://api.github.com, where a release that is not
+	// public is resolved with a credential, so that a test serves the API. A
+	// BaseURL without an APIBaseURL never authenticates: a test serving its
+	// own assets never sends a credential to GitHub.
+	APIBaseURL string
 	// Target is the asset label to install; "" means this machine's.
 	Target string
 	// Now is the clock the journal records; nil means the real one.
@@ -133,7 +138,7 @@ func (i *Installer) Apply(pin *release.ProgramPin) (Result, error) {
 		_ = i.recover()
 		name := asset.SHA256
 		if !i.Layout.validGeneration(name) {
-			staged, cleanup, err := i.fetch(pin.URL(i.BaseURL, target), asset)
+			staged, cleanup, err := i.fetch(pin, target, asset)
 			defer cleanup()
 			if err != nil {
 				return err
