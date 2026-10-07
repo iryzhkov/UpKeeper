@@ -109,8 +109,9 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     # Read the steps from parsed YAML, as the full-SHA test does, so quoting or
     # flow style cannot hide a checkout; GitHub matches owner and repository
     # case-insensitively. YAML drops comments, so the version comment is read
-    # from the source line of every checkout scalar in the node graph, which
-    # an alias shares with its anchor and a run block never contributes to.
+    # from the source line of every checkout that a step's uses value names in
+    # the node graph, which an alias shares with its anchor. Names, environment
+    # values, keys and run blocks are not action references and are ignored.
     pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     text = path.read_text()
     checkouts = [step["uses"] for job in yaml.safe_load(text)["jobs"].values()
@@ -120,23 +121,35 @@ def test_github_workflows_check_out_with_the_node24_checkout(path):
     for uses in checkouts:
         assert uses == pinned, uses
 
-    def scalars(node):
-        if isinstance(node, yaml.ScalarNode):
-            yield node
-        elif isinstance(node, yaml.SequenceNode):
-            for item in node.value:
-                yield from scalars(item)
-        elif isinstance(node, yaml.MappingNode):
-            for key, value in node.value:
-                yield from scalars(key)
-                yield from scalars(value)
+    def entries(node):
+        # The key/value nodes safe_load would build, merge keys included: a
+        # later << overrides an earlier one, the first mapping of a merged
+        # sequence wins, and the mapping's own keys override every merge.
+        if not isinstance(node, yaml.MappingNode):
+            return {}
+        merged, own = {}, {}
+        for key, value in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                sources = value.value if isinstance(value, yaml.SequenceNode) else [value]
+                for source in reversed(sources):
+                    merged.update(entries(source))
+            elif isinstance(key, yaml.ScalarNode):
+                own[key.value] = value
+        return {**merged, **own}
+
+    def items(node):
+        return node.value if isinstance(node, yaml.SequenceNode) else []
 
     lines = text.splitlines()
-    for node in scalars(yaml.compose(text)):
-        if node.value.split("@")[0].lower() == "actions/checkout":
-            assert node.value == pinned, node.value
-            line = lines[node.start_mark.line]
-            assert re.search(r"\s# v7\.0\.1$", line), line
+    for job in entries(entries(yaml.compose(text)).get("jobs")).values():
+        for step in items(entries(job).get("steps")):
+            node = entries(step).get("uses")
+            if not isinstance(node, yaml.ScalarNode):
+                continue
+            if node.value.split("@")[0].lower() == "actions/checkout":
+                assert node.value == pinned, node.value
+                line = lines[node.start_mark.line]
+                assert re.search(r"\s# v7\.0\.1$", line), line
 
 
 @pytest.mark.parametrize("wrong", [
@@ -182,6 +195,45 @@ def test_node24_checkout_test_accepts_a_correct_checkout_reused_by_alias(tmp_pat
     )
     assert len(yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"]) == 2
     test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+@pytest.mark.parametrize("metadata", [
+    "      - name: actions/checkout\n"
+    "        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n",
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    "        env:\n"
+    "          ACTION: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n",
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+    "        with:\n"
+    "          actions/checkout: true\n",
+], ids=["step-name", "env-value", "mapping-key"])
+def test_node24_checkout_test_ignores_checkout_text_outside_uses(tmp_path, metadata):
+    # Only a step's uses value is an action reference; names, environment
+    # values and keys that merely mention actions/checkout are metadata.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "name: probe\non: push\njobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n"
+        "    steps:\n" + metadata
+    )
+    test_every_workflow_action_uses_a_full_commit_sha(path)
+    test_github_workflows_check_out_with_the_node24_checkout(path)
+
+
+def test_node24_checkout_test_reads_the_comment_of_a_merged_checkout(tmp_path):
+    # A merge key makes another mapping's uses the step's own, so its line
+    # must carry the version comment too.
+    path = tmp_path / "probe.yml"
+    path.write_text(
+        "base: &base\n"
+        "  uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+        "jobs:\n  probe:\n    runs-on: [self-hosted, upkeeper]\n    steps:\n"
+        "      - <<: *base\n"
+    )
+    assert yaml.safe_load(path.read_text())["jobs"]["probe"]["steps"][0]["uses"] == (
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    )
+    with pytest.raises(AssertionError):
+        test_github_workflows_check_out_with_the_node24_checkout(path)
 
 
 @pytest.mark.parametrize("status,conclusion,sha,event,expected", [
