@@ -99,6 +99,21 @@ def test_workflows_derive_exact_compiler_from_go_mod():
             assert "go-version" not in setup
 
 
+@pytest.mark.parametrize("path", sorted([
+    *ROOT.glob(".github/workflows/*.yml"),
+    *ROOT.glob(".github/workflows/*.yaml"),
+]), ids=lambda path: str(path.relative_to(ROOT)))
+def test_github_workflows_check_out_with_the_node24_checkout(path):
+    # v7.0.1 runs on Node 24. The earlier 11d5960a pin targets Node 20, which
+    # GitHub deprecates and forces onto Node 24 with a warning on every job.
+    pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+    lines = [line.strip() for line in path.read_text().splitlines()
+             if re.search(r"\buses:\s*actions/checkout@", line)]
+    assert lines
+    for line in lines:
+        assert line.removeprefix("- ") == f"uses: {pinned}", line
+
+
 @pytest.mark.parametrize("status,conclusion,sha,event,expected", [
     ("completed", "success", "abc", "push", True),
     ("in_progress", None, "abc", "push", False),
