@@ -75,10 +75,13 @@ class FakeRunner:
             if self.base_ok:
                 return 0, BASE_SHA + "\n", ""
             return 128, "", "fatal: Needed a single revision\n"
+        # Canned lists are written one name per line; git -z separates with NUL.
         if argv[:2] == ["git", "diff"]:
-            return 0, self.diff, ""
+            assert "-z" in argv and argv[-1] == "--"
+            return 0, self.diff.replace("\n", "\0"), ""
         if argv[:2] == ["git", "ls-files"]:
-            return 0, self.untracked, ""
+            assert "-z" in argv
+            return 0, self.untracked.replace("\n", "\0"), ""
         if argv[:2] == ["go", "list"] and "-test" in argv:
             return 0, GO_LIST_TEST_DEPS, ""
         if argv[:2] == ["go", "list"]:
@@ -154,6 +157,8 @@ def test_rejects_unknown_base(capsys):
         ("internal/removed/removed.go", "everything", None),
         # a Go file in a directory below a package is not that package's source
         ("internal/author/gone/gone.go", "everything", None),
+        # Go source under testdata is fixture data of the containing package
+        ("internal/author/testdata/fixture/main.go", "package", f"{M}/internal/author"),
         # a directory prefix is a whole path component
         ("cmd/upkeeper-extra/x.go", "everything", None),
     ],
@@ -227,6 +232,33 @@ def test_untracked_and_unstaged_paths_included(tmp_path):
         "unstaged.txt",
         "untracked.txt",
     ]
+
+
+def test_unusual_names_and_ambiguous_base(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "test")
+    (tmp_path / "seed.txt").write_text("seed")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    git(tmp_path, "tag", "zzbase")
+    # A base that is also a file name, and names git would otherwise quote.
+    (tmp_path / "zzbase").write_text("also a file")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/café.md").write_text("x")
+    (tmp_path / 'quote"tab\tname').write_text("x")
+    runner = affected.Runner(tmp_path)
+    sha = affected.resolve_base(runner, "zzbase")
+    assert affected.changed_paths(runner, sha) == sorted(
+        ["docs/café.md", 'quote"tab\tname', "zzbase"]
+    )
+    assert affected.classify("docs/café.md", PACKAGE_DIRS).rule == "ignored"
+
+
+def test_command_that_cannot_start_fails_and_the_rest_still_run(tmp_path, capsys):
+    runner = affected.Runner(tmp_path)
+    assert runner.call([str(tmp_path / "missing-program")]) == 127
+    assert "cannot run" in capsys.readouterr().err
 
 
 def test_no_changes_exits_zero(capsys):

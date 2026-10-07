@@ -11,6 +11,7 @@ make test-affected BASE=<commit>          # plan, then run
 make test-affected BASE=<commit> LIST=1   # plan and the exact commands; runs nothing
 ```
 
+Any non-empty `LIST` value, including `LIST=0`, selects list mode.
 `BASE` is required; without it the target prints
 `usage: make test-affected BASE=<commit> [LIST=1]` and exits 2, and a `BASE`
 that is not a commit also exits 2. The change set is every path that differs

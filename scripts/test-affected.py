@@ -73,7 +73,11 @@ class Runner:
 
     def call(self, argv: list[str]) -> int:
         sys.stdout.flush()
-        return subprocess.call(argv, cwd=self.root)
+        try:
+            return subprocess.call(argv, cwd=self.root)
+        except OSError as error:
+            print(f"test-affected: cannot run {argv[0]}: {error}", file=sys.stderr)
+            return 127
 
 
 class Classified(NamedTuple):
@@ -103,10 +107,14 @@ def resolve_base(runner, base: str) -> str:
 
 
 def changed_paths(runner, base: str) -> list[str]:
-    """Committed since base, staged, unstaged and untracked paths, sorted."""
-    tracked = capture_ok(runner, ["git", "diff", "--name-only", "--no-renames", base])
-    untracked = capture_ok(runner, ["git", "ls-files", "--others", "--exclude-standard"])
-    return sorted({line for line in (tracked + untracked).splitlines() if line})
+    """Committed since base, staged, unstaged and untracked paths, sorted.
+
+    -z keeps every name verbatim: without it git quotes names that contain
+    non-ASCII bytes, quotes, tabs or newlines.
+    """
+    tracked = capture_ok(runner, ["git", "diff", "--name-only", "--no-renames", "-z", base, "--"])
+    untracked = capture_ok(runner, ["git", "ls-files", "--others", "--exclude-standard", "-z"])
+    return sorted({name for name in (tracked + untracked).split("\0") if name})
 
 
 def package_dirs(runner, root: Path) -> dict[str, str]:
@@ -127,8 +135,9 @@ def classify(path: str, dirs: Mapping[str, str]) -> Classified:
     parts = pure.parts
     if parts[0] == "docs" or (len(parts) == 1 and pure.suffix == ".md"):
         return Classified(path, "ignored", None, "documentation")
-    if pure.suffix == ".go":
-        # A Go file belongs to the package of its own directory, or to none.
+    if pure.suffix == ".go" and "testdata" not in parts[:-1]:
+        # A Go file belongs to the package of its own directory, or to none;
+        # under testdata it is fixture data of the containing package.
         parent = pure.parent.as_posix()
         if parent in dirs:
             return Classified(path, "package", dirs[parent], "Go source")
