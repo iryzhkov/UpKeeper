@@ -128,21 +128,38 @@ var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
 
 // Secret shapes a tool's error text plausibly carries that the shared
 // redaction does not: an environment assignment such as OV_API_KEY=... (the
-// shared pattern needs a word boundary before the key word), a JSON-quoted
-// secret field, and a bearer token without its Authorization header.
+// shared pattern needs a word boundary before the key word), a quoted value
+// with spaces (the shared pattern takes only its first word), a JSON- or
+// dict-quoted secret field, and a bearer token without its Authorization
+// header. The key words are the shared redaction's secret key words.
+const toolSecretWord = `(?:api[_-]?key|private[_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
+
 var (
+	// A value is double-quoted, double-quoted with escaped quotes as inside a
+	// JSON string, single-quoted, or a bare word.
 	toolSecretAssignment = regexp.MustCompile(
-		`(?i)([A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)S?\s*[=:]\s*)(?:'[^']*'|"[^"]*"|[^\s,;]+)`)
+		`(?i)([A-Za-z0-9_-]*` + toolSecretWord + `\s*[=:]\s*)` +
+			`(?:"(?:[^"\\]|\\.)*"|\\"(?:[^"\\]|\\[^"])*\\"|'[^']*'|[^\s,;]+)`)
 	toolSecretJSON = regexp.MustCompile(
-		`(?i)("[A-Za-z0-9_-]*(?:api_?key|token|secret|password|passwd|credential|authorization)"\s*:\s*)"(?:[^"\\]|\\.)*"`)
+		`(?i)(["'][A-Za-z0-9_.-]*` + toolSecretWord + `[A-Za-z0-9_.-]*["']\s*:\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
 	toolBearer = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
+	// privateKeyBlock is the shared redaction's whole private key block.
+	privateKeyBlock = regexp.MustCompile(
+		`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
 )
 
-// redactToolText redacts with the shared helper and then the shapes above.
+// redactToolText removes private keys first, so that an assignment matcher
+// never takes only a key's BEGIN marker; then the quote-aware shapes above,
+// before the shared helper can consume an opening quote and hide the rest of a
+// quoted value; then the shared helper and the bare bearer token.
 func redactToolText(text string) string {
-	text = redact.Text(text)
+	text = privateKeyBlock.ReplaceAllString(text, redact.Placeholder)
+	if start := privateKeyStart.FindStringIndex(text); start != nil {
+		text = text[:start[0]] + redact.Placeholder
+	}
 	text = toolSecretJSON.ReplaceAllString(text, `${1}"`+redact.Placeholder+`"`)
 	text = toolSecretAssignment.ReplaceAllString(text, "${1}"+redact.Placeholder)
+	text = redact.Text(text)
 	return toolBearer.ReplaceAllString(text, "${1}"+redact.Placeholder)
 }
 

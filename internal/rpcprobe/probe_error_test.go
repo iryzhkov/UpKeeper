@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/iryzhkov/UpKeeper/internal/redact"
 )
 
 // fakeServer writes an MCP server that answers initialize and tools/list and
@@ -167,5 +169,53 @@ func TestToolErrorControlCharactersCannotSmuggleAToken(t *testing.T) {
 	err := exchangeToolError(t, []any{text("key sk-\x00" + strings.Repeat("Zq9", 10))})
 	if strings.Contains(err.Error(), "sk-"+strings.Repeat("Zq9", 10)) {
 		t.Fatalf("a smuggled token leaked: %q", err)
+	}
+}
+
+// Review 1: the shared redaction replaced only the first word of a quoted
+// password, consuming the opening quote, so the quote-aware matcher no longer
+// saw the rest of the value; and JSON secret fields spelled api-key or
+// private_key, which the shared redaction knows, passed through. Each case
+// goes through the real Exchange path.
+func TestToolErrorTextRedactsQuotedAndHyphenatedSecrets(t *testing.T) {
+	for name, input := range map[string]string{
+		"quoted password":         `upstream failed: password="alpha FAKE_SECRET_SUFFIX omega"`,
+		"single-quoted password":  `upstream failed: password='alpha FAKE_SECRET_SUFFIX omega'`,
+		"escaped quoted password": `{"error": "password=\"alpha FAKE_SECRET_SUFFIX omega\""}`,
+		"hyphenated JSON key":     `{"api-key": "FAKE_OPAQUE_OV_KEY_1234567890"}`,
+		"JSON private key":        `{"private_key": "FAKE_OPAQUE_PRIVATE_VALUE_1234567890"}`,
+		"JSON private-key spaced": `{"Private-Key" : "alpha FAKE_OPAQUE_PRIVATE_VALUE omega"}`,
+		"single-quoted dict key":  `{'api_key': 'alpha FAKE_OPAQUE_OV_KEY omega'}`,
+		"JSON cookie":             `{"cookie": "session=FAKE_COOKIE_VALUE_1234567890"}`,
+		"JSON suffixed key":       `{"api_key_value": "alpha FAKE_OPAQUE_OV_KEY omega"}`,
+		"assignment api-key":      `api-key="alpha FAKE_OPAQUE_OV_KEY omega"`,
+		"assignment private key":  `PRIVATE_KEY: "alpha FAKE_OPAQUE_PRIVATE_VALUE omega"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := exchangeToolError(t, []any{text(input)}).Error()
+			if strings.Contains(got, "FAKE_") || strings.Contains(got, "omega") {
+				t.Fatalf("secret material reached error: %q", got)
+			}
+			if !strings.Contains(got, redact.Placeholder) {
+				t.Fatalf("no redaction marker: %q", got)
+			}
+		})
+	}
+}
+
+// Running the quote-aware matchers first must not stop a private key given as
+// an unquoted assignment value from being removed whole.
+func TestToolErrorTextRedactsAnAssignedPrivateKey(t *testing.T) {
+	body := strings.Repeat("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n", 3)
+	for name, value := range map[string]string{
+		"terminated":   "failed: private_key: -----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n retry",
+		"unterminated": "failed: private_key= -----BEGIN RSA PRIVATE KEY-----\n" + body,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := toolErrorText(map[string]any{"content": []any{text(value)}})
+			if strings.Contains(got, "MIIEvQ") || !strings.HasPrefix(got, "failed: ") {
+				t.Fatalf("key material leaked: %q", got)
+			}
+		})
 	}
 }
