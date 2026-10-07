@@ -97,7 +97,7 @@ func replaceDiagnosticValues(value string, prefix *regexp.Regexp, quoted bool) s
 			position = end
 			continue
 		}
-		consumed := diagnosticValueEnd(value[end:])
+		consumed := diagnosticValueEnd(value[end:], !quoted)
 		if consumed == 0 {
 			position = end
 			continue
@@ -136,7 +136,7 @@ func diagnosticJSONSecretKey(prefix string) bool {
 // diagnosticValueEnd returns the complete value boundary. Escaped diagnostic
 // JSON is decoded only in a scratch view; offsets map back to the original.
 // An uncertain structured boundary consumes the rest rather than leaking it.
-func diagnosticValueEnd(raw string) int {
+func diagnosticValueEnd(raw string, shell bool) int {
 	if raw == "" {
 		return 0
 	}
@@ -198,7 +198,11 @@ func diagnosticValueEnd(raw string) int {
 				}
 				stack = stack[:len(stack)-1]
 				if len(stack) == 0 {
-					return originalEnd(i + 1)
+					end := i + 1
+					if shell {
+						end += diagnosticWordEnd(view[end:], true)
+					}
+					return originalEnd(end)
 				}
 			}
 		}
@@ -208,19 +212,33 @@ func diagnosticValueEnd(raw string) int {
 	if scheme := diagnosticScheme.FindStringIndex(view); scheme != nil {
 		start = scheme[1]
 	}
-	return originalEnd(start + diagnosticWordEnd(view[start:]))
+	return originalEnd(start + diagnosticWordEnd(view[start:], shell))
 }
 
 // diagnosticWordEnd consumes a whole shell-style word, including concatenated
-// quotes, dollar-prefixed quotes and escaped whitespace. Also retain Python,
-// backtick and curly quote support. Delimiters outside quotes end diagnostic
-// scalars; an unfinished quote or escape conservatively consumes the rest.
-func diagnosticWordEnd(value string) int {
+// quotes, dollar-prefixed quotes, substitutions and escaped whitespace. Retain Python,
+// backtick and curly quote support. JSON delimiters end JSON scalars but are
+// literal inside shell words; unfinished quotes/escapes consume the rest.
+func diagnosticWordEnd(value string, shell bool) int {
 	var quote byte
+	quoteEscapes := false
+	setQuote := func(c byte, i int) {
+		quote = c
+		// POSIX single quotes treat backslashes literally; ANSI-C and Python
+		// literal prefixes use escapes. Confusing these loses quote boundaries.
+		quoteEscapes = c != '\'' || !shell || (i > 0 && value[i-1] == '$') ||
+			(i == 1 && strings.ContainsRune("bruBRU", rune(value[0])))
+	}
+	var substitutions []byte
 	curly := false
 	for i := 0; i < len(value); i++ {
 		c := value[i]
-		if c == '\\' {
+		// The POSIX apostrophe splice closes a quote, escapes an apostrophe
+		// outside it and reopens it. Otherwise accept diagnostic/Python \'
+		// escapes too; the ambiguous boundary is consumed conservatively.
+		apostropheSplice := strings.HasPrefix(value[i+1:], `'\''`)
+		if c == '\\' && (quote != '\'' || quoteEscapes ||
+			(i+1 < len(value) && value[i+1] == '\'' && !apostropheSplice)) {
 			if i+1 < len(value) {
 				i++
 			}
@@ -244,11 +262,36 @@ func diagnosticWordEnd(value string) int {
 			i += len("“") - 1
 			continue
 		}
+		if shell && i+1 < len(value) &&
+			((value[i+1] == '(' && (c == '$' || c == '<' || c == '>')) || (c == '$' && value[i+1] == '{')) {
+			substitutions = append(substitutions, value[i+1])
+			i++
+			continue
+		}
+		if len(substitutions) > 0 {
+			switch c {
+			case '(', '{':
+				substitutions = append(substitutions, c)
+			case ')', '}':
+				top := substitutions[len(substitutions)-1]
+				if (top == '(' && c != ')') || (top == '{' && c != '}') {
+					return len(value)
+				}
+				substitutions = substitutions[:len(substitutions)-1]
+			case '\'', '"', '`':
+				setQuote(c, i)
+			}
+			continue
+		}
 		switch c {
 		case '\'', '"', '`':
-			quote = c
-		case ' ', '\t', '\n', '\r', '\v', '\f', ',', ';', '}', ']':
+			setQuote(c, i)
+		case ' ', '\t', '\n', '\r', '\v', '\f', ';':
 			return i
+		case ',', '}', ']':
+			if !shell {
+				return i
+			}
 		}
 	}
 	return len(value)

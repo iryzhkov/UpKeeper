@@ -11,6 +11,7 @@ func FuzzDiagnosticShellWords(f *testing.F) {
 	for _, padding := range []string{"alpha", "'", `\\`, `"`, "\n", "☃", ",;}]"} {
 		f.Add(padding)
 	}
+	f.Add(`\'00`) // Minimized fuzz reproduction: literal slash beside a POSIX apostrophe.
 	f.Fuzz(func(t *testing.T, padding string) {
 		if len(padding) > 1024 {
 			t.Skip()
