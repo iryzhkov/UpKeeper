@@ -274,7 +274,7 @@ func configHasKey(c *Context, path string) bool {
 		return false
 	}
 	var document map[string]any
-	if err := toml.Unmarshal(data, &document); err != nil {
+	if err := toml.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &document); err != nil {
 		return false
 	}
 	key, _ := document["api_key"].(string)
