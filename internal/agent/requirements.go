@@ -75,12 +75,19 @@ func blockedDependency(name string, unavailable map[string]bool) string {
 // blocker, which names every missing item and how to provide it. On a host that
 // opted in, missing OS packages are installed first when sudo needs no password.
 func requirementsBlock(c *Context, name string, spec map[string]any, actions *[]string) string {
+	return requirementsBlockForStaging(c, name, spec, actions, false)
+}
+
+// requirementsBlockForStaging can require build tools unconditionally once an
+// adapter has selected a build. A transient service observation is no longer
+// evidence that staging-only prerequisites are unnecessary.
+func requirementsBlockForStaging(c *Context, name string, spec map[string]any, actions *[]string, forceStaging bool) string {
 	family := prereq.Family(c.Host.OSID)
-	missing := missingPrerequisites(c, name, spec)
+	missing := missingPrerequisites(c, name, spec, forceStaging)
 	problems := []string{}
 	if len(missing) > 0 && c.Host.InstallOSPackages && !c.DryRun {
 		var refused string
-		missing, refused = installPrerequisites(c, name, spec, family, missing, actions)
+		missing, refused = installPrerequisites(c, name, spec, family, missing, actions, forceStaging)
 		if refused != "" {
 			problems = append(problems, refused)
 		}
@@ -115,11 +122,11 @@ func requirementsBlock(c *Context, name string, spec map[string]any, actions *[]
 }
 
 // missingPrerequisites lists the OS prerequisites a component needs now.
-func missingPrerequisites(c *Context, name string, spec map[string]any) []prereq.Prerequisite {
+func missingPrerequisites(c *Context, name string, spec map[string]any, forceStaging bool) []prereq.Prerequisite {
 	missing := []prereq.Prerequisite{}
 	// Whether the component stages is only asked once something it needs only
 	// for staging is in question, so a provisioned host pays nothing for it.
-	staging, known := false, false
+	staging, known := forceStaging, forceStaging
 	needed := func(item prereq.Prerequisite) bool {
 		if !item.Staging {
 			return true
@@ -166,7 +173,7 @@ func componentStages(c *Context, name string, spec map[string]any) bool {
 // it could not install at all, why.
 func installPrerequisites(
 	c *Context, name string, spec map[string]any, family string,
-	missing []prereq.Prerequisite, actions *[]string,
+	missing []prereq.Prerequisite, actions *[]string, forceStaging bool,
 ) ([]prereq.Prerequisite, string) {
 	packages := []string{}
 	for _, item := range missing {
@@ -201,7 +208,7 @@ func installPrerequisites(
 		return missing, "OS package installation failed: " + tail
 	}
 	*actions = append(*actions, "installed OS packages: "+strings.Join(prereq.PackageList(packages), " "))
-	return missingPrerequisites(c, name, spec), ""
+	return missingPrerequisites(c, name, spec, forceStaging), ""
 }
 
 // ovMemoryCredentialPresent reports whether the ov-memory server will find an

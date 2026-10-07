@@ -540,6 +540,12 @@ func huyangApplyCheckout(
 		}
 		*actions = append(*actions, "running service does not answer the probe; rebuilding")
 	}
+	// Preflight may have seen a healthy service that stopped before Observe,
+	// or a probe that answered before this one failed. Enforce the build
+	// requirements now, before any checkout preparation or dry-run promise.
+	if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
+		return "", &Blocked{Message: blocker}
+	}
 	ref := adapterSpecString(spec, "ref")
 	if c.DryRun {
 		*actions = append(*actions, fmt.Sprintf(

@@ -67,6 +67,12 @@ type Payload struct {
 // a test can play a binary built from another commit.
 var programCommit = buildinfo.SourceCommit
 
+// Blocked is a component that needs operator input before it can proceed.
+// It blocks its dependents while allowing unrelated components to continue.
+type Blocked struct{ Message string }
+
+func (e *Blocked) Error() string { return e.Message }
+
 // StepFailed is a component step that did not complete. The host stops here.
 type StepFailed struct{ Message string }
 
@@ -464,6 +470,9 @@ func Execute(context *Context) map[string]any {
 		state, entryError := runComponent(context, handler, spec, entry, &actions)
 		entry["actions"] = actions
 		entry["state"] = state
+		if state == "blocked" {
+			unavailable[name] = true
+		}
 		if entryError != "" {
 			entry["error"] = entryError
 		}
@@ -505,6 +514,8 @@ func runComponent(
 
 func classify(err error) (string, string) {
 	switch typed := err.(type) {
+	case *Blocked:
+		return "blocked", typed.Message
 	case *RolledBack:
 		return "rolled-back", typed.Message
 	case *StepFailed:
