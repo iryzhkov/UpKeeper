@@ -131,7 +131,7 @@ func (d dropping) registrations(servers map[string]any, opencode bool) []string 
 		if opencode {
 			list, _ := server["command"].([]any)
 			command = nil
-			if len(list) == 1 {
+			if len(list) > 0 {
 				command = list[0]
 			}
 		}
