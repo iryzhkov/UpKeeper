@@ -9,9 +9,13 @@ omarchy-setup `27-upkeeper.sh` bootstrap handoff, install the timer from the cle
 GitHub-gated checkout:
 
 ```sh
-python3 ~/.local/share/dev-fleet/scripts/install-self-timer
+cd ~/.local/share/dev-fleet
+upkeeper install-self-timer
 systemctl --user start upkeeper-self.service
 ```
+
+The Python installer `scripts/install-self-timer` was retired on 2026-10-07;
+the Go installer also removes a legacy canary drop-in UpKeeper shipped.
 
 The daily timer runs at 09:00 local time with ten minutes of jitter, startup
 activation after five minutes, and persistent catch-up. It requires the existing
@@ -34,7 +38,7 @@ A durable scheduled hold survives failed or uncertain dispatch until observation
 The journal and `~/.local/state/dev-fleet/runs` contain outcomes.
 
 ```sh
-python3 ~/.local/share/dev-fleet/scripts/upkeeper-self-pull --dry-run
+(cd ~/.local/share/dev-fleet && upkeeper self-pull --dry-run)
 journalctl --user -u upkeeper-self.service
 systemctl --user disable --now upkeeper-self.timer
 ```

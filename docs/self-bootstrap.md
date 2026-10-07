@@ -3,9 +3,13 @@
 Citadel U2 adds the target-side entry point:
 
 ```bash
-~/.local/share/dev-fleet/scripts/upkeeper pull --self --dry-run
-~/.local/share/dev-fleet/scripts/upkeeper pull --self
+~/.local/bin/upkeeper pull --self --dry-run
+~/.local/bin/upkeeper pull --self
 ```
+
+Run these from the release checkout `~/.local/share/dev-fleet`. The Go binary is
+the entry point; rolling it back is `upkeeper self rollback`, not a Python
+launcher.
 
 The CLI reads the checkout containing its own code. DEV_FLEET_CONFIG_ROOT does
 not redirect --self. The checkout must be clean; HEAD freezes the release and any
@@ -37,6 +41,10 @@ convergence. U2's live acceptance uses the plan's omarchy-pc alternative: delibe
 removal of two managed instruction files, full local dry run, detection without
 activation, and exact restoration by scripts/validate-self-canary.py. This does
 not claim a from-zero VM installation of every fleet service.
+
+> Retired 2026-10-07: scripts/validate-self-canary.py drove the Python launcher
+> and was removed with the Python units. The paragraph above is the historical
+> U2 acceptance record; `upkeeper pull --self --dry-run` is the current check.
 
 The post-update hook reaches this seam through the normal setup run. No new
 timer or drift job is added here (U3); laptop rollout remains U4.

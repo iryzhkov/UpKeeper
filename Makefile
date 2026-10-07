@@ -30,8 +30,9 @@ redaction: sync
 
 gate: lint test syntax check-mode redaction
 
-# The Go binary is the production path. The Python gate above stays as the
-# reference implementation and the rollback path until the canary has passed.
+# The Go binary is the production path and binary rollback is `upkeeper self
+# rollback`. The Python gate above still checks src/dev_fleet until that package
+# is removed; it is no longer a rollback path.
 
 # A build at a tag names that tag; anything else keeps the development version.
 # A released artifact that calls itself 0.0.0-dev is not evidence of a release.

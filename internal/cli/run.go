@@ -597,14 +597,49 @@ func runInstallTimer(parsed *arguments, streams Streams) (int, error) {
 	if parsed.command == "install-pull-timer" {
 		install = units.InstallFleetTimer
 	}
-	written, err := install(root, procx.Run)
+	done, err := install(root, procx.Run)
 	if err != nil {
 		return exitcode.Preflight, err
 	}
-	for _, path := range written {
-		fmt.Fprintf(streams.Out, "installed %s\n", path)
+	if err := printInstallation(streams.Out, parsed.command, done, parsed.asJSON); err != nil {
+		return exitcode.Preflight, err
 	}
 	return exitcode.Success, nil
+}
+
+// printInstallation reports the unit files a timer install wrote and the
+// legacy canary drop-ins it removed, so that an operator reconciling a host
+// can see that the drop-in is gone without listing the directory.
+func printInstallation(
+	out io.Writer, command string, done units.Installation, asJSON bool,
+) error {
+	if asJSON {
+		return printJSON(out, map[string]any{
+			"command":   command,
+			"exit_code": exitcode.Success,
+			"installed": nonNil(done.Written),
+			"removed":   nonNil(done.Removed),
+		})
+	}
+	for _, path := range done.Written {
+		if _, err := fmt.Fprintf(out, "installed %s\n", path); err != nil {
+			return err
+		}
+	}
+	for _, path := range done.Removed {
+		if _, err := fmt.Fprintf(out, "removed legacy drop-in %s\n", path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nonNil keeps an empty list a JSON array rather than null.
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 // reportScheduledFailure keeps an unattended run's output machine readable: a

@@ -200,7 +200,15 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseSelf(parsed, rest)
 	case agentCommand:
 		return parsed, parseAgent(parsed, rest)
-	case "install-self-timer", "install-pull-timer", probeCommand, "version":
+	case "install-self-timer", "install-pull-timer":
+		for _, token := range rest {
+			if token != "--json" {
+				return nil, unrecognized(token)
+			}
+			parsed.asJSON = true
+		}
+		return parsed, nil
+	case probeCommand, "version":
 		if len(rest) > 0 {
 			return nil, usagef("unrecognized arguments: %s", strings.Join(rest, " "))
 		}

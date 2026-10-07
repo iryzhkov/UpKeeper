@@ -4,10 +4,13 @@ UpKeeper is being migrated from a Python package to a single Go binary,
 `cmd/upkeeper`. This document describes what the binary is, what it still needs
 from a host, and how a host moves onto it and back off it again.
 
-The Python implementation under `src/dev_fleet/` is unchanged and remains the
-reference implementation and the rollback path. Nothing in the fleet runs the
-Go binary until an operator installs it and switches a unit, and both of those
-steps are reversible with one command.
+The Go binary is the production path. The Python implementation under
+`src/dev_fleet/` is no longer a rollback path: its systemd units, launchers and
+canary drop-ins were removed on 2026-10-07, and its release reader already
+accepted neither the current manifest nor controlled T3 artifacts. Rolling back
+the binary is `upkeeper self rollback`, which switches to the previous Go
+generation under `~/.local/lib/upkeeper/generations`. The package itself is
+removed in a later, separately agreed step.
 
 For an explicitly invoked local-only standalone installer, see
 [standalone-bootstrap.md](standalone-bootstrap.md). Debian 13/Arch amd64
@@ -114,50 +117,38 @@ retired. Convergence does not need them: a host without Python reports nulls in
 `status` and converges normally. Retiring the checks is a report-contract
 change and is deliberately not part of this migration.
 
-## Moving a host onto the binary, and back
+## Putting a host on the binary's timer
 
-Each step is independently reversible and leaves the Python path installed.
+1. Install the released binary at `~/.local/bin/upkeeper`, for example with
+   `upkeeper self install --expect-sha256 SHA256` or the standalone bootstrap.
+2. From the release checkout, run `upkeeper install-self-timer`. It writes the
+   `upkeeper-self.service` and `upkeeper-self.timer` text embedded in the
+   binary to `~/.config/systemd/user`, reloads systemd and enables the timer.
+   The controller timer on normandy is `upkeeper install-pull-timer`, run from
+   `~/Work/dev-fleet`.
+3. Roll the binary back with `upkeeper self rollback`. The unit never changes:
+   it always starts `~/.local/bin/upkeeper`, and the generation behind that
+   link is what moves.
 
-1. Install the released binary at `~/.local/bin/upkeeper`.
+A host may still carry the canary drop-in
+`~/.config/systemd/user/upkeeper-self.service.d/10-upkeeper-binary.conf` (or
+the `upkeeper-pull.service.d` one on normandy) from before the Go base units.
+When that file is byte for byte the drop-in UpKeeper shipped, the installer
+writes the base unit first, then removes the drop-in and the emptied `.d`
+directory, then reloads systemd, and reports what it removed in its output and
+in `--json`. An interrupted install leaves the unit running the binary through
+the new unit, the drop-in or both, and running the installer again finishes
+the job. Any other drop-in, including a modified copy of the legacy one,
+refuses the install before anything is written and names the file to inspect.
 
-   On a host that has been managed for a while this path is not empty: it is
-   already a symlink to `scripts/upkeeper` inside the checkout, so installing
-   the binary here is what makes the interactive `upkeeper` command the Go one.
-   Nothing scheduled goes through this path — the timers name their
-   `ExecStart` in full — but a person typing `upkeeper status` does.
-
-   Record what the path holds before replacing it, for example with
-   `readlink -f ~/.local/bin/upkeeper`, because rollback is restoring that
-   symlink and not merely deleting the file. Deleting it on a host where the
-   symlink was the Python entry point removes the Python entry point too.
-2. Run `upkeeper doctor` and `upkeeper status` by hand and compare them with the
-   Python output. Both commands write nothing, so a difference costs nothing.
-3. Run `upkeeper push --no-commit` on a scratch clone and compare
-   `desired/release.json` byte for byte. Never on the live checkout: writing the
-   tracked manifest makes the tree dirty, and the next capture refuses a dirty
-   tree until the operator commits or reverts it.
-4. Run `upkeeper pull --self --dry-run`.
-5. Switch the timer with a systemd drop-in, not by editing the committed unit:
-   copy `scripts/upkeeper-self.service.d/10-upkeeper-binary.conf` into
-   `~/.config/systemd/user/upkeeper-self.service.d/` and run
-   `systemctl --user daemon-reload`. Rollback is `rm` of that one file plus
-   another `daemon-reload`; the committed unit and `scripts/upkeeper-self-pull`
-   are never touched.
-6. Only after a bounded real convergence and a proven rollback on the first
-   host, repeat elsewhere.
-7. Retire the Python launchers last. That is the first irreversible step in the
-   whole migration, because no step before it rewrites a persistent format.
-
-A host that has the binary and its checkout can install its own timer with
-`upkeeper install-self-timer`, which writes the unit text embedded in the
-binary. The controller timer on normandy is `upkeeper install-pull-timer`.
-
-The two routes are alternatives, not layers. The drop-in overrides the
-committed unit and is rolled back by deleting one file; the installer writes
-the base unit with the binary's `ExecStart` already in it, so deleting a
-drop-in on a host that has also run the installer would roll back nothing. The
-installer refuses when a drop-in is present, so that "delete one file" stays
-true wherever it was ever true.
+> Retired 2026-10-07: the Python canary rollback. Hosts first moved onto the
+> binary by copying `scripts/upkeeper-self.service.d/10-upkeeper-binary.conf`
+> next to the committed Python unit, and rolled back by deleting it. That
+> procedure, the Python base units and timers under `scripts/`, their
+> installers `scripts/install-self-timer` and `scripts/install-pull-timer`, the
+> launchers `scripts/upkeeper-self-pull` and `scripts/upkeeper-scheduled-pull`
+> and the manual `scripts/validate-self-canary.py` check were removed once
+> every scheduled host ran the Go base unit. The history is in Git.
 
 ## What the binary does not carry over
 
@@ -316,8 +307,8 @@ that names no complete generation is pointed back at `previous`.
 
 An unidentified or `-dirty` binary, a binary built from a commit the checkout
 does not have, and a release with no pin all still refuse. The unit's
-`ExecStart` is unchanged, and `install-self-timer` still refuses while the
-`10-upkeeper-binary.conf` drop-in exists.
+`ExecStart` is unchanged. `install-self-timer` removes UpKeeper's own legacy
+`10-upkeeper-binary.conf` drop-in and refuses any other drop-in on its units.
 
 By hand:
 
