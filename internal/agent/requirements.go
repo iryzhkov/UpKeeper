@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"bytes"
 	"io"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/prereq"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/release"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // A component can be blocked rather than failed: it needs something only the
@@ -263,8 +263,8 @@ func ovMemoryCredentialPresent(c *Context) bool {
 	return result.OK() && strings.TrimSpace(result.Stdout) != ""
 }
 
-// configHasKey reports whether a TOML config file assigns a non-empty api_key
-// at its top level. It recognises the one line it needs and nothing more.
+// configHasKey reports whether a valid TOML config assigns a non-empty string
+// api_key at its top level, just as the server's TOML loader requires.
 func configHasKey(c *Context, path string) bool {
 	if rest, found := strings.CutPrefix(path, "~/"); found {
 		path = c.Path(rest)
@@ -273,34 +273,12 @@ func configHasKey(c *Context, path string) bool {
 	if !ok {
 		return false
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "[") {
-			return false
-		}
-		key, value, found := strings.Cut(line, "=")
-		if !found || strings.Trim(strings.TrimSpace(key), `"'`) != "api_key" {
-			continue
-		}
-		return tomlStringValue(strings.TrimSpace(value)) != ""
+	var document map[string]any
+	if err := toml.Unmarshal(data, &document); err != nil {
+		return false
 	}
-	return false
-}
-
-// tomlStringValue is the content of a TOML string value, without its quotes
-// or a trailing comment.
-func tomlStringValue(value string) string {
-	if value != "" && (value[0] == '"' || value[0] == '\'') {
-		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
-			return value[1 : 1+end]
-		}
-		return ""
-	}
-	if comment := strings.IndexByte(value, '#'); comment >= 0 {
-		value = value[:comment]
-	}
-	return strings.TrimSpace(value)
+	key, _ := document["api_key"].(string)
+	return strings.TrimSpace(key) != ""
 }
 
 // readSmallRegularFile reads a regular file of at most limit bytes. A FIFO, a
