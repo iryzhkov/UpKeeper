@@ -2240,7 +2240,7 @@
         "make",
         "build"
       ],
-      "commit": "c35a3fd9aae5b6798cc54fc190b8629a43a4da26",
+      "commit": "ef16beff8dc03f538a47c5b999363f654f178cd6",
       "kind": "git-checkout",
       "path": ".local/share/huyang",
       "probe": {
@@ -2269,7 +2269,7 @@
       "version": "0.1.6"
     },
     "omarchy-setup": {
-      "commit": "e4722edce4c4ebac6403e69de129741f47008e8a",
+      "commit": "6a34746a87e3e3e4e93be0fbb212bbf4ae46d45f",
       "kind": "git-checkout",
       "modules": [
         "28-scripts"
@@ -2735,19 +2735,19 @@
       "assets": {
         "linux-amd64": {
           "asset": "upkeeper-linux-amd64",
-          "sha256": "0ddc08e02f4515c78c83d5843ca5af52665d1913a713eeee2e19545c06df124b",
-          "size": 13706143
+          "sha256": "bfd92a90e3441a1ea60e8b31dd10523d64c759c399bd39d22c79ae3d9fcbc900",
+          "size": 14372871
         },
         "linux-arm64": {
           "asset": "upkeeper-linux-arm64",
-          "sha256": "77ba9074f497b58b980330f6f853a5e9889c5a1dc4b03823c6a965e8d5702df1",
-          "size": 12623728
+          "sha256": "85d4f356281da945628741c13ccd475a9f53f437af3fc30024bb327925006667",
+          "size": 13196588
         }
       },
       "kind": "upkeeper-binary",
       "repository": "iryzhkov/UpKeeper",
-      "source_commit": "724cd4e34cf4ac5e21bde9b129278c9e2c627d89",
-      "tag": "v0.1.33",
+      "source_commit": "e786fe70474c0579979ae9d4d1e77a2c6dbbbd47",
+      "tag": "v0.1.34",
       "toolchain": "go1.26.8"
     },
     "worker-configuration": {
