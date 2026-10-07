@@ -251,6 +251,10 @@ func huyangCrashWorld(t *testing.T, unit string) (*Context, *adapterTestRunner) 
 	t.Helper()
 	runner := &adapterTestRunner{}
 	c := adapterTestContext(t, runner)
+	// Crash recovery rebuilds on a provisioned host. Keep these isolated
+	// tools separate from the missing-tool worlds that derive this fixture.
+	bin := freshTestTools(t, c.Path("build-tools"), "git", "go", "make")
+	c.Env = []string{"PATH=" + bin}
 	c.Components["huyang"] = huyangTestSpec()
 	adapterTestWrite(t, c.Path(".local/share/huyang/.git/HEAD"), "x\n")
 	adapterTestWrite(t, c.Path(huyangBootstrapPending), ".local/share/huyang\n")
@@ -263,6 +267,8 @@ func huyangCrashWorld(t *testing.T, unit string) (*Context, *adapterTestRunner) 
 	runner.handle = func(command procx.Command) procx.Result {
 		argv := command.Argv
 		switch {
+		case adapterTestMatches(argv, "go", "env", "GOVERSION"):
+			return procx.Result{Stdout: "go1.26.8\n"}
 		case adapterTestMatches(argv, "rev-parse", "HEAD"):
 			return procx.Result{Stdout: huyangPinned}
 		case adapterTestMatches(argv, "is-active"):
