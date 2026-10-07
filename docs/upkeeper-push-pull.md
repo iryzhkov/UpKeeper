@@ -279,7 +279,7 @@ copy. Everything else, Huyang included, is installed by the first `pull`.
    | --- | --- | --- | --- |
    | omarchy-setup | git | git | git |
    | agent-tooling | mise, bash, curl, jq, python3, ssh, readlink | (mise from mise.run), bash, curl, jq, python3, openssh-client, coreutils | mise, bash, curl, jq, python, openssh, coreutils |
-   | agent-tooling, when it stages a release | secret-tool; Python's venv and ensurepip | libsecret-tools, python3-venv | libsecret, python |
+   | agent-tooling with ov-memory, when it stages a release | Python's venv and ensurepip; secret-tool when the OV key can only be in the keyring | python3-venv, libsecret-tools | python, libsecret |
    | huyang | git; go 1.21 or newer and make when it builds | git, golang-go, make | git, go, make |
 
    Go 1.21 and later fetch the toolchain Huyang's `go.mod` names. Debian 12's golang-go is
@@ -292,8 +292,9 @@ copy. Everything else, Huyang included, is installed by the first `pull`.
      ~/.config/ov-mcp/key` (paste the key, then Ctrl-D), or store it in the keyring with
      `secret-tool store --label='OpenViking API key' service openviking key api`;
      `OV_API_KEY` or `api_key` in `~/.config/ov-mcp/config.toml` also count. A host that
-   has already staged the release and keeps its key in one of those places does not need
-   secret-tool;
+   keeps its key anywhere but the keyring does not need secret-tool, and a host whose
+   agent tool profile leaves out ov-memory needs no key at all (see "Agent tool profiles"
+   in docs/agent-tooling.md);
    - `~/.config/claude/oauth.env`, if T3 should authenticate providers (the seeded T3 unit
      reads it when present and warns when it is not);
    - the worker's Steward protocol credential that its `worker-configuration` entry names.

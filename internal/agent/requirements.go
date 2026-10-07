@@ -24,9 +24,11 @@ import (
 // only the ones that really depend on it are skipped.
 
 // credential is one per-host secret a component needs. Present must never
-// read the secret into anything that is reported.
+// read the secret into anything that is reported. A credential with a Tool is
+// needed only on a host whose agent tool profile selects that tool.
 type credential struct {
 	Name    string
+	Tool    string
 	Present func(c *Context) bool
 	Create  string
 }
@@ -35,6 +37,7 @@ type credential struct {
 var componentCredentials = map[string][]credential{
 	release.ToolingComponent: {{
 		Name:    "ov-memory API key",
+		Tool:    "ov-memory",
 		Present: ovMemoryCredentialPresent,
 		Create: "create it on the host: umask 077; mkdir -p ~/.config/ov-mcp; " +
 			"cat > ~/.config/ov-mcp/key (paste the OpenViking API key, then Ctrl-D); " +
@@ -82,6 +85,14 @@ func requirementsBlock(c *Context, name string, spec map[string]any, actions *[]
 // adapter has selected a build. A transient service observation is no longer
 // evidence that staging-only prerequisites are unnecessary.
 func requirementsBlockForStaging(c *Context, name string, spec map[string]any, actions *[]string, forceStaging bool) string {
+	// A profile that is not one is the adapter's to refuse, as a failure,
+	// before anything changes: no package is installed for it, and it is not
+	// mistaken for something only the operator can provide.
+	if name == release.ToolingComponent {
+		if _, err := toolProfile(c); err != nil {
+			return ""
+		}
+	}
 	family := prereq.Family(c.Host.OSID)
 	missing := missingPrerequisites(c, name, spec, forceStaging)
 	problems := []string{}
@@ -111,6 +122,9 @@ func requirementsBlockForStaging(c *Context, name string, spec map[string]any, a
 			"; " + strings.Join(remedies, "; ")}, problems...)
 	}
 	for _, needed := range componentCredentials[name] {
+		if needed.Tool != "" && !toolSelected(c, needed.Tool) {
+			continue
+		}
 		if !needed.Present(c) {
 			problems = append(problems, "credential missing "+needed.Name+"; "+needed.Create)
 		}
@@ -137,6 +151,9 @@ func missingPrerequisites(c *Context, name string, spec map[string]any, forceSta
 		return staging
 	}
 	for _, item := range componentPrerequisites(name) {
+		if !prerequisiteApplies(c, name, item) {
+			continue
+		}
 		if item.Command != "" && procx.LookupIn(item.Command, c.Env) == "" {
 			if needed(item) {
 				missing = append(missing, item)
@@ -150,6 +167,24 @@ func missingPrerequisites(c *Context, name string, spec map[string]any, forceSta
 	return missing
 }
 
+// prerequisiteApplies reports whether this host needs a catalogued
+// prerequisite at all. Python's venv module serves only the OV memory
+// virtualenv, and secret-tool only an OV key kept in the keyring: a host
+// without ov-memory needs neither, and one whose key is in the environment,
+// the config or the key file does not need secret-tool.
+func prerequisiteApplies(c *Context, name string, item prereq.Prerequisite) bool {
+	if name != release.ToolingComponent {
+		return true
+	}
+	switch item.Name {
+	case "python3-venv":
+		return toolSelected(c, "ov-memory")
+	case "secret-tool":
+		return toolSelected(c, "ov-memory") && !ovMemoryKeyOutsideKeyring(c, ovMemoryEnvironment(c))
+	}
+	return true
+}
+
 // componentStages reports whether a component would have to build or stage a
 // new version, which is when its staging-only prerequisites are needed. An
 // answer that cannot be had is yes.
@@ -160,7 +195,11 @@ func componentStages(c *Context, name string, spec map[string]any) bool {
 		if err != nil {
 			return true
 		}
-		_, err = os.Stat(filepath.Join(base, "releases", toolingIdentity(spec), ".complete"))
+		identity, err := toolingIdentityFor(c, spec)
+		if err != nil {
+			return true
+		}
+		_, err = os.Stat(filepath.Join(base, "releases", identity, ".complete"))
 		return err != nil
 	case "huyang":
 		return huyangWouldBuild(c, spec)
@@ -216,10 +255,33 @@ func installPrerequisites(
 // order: OV_API_KEY, api_key in its config file, the keyring, then the 0600
 // key file. The environment is the one the server is registered with.
 func ovMemoryCredentialPresent(c *Context) bool {
-	env := c.Env
-	if rendered, err := agentenv.MCPEnvironment(c.Spec("agent-environment"), c.Home, "ov-memory", c.Env); err == nil {
-		env = rendered
+	env := ovMemoryEnvironment(c)
+	if ovMemoryKeyOutsideKeyring(c, env) {
+		return true
 	}
+	if procx.LookupIn("secret-tool", env) == "" {
+		return false
+	}
+	result := c.Runner(procx.Command{
+		Argv: []string{"secret-tool", "lookup", "service", "openviking", "key", "api"},
+		Env:  env, Timeout: 10 * time.Second,
+	})
+	return result.OK() && strings.TrimSpace(result.Stdout) != ""
+}
+
+// ovMemoryEnvironment is the environment the ov-memory server is registered
+// with on this host.
+func ovMemoryEnvironment(c *Context) []string {
+	if rendered, err := agentenv.MCPEnvironment(c.Spec("agent-environment"), c.Home, "ov-memory", c.Env); err == nil {
+		return rendered
+	}
+	return c.Env
+}
+
+// ovMemoryKeyOutsideKeyring reports whether the ov-memory server finds an
+// OpenViking API key without the keyring: in OV_API_KEY, the api_key of its
+// config file, or its key file.
+func ovMemoryKeyOutsideKeyring(c *Context, env []string) bool {
 	lookup := func(key string) string {
 		value := ""
 		for _, entry := range env {
@@ -250,17 +312,8 @@ func ovMemoryCredentialPresent(c *Context) bool {
 	if rest, found := strings.CutPrefix(keyFile, "~/"); found {
 		keyFile = c.Path(rest)
 	}
-	if data, ok := readSmallRegularFile(keyFile, 64<<10); ok && len(bytes.TrimSpace(data)) > 0 {
-		return true
-	}
-	if procx.LookupIn("secret-tool", env) == "" {
-		return false
-	}
-	result := c.Runner(procx.Command{
-		Argv: []string{"secret-tool", "lookup", "service", "openviking", "key", "api"},
-		Env:  env, Timeout: 10 * time.Second,
-	})
-	return result.OK() && strings.TrimSpace(result.Stdout) != ""
+	data, ok := readSmallRegularFile(keyFile, 64<<10)
+	return ok && len(bytes.TrimSpace(data)) > 0
 }
 
 // configHasKey reports whether a valid TOML config assigns a non-empty string

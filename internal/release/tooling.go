@@ -20,6 +20,33 @@ import (
 
 const ToolingComponent = "agent-tooling"
 
+// AgentTools is the fixed set of tools the tooling component installs, in the
+// order it names them. A host's agent tool profile is drawn from it.
+var AgentTools = []string{"homelab-cli", "ov-memory", "local-file-llm"}
+
+// CheckAgentTools validates a declared agent tool profile: it names at least
+// one tool, every one of them known, and none twice.
+func CheckAgentTools(tools []string) error {
+	if len(tools) == 0 {
+		return errors.New("must name at least one tool")
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		known := false
+		for _, name := range AgentTools {
+			known = known || tool == name
+		}
+		if !known {
+			return fmt.Errorf("names unknown tool %q; known tools: %s", tool, strings.Join(AgentTools, ", "))
+		}
+		if seen[tool] {
+			return fmt.Errorf("names %q twice", tool)
+		}
+		seen[tool] = true
+	}
+	return nil
+}
+
 var toolFileName = regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
 var pythonRequirement = regexp.MustCompile(`^[A-Za-z0-9_.-]+==[A-Za-z0-9_.+-]+$`)
 

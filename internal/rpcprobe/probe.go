@@ -9,7 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/iryzhkov/UpKeeper/internal/redact"
 )
 
 type Call struct {
@@ -17,7 +22,14 @@ type Call struct {
 	Params any
 }
 
-func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout time.Duration) ([]map[string]any, error) {
+func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout time.Duration) (results []map[string]any, err error) {
+	// All returned errors, including OS errors and caller-supplied call names,
+	// pass through the shared diagnostic gate. Child stderr stays discarded.
+	defer func() {
+		if err != nil {
+			err = redact.Error(err)
+		}
+	}()
 	if len(argv) == 0 {
 		return nil, errors.New("missing probe command")
 	}
@@ -84,7 +96,6 @@ func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout 
 	if err := write(map[string]any{"jsonrpc": "2.0", "method": notification}); err != nil {
 		return nil, err
 	}
-	var results []map[string]any
 	for i, c := range calls {
 		id := i + 2
 		if err := write(map[string]any{"jsonrpc": "2.0", "id": id, "method": c.Method, "params": c.Params}); err != nil {
@@ -95,11 +106,90 @@ func Exchange(argv, env []string, dir string, codex bool, calls []Call, timeout 
 			return nil, err
 		}
 		if failed, _ := result["isError"].(bool); failed {
-			return nil, fmt.Errorf("%s returned an error", c.Method)
+			return nil, fmt.Errorf("%s failed: %s", callName(c), toolErrorText(result))
 		}
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// ToolErrorLimit bounds, in bytes, the tool's own error text a failed call
+// reports.
+const ToolErrorLimit = 300
+
+// toolRedactLimit bounds, in bytes, the text redaction reads, so that an
+// enormous error text costs no more than this to redact.
+const toolRedactLimit = 64 << 10
+
+// callName names a call the way an operator would: a tool call by its tool.
+func callName(c Call) string {
+	if params, ok := c.Params.(map[string]any); ok && c.Method == "tools/call" {
+		if name, ok := params["name"].(string); ok && name != "" {
+			return c.Method + " " + name
+		}
+	}
+	return c.Method
+}
+
+// hiddenCharacter reports a character that must not reach a report: a control
+// character, a format character such as a bidi override or a zero-width
+// space, a line or paragraph separator, or the replacement character.
+func hiddenCharacter(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) || r == unicode.ReplacementChar
+}
+
+// toolErrorText is the text a tool gave with an error result: its text content
+// items joined, with format characters removed so that one inside a key word
+// cannot split it, other control characters made spaces so that nothing they
+// hide or join escapes redaction, secrets redacted, and only then bounded, so
+// that the bound never hides a secret's end from the redaction.
+func toolErrorText(result map[string]any) string {
+	items, _ := result["content"].([]any)
+	parts := []string{}
+	for _, item := range items {
+		object, _ := item.(map[string]any)
+		if kind, _ := object["type"].(string); kind != "text" {
+			continue
+		}
+		text, _ := object["text"].(string)
+		text = strings.TrimSpace(strings.Map(func(r rune) rune {
+			if unicode.In(r, unicode.Cf) {
+				return -1
+			}
+			if hiddenCharacter(r) {
+				return ' '
+			}
+			return r
+		}, strings.ToValidUTF8(text, " ")))
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	if len(parts) == 0 {
+		return "no error text"
+	}
+	// Items are joined by a space, which the redaction patterns read across,
+	// so a key and its value sent as two items are still seen together.
+	text := strings.Join(parts, " ")
+	// Text past the redaction limit is dropped, back to a space, so that a
+	// word the cut would split is dropped whole rather than reported in part.
+	capped := len(text) > toolRedactLimit
+	if capped {
+		text = text[:max(strings.LastIndexFunc(text[:toolRedactLimit], unicode.IsSpace), 0)]
+	}
+	text = redact.DiagnosticText(text)
+	if capped {
+		text += " ..."
+	}
+	if len(text) <= ToolErrorLimit {
+		return text
+	}
+	cut := ToolErrorLimit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "..."
 }
 
 func Models(argv, env []string, home string) ([]string, error) {

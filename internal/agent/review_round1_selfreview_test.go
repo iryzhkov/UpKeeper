@@ -53,10 +53,20 @@ func TestSelfReviewAStagedReleaseDoesNotNeedTheStagingCLIs(t *testing.T) {
 	if err := stageTooling(c, dir, tool); err != nil && strings.Contains(err.Error(), "CLI prerequisites") {
 		t.Fatalf("a staged release was refused for a staging-only CLI: %v", err)
 	}
-	// A release that still has to be staged keeps the check.
-	other := filepath.Join(home, ".local/share/upkeeper-tools/releases", "other")
-	if err := stageTooling(c, other, tool); err == nil || !strings.Contains(err.Error(), "CLI prerequisites") {
-		t.Fatalf("staging without secret-tool = %v", err)
+	// A release that still has to be staged needs secret-tool only when the
+	// OV key could come from nowhere but the keyring; the preflight checks it,
+	// by name, before staging runs.
+	if err := os.Remove(filepath.Join(dir, ".complete")); err != nil {
+		t.Fatal(err)
+	}
+	if block := requirementsBlock(c, release.ToolingComponent, spec, &[]string{}); strings.Contains(block, "secret-tool") {
+		t.Fatalf("staging with a key file = %s", block)
+	}
+	if err := os.Remove(filepath.Join(home, ".config/ov-mcp/key")); err != nil {
+		t.Fatal(err)
+	}
+	if block := requirementsBlock(c, release.ToolingComponent, spec, &[]string{}); !strings.Contains(block, "missing OS prerequisite secret-tool") {
+		t.Fatalf("staging with only the keyring = %s", block)
 	}
 }
 

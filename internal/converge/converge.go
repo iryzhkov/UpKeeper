@@ -225,6 +225,7 @@ func Fleet(
 			Host: agent.HostRef{
 				Name: name, OSID: spec.OSID, SetupCheckout: spec.SetupCheckout,
 				InstallOSPackages: spec.InstallOSPackages,
+				AgentTools:        spec.AgentTools,
 			},
 			Components:            selected,
 			Manifest:              value.Manifest,

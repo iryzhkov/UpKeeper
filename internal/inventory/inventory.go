@@ -16,6 +16,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
 	"github.com/iryzhkov/UpKeeper/internal/failure"
+	"github.com/iryzhkov/UpKeeper/internal/release"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
 )
 
@@ -39,6 +40,9 @@ type HostSpec struct {
 	// InstallOSPackages opts the host in to having missing OS prerequisites
 	// installed by the agent, which it does only with passwordless sudo.
 	InstallOSPackages bool `json:"install_os_packages"`
+	// AgentTools is the host's agent tool profile, the tools the tooling
+	// component gives it. Nil, when the inventory declares none, is every tool.
+	AgentTools []string `json:"agent_tools,omitempty"`
 }
 
 // Config is the validated pair of sources of truth.
@@ -252,6 +256,13 @@ func hostSpec(name string, raw map[string]any) (HostSpec, error) {
 		}
 		spec.InstallOSPackages = install
 	}
+	if value, present := raw["agent_tools"]; present {
+		tools, err := agentTools(name, value)
+		if err != nil {
+			return HostSpec{}, err
+		}
+		spec.AgentTools = tools
+	}
 	for _, key := range []string{"architecture", "os_id", "os_version"} {
 		value, err := required(key)
 		if err != nil {
@@ -267,6 +278,28 @@ func hostSpec(name string, raw map[string]any) (HostSpec, error) {
 		}
 	}
 	return spec, nil
+}
+
+// agentTools validates a declared agent tool profile. Unlike the optional
+// booleans, an explicit null is refused: a host either declares a profile or
+// leaves the key out and gets every tool.
+func agentTools(name string, value any) ([]string, error) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, failure.Validation("%s.agent_tools must be a list of tool names", name)
+	}
+	tools := make([]string, 0, len(items))
+	for _, item := range items {
+		tool, ok := item.(string)
+		if !ok {
+			return nil, failure.Validation("%s.agent_tools entries must be strings", name)
+		}
+		tools = append(tools, tool)
+	}
+	if err := release.CheckAgentTools(tools); err != nil {
+		return nil, failure.Validation("%s.agent_tools %v", name, err)
+	}
+	return tools, nil
 }
 
 // LoadManifest validates desired/components.yml.

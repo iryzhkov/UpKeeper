@@ -556,9 +556,18 @@ type ServerEntry struct {
 // Every other line of text, including comments and unrelated tables, is copied
 // through unchanged.
 func ProjectServerTables(text string, entries []ServerEntry) (string, error) {
-	owned := make(map[string]bool, len(entries))
+	return projectServerTables(text, entries, nil)
+}
+
+// projectServerTables is ProjectServerTables that also removes the spans of
+// the removed registrations without rendering them again.
+func projectServerTables(text string, entries []ServerEntry, removed []string) (string, error) {
+	owned := make(map[string]bool, len(entries)+len(removed))
 	for _, entry := range entries {
 		owned[entry.Name] = true
+	}
+	for _, name := range removed {
+		owned[name] = true
 	}
 	var kept strings.Builder
 	skipping := false
