@@ -19,21 +19,10 @@ var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
 // access key, and a key word written with a space, as in "api key".
 const toolSecretWord = `(?:(?:api|access)[\s_-]?key|private[\s_-]?key|token|secret|password|passwd|credential|authorization|cookie)s?`
 
-// toolSecretValue handles scalar values: authorization schemes, escaped or
-// ordinary quotes (including Python literals), back/curly quotes and bare
-// words. Unterminated quotes consume the rest. Structured values are scanned
-// separately by diagnosticValueEnd with a delimiter stack and quote state.
-const toolSecretValue = `(?:(?:bearer|basic|token)\s+[^\s,;"'\\]+` +
-	`|\\"(?:[^"\\]|\\[^"])*(?:\\"|\\?$)` +
-	`|[bru]?"(?:[^"\\]|\\.)*(?:"|\\?$)` +
-	`|[bru]?'(?:[^'\\]|\\.)*(?:'|\\?$)` +
-	`|\x60[^\x60]*(?:\x60|$)` +
-	`|“[^”]*(?:”|$)` +
-	`|[^\s,;}\]]+)`
+// Authorization values include a scheme followed by one complete word.
+var diagnosticScheme = regexp.MustCompile(`(?i)^(?:bearer|basic|token)\s+`)
 
 var (
-	diagnosticValue = regexp.MustCompile(`(?i)^` + toolSecretValue)
-
 	// An assignment's key may be a longer name around a key word, such as
 	// OV_API_KEY or AWS_SECRET_ACCESS_KEY, but not a word such as secret-tool.
 	toolSecretAssignment = regexp.MustCompile(
@@ -47,7 +36,7 @@ var (
 	// A Cookie header carries several pairs.
 	toolCookie = regexp.MustCompile(`(?i)(\bcookie\s*[=:]\s*)[^\s,;]+(?:;\s*[^\s,;=]+=[^\s,;]*)*`)
 	// Credentials in a URL of any scheme, such as a database's.
-	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
+	toolURLUserInfo = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@`)
 	toolBearer      = regexp.MustCompile(`(?i)(\b(?:bearer|token|basic)\s+)[A-Za-z0-9._~+/=-]{8,}`)
 )
 
@@ -215,11 +204,52 @@ func diagnosticValueEnd(raw string) int {
 		}
 		return len(raw)
 	}
-	// Quotes use the same balanced/escape-aware primitive patterns as other
-	// diagnostic values. A truncated quote consumes through the end.
-	found := diagnosticValue.FindStringIndex(view)
-	if found == nil {
-		return 0
+	start := 0
+	if scheme := diagnosticScheme.FindStringIndex(view); scheme != nil {
+		start = scheme[1]
 	}
-	return originalEnd(found[1])
+	return originalEnd(start + diagnosticWordEnd(view[start:]))
+}
+
+// diagnosticWordEnd consumes a whole shell-style word, including concatenated
+// quotes, dollar-prefixed quotes and escaped whitespace. Also retain Python,
+// backtick and curly quote support. Delimiters outside quotes end diagnostic
+// scalars; an unfinished quote or escape conservatively consumes the rest.
+func diagnosticWordEnd(value string) int {
+	var quote byte
+	curly := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == '\\' {
+			if i+1 < len(value) {
+				i++
+			}
+			continue
+		}
+		if curly {
+			if strings.HasPrefix(value[i:], "”") {
+				curly = false
+				i += len("”") - 1
+			}
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if strings.HasPrefix(value[i:], "“") {
+			curly = true
+			i += len("“") - 1
+			continue
+		}
+		switch c {
+		case '\'', '"', '`':
+			quote = c
+		case ' ', '\t', '\n', '\r', '\v', '\f', ',', ';', '}', ']':
+			return i
+		}
+	}
+	return len(value)
 }
