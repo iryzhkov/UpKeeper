@@ -360,13 +360,30 @@ func huyangBuildAndRestart(
 func huyangApply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
-	pending, touched, err := huyangReconcileUnit(c, spec, actions)
-	if err != nil {
-		return "", err
+	var pending map[string][]byte
+	var touched, prepared bool
+	prepareUnit := func() error {
+		var err error
+		pending, touched, err = huyangReconcileUnit(c, spec, actions)
+		prepared = err == nil
+		return err
 	}
-	state, err := huyangApplyCheckout(c, spec, before, actions)
+	prepareBuild := func() error {
+		if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
+			return &Blocked{Message: blocker}
+		}
+		return prepareUnit()
+	}
+	state, err := huyangApplyCheckout(c, spec, before, actions, prepareBuild)
 	if err != nil {
 		return state, err
+	}
+	// A converged or ahead checkout did not select a build, but still needs
+	// its unit migration. Build paths prepare it only after requirements pass.
+	if !prepared {
+		if err := prepareUnit(); err != nil {
+			return "", err
+		}
 	}
 	service := adapterSpecString(spec, "service")
 	if err := checkUserUnitOrdering(c, service, pending, actions); err != nil {
@@ -501,6 +518,7 @@ func huyangWouldBuild(c *Context, spec map[string]any) bool {
 // on a host that has none.
 func huyangApplyCheckout(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
+	prepareBuild ...func() error,
 ) (string, error) {
 	checkout := c.Path(adapterSpecString(spec, "path"))
 	commit, _ := before["commit"].(string)
@@ -510,7 +528,7 @@ func huyangApplyCheckout(
 		if pathExists(checkout) && pathExists(c.Path(huyangBootstrapPending)) {
 			return "", huyangResumeRefused(c, checkout, "has a HEAD that could not be read")
 		}
-		return huyangBootstrap(c, spec, actions)
+		return huyangBootstrap(c, spec, actions, prepareBuild...)
 	}
 	// Local changes outrank the release, including a bootstrap an earlier run
 	// left unfinished: whoever changed the checkout since owns it now.
@@ -521,7 +539,7 @@ func huyangApplyCheckout(
 		return "", Failf("%s has local changes; refusing to move it", checkout)
 	}
 	if pathExists(c.Path(huyangBootstrapPending)) {
-		return huyangResumeBootstrap(c, spec, checkout, commit, actions)
+		return huyangResumeBootstrap(c, spec, checkout, commit, actions, prepareBuild...)
 	}
 	wanted := adapterSpecString(spec, "commit")
 	allowDowngrade := c.Payload.AllowDowngrade
@@ -543,7 +561,11 @@ func huyangApplyCheckout(
 	// Preflight may have seen a healthy service that stopped before Observe,
 	// or a probe that answered before this one failed. Enforce the build
 	// requirements now, before any checkout preparation or dry-run promise.
-	if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
+	} else if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
 		return "", &Blocked{Message: blocker}
 	}
 	ref := adapterSpecString(spec, "ref")
@@ -591,7 +613,7 @@ func huyangApplyCheckout(
 // rather than something a convergence may overwrite. The clone and the build
 // happen in a private staging directory, so a build that fails never puts
 // anything at the live path.
-func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string, error) {
+func huyangBootstrap(c *Context, spec map[string]any, actions *[]string, prepareBuild ...func() error) (string, error) {
 	relative := adapterSpecString(spec, "path")
 	checkout := c.Path(relative)
 	service := adapterSpecString(spec, "service")
@@ -602,6 +624,11 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 	if pathExists(unit) {
 		return "", errors.New(
 			"Huyang checkout is absent but a user unit exists; inspect it first")
+	}
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
 	}
 	for _, tool := range []string{"git", "go", "make"} {
 		if adapterLookPath(c, tool) == "" {
@@ -725,6 +752,7 @@ func huyangSeedUnit(unit, relative string) error {
 // since, or a unit that is not the seeded one, is the operator's to look at.
 func huyangResumeBootstrap(
 	c *Context, spec map[string]any, checkout, commit string, actions *[]string,
+	prepareBuild ...func() error,
 ) (string, error) {
 	relative := adapterSpecString(spec, "path")
 	service := adapterSpecString(spec, "service")
@@ -750,6 +778,11 @@ func huyangResumeBootstrap(
 		return "", Failf("an interrupted Huyang bootstrap found its marker %s is not a regular file; "+
 			"inspect it, and replace it with an empty file to let the next run finish the bootstrap",
 			c.Path(huyangBootstrapPending))
+	}
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
 	}
 	if c.DryRun {
 		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: build, seed and enable "+service)
