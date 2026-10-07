@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/iryzhkov/UpKeeper/internal/policytest"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/publish"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -65,6 +66,14 @@ func authoredInventoryRepository(t *testing.T) (
 // the reviewed digest.
 func referenceAgentA(t *testing.T, f *fixture) string {
 	t.Helper()
+	// Install configured authorization before loading the published fleet
+	// policy; the operator's live Steward config is not a test input.
+	raw := mustRead(t, filepath.Join("..", "..", "desired", "release.json"))
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	policytest.ManifestCatalog(t, document)
 	published, err := release.Load(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
