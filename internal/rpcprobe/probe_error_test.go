@@ -110,6 +110,24 @@ func TestToolErrorTextIsRedactedAndPrintable(t *testing.T) {
 	}
 }
 
+// Self-review lens 4: the text was cut before it was redacted, so a private
+// key whose END marker lay past the cut was no longer recognised and its body
+// was reported. A key the tool itself cut short is not reported either.
+func TestToolErrorTextNeverReportsALongOrUnterminatedPrivateKey(t *testing.T) {
+	body := strings.Repeat("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n", 120)
+	for name, value := range map[string]string{
+		"long":         "failed: -----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n",
+		"unterminated": "failed: -----BEGIN RSA PRIVATE KEY-----\n" + body[:400],
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := toolErrorText(map[string]any{"content": []any{text(value)}})
+			if strings.Contains(got, "MIIEvQ") || !strings.HasPrefix(got, "failed: ") {
+				t.Fatalf("key material leaked: %q", got)
+			}
+		})
+	}
+}
+
 // A control character between two halves of a token must not join them into
 // a token the redaction no longer sees, nor hide one from it.
 func TestToolErrorControlCharactersCannotSmuggleAToken(t *testing.T) {

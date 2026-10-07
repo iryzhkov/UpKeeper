@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -121,24 +122,23 @@ func callName(c Call) string {
 	return c.Method
 }
 
+// privateKeyStart finds what is left of a private key block after redaction:
+// one the tool cut short has no END marker for the redaction to match.
+var privateKeyStart = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY`)
+
 // toolErrorText is the text a tool gave with an error result: its text content
 // items joined, with control characters made spaces so that nothing they hide
-// or join escapes redaction, secrets redacted, and the whole bounded.
+// or join escapes redaction, secrets redacted, and only then bounded, so that
+// the bound never hides a secret's end from the redaction.
 func toolErrorText(result map[string]any) string {
 	items, _ := result["content"].([]any)
 	parts := []string{}
-	size := 0
 	for _, item := range items {
 		object, _ := item.(map[string]any)
 		if kind, _ := object["type"].(string); kind != "text" {
 			continue
 		}
 		text, _ := object["text"].(string)
-		// Far more than is ever reported, so that a huge answer costs nothing
-		// to redact, while a secret near the bound is still seen whole.
-		if len(text) > 16*ToolErrorLimit {
-			text = text[:16*ToolErrorLimit]
-		}
 		text = strings.TrimSpace(strings.Map(func(r rune) rune {
 			if unicode.IsControl(r) || r == unicode.ReplacementChar {
 				return ' '
@@ -149,14 +149,14 @@ func toolErrorText(result map[string]any) string {
 			continue
 		}
 		parts = append(parts, text)
-		if size += len(text); size > 16*ToolErrorLimit {
-			break
-		}
 	}
 	if len(parts) == 0 {
 		return "no error text"
 	}
 	text := redact.Text(strings.Join(parts, "; "))
+	if start := privateKeyStart.FindStringIndex(text); start != nil {
+		text = text[:start[0]] + redact.Placeholder
+	}
 	if len(text) <= ToolErrorLimit {
 		return text
 	}
