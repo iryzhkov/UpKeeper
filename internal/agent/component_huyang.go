@@ -376,6 +376,14 @@ func huyangApply(
 	}
 	state, err := huyangApplyCheckout(c, spec, before, actions, prepareBuild)
 	if err != nil {
+		// Existing refusal paths still reconcile legacy unit ordering. A
+		// prerequisite blocker must leave the unit untouched.
+		var blocked *Blocked
+		if !prepared && !errors.As(err, &blocked) {
+			if unitErr := prepareUnit(); unitErr != nil {
+				return "", unitErr
+			}
+		}
 		return state, err
 	}
 	// A converged or ahead checkout did not select a build, but still needs

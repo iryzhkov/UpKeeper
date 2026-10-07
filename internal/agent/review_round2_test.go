@@ -248,6 +248,16 @@ func TestSelfReviewRound2RefusedRecoveryKeepsTheWayToEnable(t *testing.T) {
 	for name, dirtyObserved := range map[string]bool{"dirty when observed": true, "dirty after observing": false} {
 		t.Run(name, func(t *testing.T) {
 			c, r := huyangCrashWorld(t, fmt.Sprintf(huyangUnitTemplate, ".local/share/huyang"))
+			// The clean retry builds, so its provisioned host has isolated tools.
+			bin := freshTestTools(t, c.Home, "git", "go", "make")
+			c.Env = []string{"PATH=" + bin}
+			original := r.handle
+			r.handle = func(command procx.Command) procx.Result {
+				if adapterTestMatches(command.Argv, "go", "env", "GOVERSION") {
+					return procx.Result{Stdout: "go1.26.8\n"}
+				}
+				return original(command)
+			}
 			spec := c.Spec("huyang")
 			dirty := dirtyObserved
 			inner := r.handle
