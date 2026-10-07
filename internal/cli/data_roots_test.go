@@ -717,7 +717,9 @@ func TestInspectionWholeBudget(t *testing.T) {
 		// The whole budget is shorter than one command's budget, so every
 		// command's deadline must be clipped to the one whole deadline, and
 		// only the whole budget can end the blocked command.
-		inspectionTestBudgets(t, 300*time.Millisecond, time.Hour)
+		// One second leaves the two answered commands ample room on a loaded
+		// host; only the blocked third command ever waits for the deadline.
+		inspectionTestBudgets(t, time.Second, time.Hour)
 		var o observed
 		result, err := inspectRootPair(context.Background(), code, data, blocking(t, &o))
 		if !errors.Is(err, context.DeadlineExceeded) || result != (rootPairObservation{}) || len(o.deadlines) != 3 || o.active != 0 {
