@@ -25,6 +25,7 @@ import (
 
 	"github.com/iryzhkov/UpKeeper/internal/buildinfo"
 	"github.com/iryzhkov/UpKeeper/internal/canonjson"
+	"github.com/iryzhkov/UpKeeper/internal/prereq"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
@@ -34,6 +35,10 @@ type HostRef struct {
 	Name          string  `json:"name"`
 	OSID          string  `json:"os_id"`
 	SetupCheckout *string `json:"setup_checkout"`
+	// InstallOSPackages is the host's inventory opt-in to having missing OS
+	// prerequisites installed with passwordless sudo. Omitted when false, so a
+	// payload for a host that did not opt in is exactly what it always was.
+	InstallOSPackages bool `json:"install_os_packages,omitempty"`
 }
 
 // Payload is the complete instruction set for one host in one run.
@@ -61,6 +66,12 @@ type Payload struct {
 // programCommit is the source commit of the running binary; a variable so that
 // a test can play a binary built from another commit.
 var programCommit = buildinfo.SourceCommit
+
+// Blocked is a component that needs operator input before it can proceed.
+// It blocks its dependents while allowing unrelated components to continue.
+type Blocked struct{ Message string }
+
+func (e *Blocked) Error() string { return e.Message }
 
 // StepFailed is a component step that did not complete. The host stops here.
 type StepFailed struct{ Message string }
@@ -113,8 +124,12 @@ type Context struct {
 	Sleep func(time.Duration)
 
 	t3JournalFiles *t3JournalFiles // Owned journal IO; nil uses the filesystem.
-	lockDirectory  string
-	lockOwned      bool
+	// stewardCheckBinary, when set, is the steward program that answers for
+	// the running T3 instead of the installed one: the verified candidate, on
+	// a host that has no steward yet.
+	stewardCheckBinary string
+	lockDirectory      string
+	lockOwned          bool
 	// lockHeld is true while this run holds the host's target lock, whether it
 	// created the lock or re-entered the one its own controller holds. T3
 	// transaction journals are published only under it.
@@ -270,8 +285,10 @@ func Handlers() map[string]Handler {
 }
 
 // rank orders the outcomes from best to worst. A host reports its worst one.
+// A blocked component waits for its operator to provide something, which is
+// worse than a deferral and better than any failure.
 var rank = []string{
-	"converged", "updated", "ahead", "skipped", "deferred",
+	"converged", "updated", "ahead", "skipped", "deferred", "blocked",
 	"rolled-back", "failed", "rollback-failed",
 }
 
@@ -333,20 +350,12 @@ func NewContext(payload Payload, runner procx.Runner) (*Context, error) {
 }
 
 // agentEnvironment puts the fleet's tool directories in front of PATH and
-// forbids any interactive Git or SSH prompt.
+// forbids any interactive Git or SSH prompt. Every command the agent runs gets
+// this PATH, and is looked up on it, so a host's shell startup files never
+// decide whether a tool is found.
 func agentEnvironment(home string) []string {
 	inherited := os.Environ()
-	current := os.Getenv("PATH")
-	if current == "" {
-		current = "/usr/local/bin:/usr/bin:/bin"
-	}
-	path := strings.Join([]string{
-		filepath.Join(home, ".local/share/mise/shims"),
-		filepath.Join(home, ".local/bin"),
-		filepath.Join(home, "go/bin"),
-		"/usr/local/go/bin",
-		current,
-	}, ":")
+	path := prereq.AgentPath(home, os.Getenv("PATH"))
 	environment := make([]string, 0, len(inherited)+3)
 	for _, entry := range inherited {
 		if strings.HasPrefix(entry, "PATH=") ||
@@ -417,10 +426,20 @@ func Execute(context *Context) map[string]any {
 	}
 
 	entries := make([]any, 0, len(context.Selected))
+	// unavailable holds the components that are blocked, or skipped because
+	// something they depend on is; their dependents are skipped in turn.
+	unavailable := map[string]bool{}
 	for _, name := range context.Selected {
 		entry := map[string]any{"name": name, "actions": []string{}}
 		if stop {
 			entry["state"] = "skipped"
+			entries = append(entries, entry)
+			continue
+		}
+		if dependency := blockedDependency(name, unavailable); dependency != "" {
+			unavailable[name] = true
+			entry["state"] = "skipped"
+			entry["error"] = "skipped: depends on blocked " + dependency
 			entries = append(entries, entry)
 			continue
 		}
@@ -435,9 +454,25 @@ func Execute(context *Context) map[string]any {
 		}
 		spec := context.Spec(name)
 		actions := []string{}
+		if blocker := requirementsBlock(context, name, spec, &actions); blocker != "" {
+			// Nothing was changed and nothing is observed: the operator has
+			// to provide something first, and the message says what.
+			unavailable[name] = true
+			entry["actions"] = actions
+			entry["state"] = "blocked"
+			entry["error"] = blocker
+			entries = append(entries, entry)
+			if rankOf("blocked") > rankOf(worst) {
+				worst = "blocked"
+			}
+			continue
+		}
 		state, entryError := runComponent(context, handler, spec, entry, &actions)
 		entry["actions"] = actions
 		entry["state"] = state
+		if state == "blocked" {
+			unavailable[name] = true
+		}
 		if entryError != "" {
 			entry["error"] = entryError
 		}
@@ -479,6 +514,8 @@ func runComponent(
 
 func classify(err error) (string, string) {
 	switch typed := err.(type) {
+	case *Blocked:
+		return "blocked", typed.Message
 	case *RolledBack:
 		return "rolled-back", typed.Message
 	case *StepFailed:

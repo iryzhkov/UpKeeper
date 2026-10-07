@@ -72,6 +72,11 @@ func huyangTestPrepare(t *testing.T, world huyangTestWorld) (*Context, *adapterT
 	t.Helper()
 	runner := &adapterTestRunner{}
 	context := adapterTestContext(t, runner)
+	// Upgrade and rollback fixtures represent a provisioned build host.
+	// Keep lookup isolated from the operator's tools while declaring the
+	// prerequisites that Apply now checks at its build decision.
+	bin := freshTestTools(t, context.Home, "git", "go", "make")
+	context.Env = []string{"PATH=" + bin}
 	checkout := context.Path(".local/share/huyang")
 	if err := os.MkdirAll(filepath.Join(checkout, "bin"), 0o755); err != nil {
 		t.Fatal(err)
@@ -84,6 +89,8 @@ func huyangTestPrepare(t *testing.T, world huyangTestWorld) (*Context, *adapterT
 	runner.handle = func(command procx.Command) procx.Result {
 		last := command.Argv[len(command.Argv)-1]
 		switch {
+		case adapterTestMatches(command.Argv, "go", "env", "GOVERSION"):
+			return procx.Result{Stdout: "go1.26.8\n"}
 		case adapterTestMatches(command.Argv, "rev-parse", "HEAD"):
 			return procx.Result{Stdout: head}
 		case adapterTestMatches(command.Argv, "status", "--porcelain"):

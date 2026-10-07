@@ -134,7 +134,11 @@ func t3Observe(c *Context, spec map[string]any) (map[string]any, error) {
 			}
 		}
 	}
-	checked := c.Runner(procx.Command{Argv: []string{t3StewardBinary(c), "check"}, Env: c.Env, Timeout: 30 * time.Second})
+	checker := t3StewardBinary(c)
+	if c.stewardCheckBinary != "" {
+		checker = c.stewardCheckBinary
+	}
+	checked := c.Runner(procx.Command{Argv: []string{checker, "check"}, Env: c.Env, Timeout: 30 * time.Second})
 	check := commandResult(checked)
 	if served := t3ServedPattern.FindStringSubmatch(check.Output); served != nil {
 		observed["served"] = served[1]

@@ -77,6 +77,9 @@ func DoctorWith(
 			continue
 		}
 
+		// Missing OS prerequisites are blockers for a converge, named with the
+		// command that installs them. They do not change the host's grade.
+		entry["blockers"] = prerequisiteBlockers(observed)
 		checks := hostChecks(spec, observed)
 		failed := []any{}
 		for _, item := range checks {
@@ -257,6 +260,25 @@ func check(name string, passed bool, actual any, expected any) map[string]any {
 }
 
 // hostChecks is every prerequisite a reachable host is judged on.
+// prerequisiteBlockers lists, in component order, what the probe found
+// missing, as {component, name, install} entries.
+func prerequisiteBlockers(observed map[string]any) []any {
+	missing := object(object(observed, "prerequisites"), "missing")
+	blockers := []any{}
+	for _, component := range safety.SortedKeys(missing) {
+		items, _ := missing[component].([]any)
+		for _, item := range items {
+			fields, _ := item.(map[string]any)
+			blockers = append(blockers, map[string]any{
+				"component": component,
+				"name":      fields["name"],
+				"install":   fields["install"],
+			})
+		}
+	}
+	return blockers
+}
+
 func hostChecks(spec inventory.HostSpec, observed map[string]any) []any {
 	operatingSystem := object(observed, "os")
 	ansible := object(observed, "ansible")

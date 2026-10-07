@@ -477,6 +477,9 @@ type baselineOriginalOperation struct {
 	objectRead    func(string)
 	afterStart    func(*exec.Cmd, []string)
 	afterWait     func(*exec.Cmd, []string)
+	// Initial-acquisition tests can isolate the separately tested version floor.
+	// The real fixed Git command and its no-lazy-fetch option still run first.
+	versionCheck func([]byte) error
 }
 
 func (op *baselineOriginalOperation) verifyPhysical(ctx context.Context) error {
@@ -529,6 +532,13 @@ func (op *baselineOriginalOperation) supported(ctx context.Context, root string)
 	if err != nil {
 		return err
 	}
+	if op.versionCheck != nil {
+		return op.versionCheck(b)
+	}
+	return baselineSupportedGitVersion(b)
+}
+
+func baselineSupportedGitVersion(b []byte) error {
 	var major, minor, patch int
 	if _, err := fmt.Sscanf(string(b), "git version %d.%d.%d", &major, &minor, &patch); err != nil || major != 2 || minor < 48 {
 		return errors.New("baseline unsupported Git no-lazy-fetch version")

@@ -36,6 +36,9 @@ type HostSpec struct {
 	NebulaAddress         *string `json:"nebula_address"`
 	SetupCheckout         *string `json:"setup_checkout"`
 	SelfManaged           bool    `json:"self_managed"`
+	// InstallOSPackages opts the host in to having missing OS prerequisites
+	// installed by the agent, which it does only with passwordless sudo.
+	InstallOSPackages bool `json:"install_os_packages"`
 }
 
 // Config is the validated pair of sources of truth.
@@ -92,13 +95,17 @@ func loadJSONDocument(path string) (map[string]any, error) {
 	if err != nil {
 		return nil, failure.Validation("cannot load %s: %v", filepath.Base(path), err)
 	}
+	return decodeJSONDocument(data, filepath.Base(path))
+}
+
+func decodeJSONDocument(data []byte, name string) (map[string]any, error) {
 	value, err := canonjson.Decode(data)
 	if err != nil {
-		return nil, failure.Validation("cannot load %s: %v", filepath.Base(path), err)
+		return nil, failure.Validation("cannot load %s: %v", name, err)
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
-		return nil, failure.Validation("%s must contain an object", filepath.Base(path))
+		return nil, failure.Validation("%s must contain an object", name)
 	}
 	return object, nil
 }
@@ -109,6 +116,20 @@ func LoadInventory(path string) (map[string]HostSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	return inventoryHosts(document)
+}
+
+// ParseInventory validates the bytes of an inventory/hosts.yml, such as the
+// version a Git commit holds.
+func ParseInventory(data []byte) (map[string]HostSpec, error) {
+	document, err := decodeJSONDocument(data, "hosts.yml")
+	if err != nil {
+		return nil, err
+	}
+	return inventoryHosts(document)
+}
+
+func inventoryHosts(document map[string]any) (map[string]HostSpec, error) {
 	all, _ := document["all"].(map[string]any)
 	vars, _ := all["vars"].(map[string]any)
 	if !isSchemaVersion(vars["fleet_inventory_schema_version"]) {
@@ -223,6 +244,13 @@ func hostSpec(name string, raw map[string]any) (HostSpec, error) {
 			return HostSpec{}, failure.Validation("%s.self_managed must be boolean", name)
 		}
 		spec.SelfManaged = managed
+	}
+	if value, present := raw["install_os_packages"]; present && value != nil {
+		install, ok := value.(bool)
+		if !ok {
+			return HostSpec{}, failure.Validation("%s.install_os_packages must be boolean", name)
+		}
+		spec.InstallOSPackages = install
 	}
 	for _, key := range []string{"architecture", "os_id", "os_version"} {
 		value, err := required(key)

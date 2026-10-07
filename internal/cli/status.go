@@ -363,6 +363,8 @@ func lastRunReason(run lastRun, component string) string {
 	switch outcome.State {
 	case "failed", "rolled-back", "rollback-failed":
 		return fmt.Sprintf("%s %s %s: %s", prefix, outcome.State, component, firstLineOf(outcome.Error))
+	case "blocked":
+		return fmt.Sprintf("%s blocked %s: %s", prefix, component, firstLineOf(outcome.Error))
 	case "deferred":
 		detail := outcome.Error
 		if len(outcome.Actions) > 0 {

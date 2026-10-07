@@ -37,6 +37,11 @@ func printDoctor(out io.Writer, report map[string]any) {
 			suffix = " failed=" + join(failed, ",")
 		}
 		fmt.Fprintf(out, "%s: %s%s\n", text(host["name"]), text(host["result"]), suffix)
+		for _, item := range list(host["blockers"]) {
+			blocker, _ := item.(map[string]any)
+			fmt.Fprintf(out, "  blocker: %s needs %s; %s\n",
+				text(blocker["component"]), text(blocker["name"]), text(blocker["install"]))
+		}
 	}
 }
 

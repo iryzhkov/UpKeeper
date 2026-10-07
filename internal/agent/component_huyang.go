@@ -2,9 +2,12 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -357,13 +360,38 @@ func huyangBuildAndRestart(
 func huyangApply(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
 ) (string, error) {
-	pending, touched, err := huyangReconcileUnit(c, spec, actions)
-	if err != nil {
-		return "", err
+	var pending map[string][]byte
+	var touched, prepared bool
+	prepareUnit := func() error {
+		var err error
+		pending, touched, err = huyangReconcileUnit(c, spec, actions)
+		prepared = err == nil
+		return err
 	}
-	state, err := huyangApplyCheckout(c, spec, before, actions)
+	prepareBuild := func() error {
+		if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
+			return &Blocked{Message: blocker}
+		}
+		return prepareUnit()
+	}
+	state, err := huyangApplyCheckout(c, spec, before, actions, prepareBuild)
 	if err != nil {
+		// Existing refusal paths still reconcile legacy unit ordering. A
+		// prerequisite blocker must leave the unit untouched.
+		var blocked *Blocked
+		if !prepared && !errors.As(err, &blocked) {
+			if unitErr := prepareUnit(); unitErr != nil {
+				return "", unitErr
+			}
+		}
 		return state, err
+	}
+	// A converged or ahead checkout did not select a build, but still needs
+	// its unit migration. Build paths prepare it only after requirements pass.
+	if !prepared {
+		if err := prepareUnit(); err != nil {
+			return "", err
+		}
 	}
 	service := adapterSpecString(spec, "service")
 	if err := checkUserUnitOrdering(c, service, pending, actions); err != nil {
@@ -462,18 +490,64 @@ func huyangReconcileUnit(
 	return pending, true, nil
 }
 
+// huyangWouldBuild reports whether huyangApplyCheckout would build, by asking
+// what it asks in the same order; an answer that cannot be had is yes. A
+// checkout already on the pin is built again to finish an interrupted
+// bootstrap, and when its service is not running or does not answer the probe.
+// Only the last needs the probe, and it is asked only when everything else
+// says the installation is converged.
+func huyangWouldBuild(c *Context, spec map[string]any) bool {
+	wanted := adapterSpecString(spec, "commit")
+	checkout := c.Path(adapterSpecString(spec, "path"))
+	head := c.GitHead(checkout)
+	if wanted == "" || head == "" {
+		return true
+	}
+	// Local changes are refused, and so is an interrupted bootstrap whose
+	// checkout has left the pin; neither builds.
+	if dirty := c.GitDirty(checkout); dirty != nil && *dirty {
+		return false
+	}
+	if pathExists(c.Path(huyangBootstrapPending)) {
+		return head == wanted
+	}
+	if head != wanted {
+		// A checkout ahead of the pin is kept. Whether one that is not
+		// diverges is only known after a fetch, so it counts as a build.
+		return c.Payload.AllowDowngrade || !c.GitContains(checkout, wanted, head)
+	}
+	if !c.UnitActive(adapterSpecString(spec, "service")) || !pathExists(huyangSocket(c)) {
+		return true
+	}
+	return !huyangProbeFunc(c, checkout, huyangProbeTools(spec)).OK
+}
+
 // huyangApplyCheckout moves the checkout to the pinned commit, or seeds Huyang
 // on a host that has none.
 func huyangApplyCheckout(
 	c *Context, spec map[string]any, before map[string]any, actions *[]string,
+	prepareBuild ...func() error,
 ) (string, error) {
 	checkout := c.Path(adapterSpecString(spec, "path"))
 	commit, _ := before["commit"].(string)
 	if commit == "" {
-		return huyangBootstrap(c, spec, actions)
+		// A checkout an interrupted bootstrap left whose HEAD cannot be read
+		// is still that bootstrap's, and its marker must be kept.
+		if pathExists(checkout) && pathExists(c.Path(huyangBootstrapPending)) {
+			return "", huyangResumeRefused(c, checkout, "has a HEAD that could not be read")
+		}
+		return huyangBootstrap(c, spec, actions, prepareBuild...)
 	}
+	// Local changes outrank the release, including a bootstrap an earlier run
+	// left unfinished: whoever changed the checkout since owns it now.
 	if dirty, _ := before["dirty"].(bool); dirty {
+		if pathExists(c.Path(huyangBootstrapPending)) {
+			return "", huyangResumeRefused(c, checkout, "has local changes")
+		}
 		return "", Failf("%s has local changes; refusing to move it", checkout)
+	}
+	if pathExists(c.Path(huyangBootstrapPending)) {
+		return huyangResumeBootstrap(c, spec, checkout, commit, actions, prepareBuild...)
 	}
 	wanted := adapterSpecString(spec, "commit")
 	allowDowngrade := c.Payload.AllowDowngrade
@@ -491,6 +565,16 @@ func huyangApplyCheckout(
 			return "converged", nil
 		}
 		*actions = append(*actions, "running service does not answer the probe; rebuilding")
+	}
+	// Preflight may have seen a healthy service that stopped before Observe,
+	// or a probe that answered before this one failed. Enforce the build
+	// requirements now, before any checkout preparation or dry-run promise.
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
+	} else if blocker := requirementsBlockForStaging(c, "huyang", spec, actions, true); blocker != "" {
+		return "", &Blocked{Message: blocker}
 	}
 	ref := adapterSpecString(spec, "ref")
 	if c.DryRun {
@@ -537,7 +621,7 @@ func huyangApplyCheckout(
 // rather than something a convergence may overwrite. The clone and the build
 // happen in a private staging directory, so a build that fails never puts
 // anything at the live path.
-func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string, error) {
+func huyangBootstrap(c *Context, spec map[string]any, actions *[]string, prepareBuild ...func() error) (string, error) {
 	relative := adapterSpecString(spec, "path")
 	checkout := c.Path(relative)
 	service := adapterSpecString(spec, "service")
@@ -548,6 +632,11 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 	if pathExists(unit) {
 		return "", errors.New(
 			"Huyang checkout is absent but a user unit exists; inspect it first")
+	}
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
 	}
 	for _, tool := range []string{"git", "go", "make"} {
 		if adapterLookPath(c, tool) == "" {
@@ -591,43 +680,46 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 			return "", err
 		}
 	}
-	// The directory is an exclusive claim: even an empty pre-existing directory
-	// at the live path belongs to whoever made it.
-	if err := os.Mkdir(checkout, 0o755); err != nil {
+	// From here a crash leaves a checkout without a started service; the
+	// marker makes the next run finish the bootstrap instead of mistaking the
+	// checkout for an installed Huyang.
+	if err := os.MkdirAll(filepath.Dir(c.Path(huyangBootstrapPending)), 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Rename(candidate, checkout); err != nil {
+	if err := fsatomic.WritePrivateFile(c.Path(huyangBootstrapPending), []byte(relative+"\n")); err != nil {
+		return "", err
+	}
+	// The rename is the exclusive claim: even an empty pre-existing directory
+	// at the live path belongs to whoever made it, so it is never replaced.
+	// Claiming the path with a directory first cannot work, because nothing
+	// can then be renamed onto that directory.
+	if err := fsatomic.RenameNoReplace(candidate, checkout); err != nil {
+		// Nothing of this bootstrap is at the live path, so there is nothing
+		// for a later run to finish.
+		_ = os.Remove(c.Path(huyangBootstrapPending))
+		if errors.Is(err, fs.ErrExist) {
+			return "", errors.New(checkout + " appeared during the bootstrap; preserving it and the built candidate at " + candidate)
+		}
 		return "", err
 	}
 	if err := os.Remove(stage); err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+	if err := huyangSeedUnit(unit, relative); err != nil {
 		return "", err
 	}
-	handle, err := os.OpenFile(unit, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return "", err
-	}
-	if _, err := handle.WriteString(fmt.Sprintf(huyangUnitTemplate, relative)); err != nil {
-		_ = handle.Close()
-		return "", err
-	}
-	if err := handle.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(unit, 0o644); err != nil {
-		return "", err
-	}
-	if err := huyangStart(c, spec, checkout, service); err != nil {
+	if err := huyangStart(c, spec, checkout, service, false); err != nil {
 		// Keep the candidate bytes and the unit file for diagnosis; the
 		// scheduler's host hold is what prevents a blind retry.
 		if _, stopErr := c.Must(
 			[]string{"systemctl", "--user", "disable", "--now", service},
 			60*time.Second, "", "stop failed Huyang bootstrap",
 		); stopErr != nil {
-			return "", stopErr
+			return "", Failf("%s; %s", err.Error(), stopErr.Error())
 		}
+		return "", err
+	}
+	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
 	*actions = append(*actions, fmt.Sprintf("installed Huyang %s; enabled %s",
@@ -635,8 +727,210 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string) (string
 	return "updated", nil
 }
 
+// huyangBootstrapPending marks a bootstrap that has put the checkout in place
+// but not yet seeded and started its unit. It is written before the checkout
+// is renamed into place and removed once the service answers.
+const huyangBootstrapPending = ".local/state/dev-fleet/unit-migrations/huyang-bootstrap.pending"
+
+// huyangSeedUnit writes the bootstrap unit, never over an existing file.
+func huyangSeedUnit(unit, relative string) error {
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		return err
+	}
+	handle, err := os.OpenFile(unit, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := handle.WriteString(fmt.Sprintf(huyangUnitTemplate, relative)); err != nil {
+		_ = handle.Close()
+		return err
+	}
+	if err := handle.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(unit, 0o644)
+}
+
+// huyangResumeBootstrap finishes a bootstrap a crash interrupted after the
+// checkout was in place: it builds the checkout again, seeds the unit if the
+// crash came first, or rewrites one the crash left half written, then enables
+// and proves the service. The build output is ignored by git, so a clean
+// checkout on the pin says nothing about the binary the unit would start, and
+// the pin may have moved since the bootstrap built it. A checkout that moved
+// since, or a unit that is not the seeded one, is the operator's to look at.
+func huyangResumeBootstrap(
+	c *Context, spec map[string]any, checkout, commit string, actions *[]string,
+	prepareBuild ...func() error,
+) (string, error) {
+	relative := adapterSpecString(spec, "path")
+	service := adapterSpecString(spec, "service")
+	unit := c.Path(".config/systemd/user", service)
+	if commit != adapterSpecString(spec, "commit") {
+		return "", huyangResumeRefused(c, checkout, "is on "+adapterShortCommit(commit)+", not the pinned commit")
+	}
+	// The observation may be stale by now. Nothing is seeded or started, and no
+	// dry run promises either, unless the checkout is still on the pin and
+	// provably has no local changes.
+	if err := huyangResumeCheckout(c, checkout, commit); err != nil {
+		return "", err
+	}
+	want := fmt.Sprintf(huyangUnitTemplate, relative)
+	before, err := huyangResumeUnit(c, unit, service, want)
+	if err != nil {
+		return "", err
+	}
+	// Only a regular file can be removed once the bootstrap is finished;
+	// anything else would leave a running service and a marker that makes
+	// every later run build and restart it again.
+	if info, err := os.Lstat(c.Path(huyangBootstrapPending)); err != nil || !info.Mode().IsRegular() {
+		return "", Failf("an interrupted Huyang bootstrap found its marker %s is not a regular file; "+
+			"inspect it, and replace it with an empty file to let the next run finish the bootstrap",
+			c.Path(huyangBootstrapPending))
+	}
+	if len(prepareBuild) > 0 {
+		if err := prepareBuild[0](); err != nil {
+			return "", err
+		}
+	}
+	if c.DryRun {
+		*actions = append(*actions, "would finish the interrupted Huyang bootstrap: build, seed and enable "+service)
+		return "updated", nil
+	}
+	// The directory stays open across the build, so its inode cannot be freed
+	// and handed to a directory created in its place meanwhile.
+	handle, err := os.Open(checkout)
+	if err != nil {
+		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
+	defer handle.Close()
+	origin, err := handle.Stat()
+	if err != nil {
+		return "", huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
+	if _, err := c.Must(huyangBuildCommand(spec), 600*time.Second, checkout, "Huyang build"); err != nil {
+		return "", err
+	}
+	*actions = append(*actions, "built "+adapterShortCommit(commit))
+	// The build can take minutes, and the checkout and the unit stay the
+	// operator's meanwhile: both are checked again, the checkout must still be
+	// the directory that was built (its build output is ignored by git, so
+	// another clone on the pin looks the same), and the unit must be exactly
+	// what it was before the build, before anything is seeded or started.
+	if now, err := os.Stat(checkout); err != nil || !os.SameFile(origin, now) {
+		return "", huyangResumeRefused(c, checkout, "replaced while it built")
+	}
+	if err := huyangResumeCheckout(c, checkout, commit); err != nil {
+		return "", err
+	}
+	after, err := huyangResumeUnit(c, unit, service, want)
+	if err != nil {
+		return "", err
+	}
+	if (before == nil) != (after == nil) || (before != nil && !bytes.Equal(*before, *after)) {
+		return "", Failf("an interrupted Huyang bootstrap found %s changed while it built; inspect it. "+
+			"Keep %s: the next run finishes the bootstrap once the unit is the seeded one or absent",
+			unit, c.Path(huyangBootstrapPending))
+	}
+	if after == nil || string(*after) != want {
+		// Absent, or a prefix of the template the crash cut short.
+		if err := os.Remove(unit); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		if err := huyangSeedUnit(unit, relative); err != nil {
+			return "", err
+		}
+	}
+	if err := huyangStart(c, spec, checkout, service, true); err != nil {
+		// As after a failed bootstrap: an unproven service is not left enabled
+		// at boot, and the marker stays for the next run.
+		if _, stopErr := c.Must(
+			[]string{"systemctl", "--user", "disable", "--now", service},
+			60*time.Second, "", "stop failed Huyang bootstrap",
+		); stopErr != nil {
+			return "", Failf("%s; %s", err.Error(), stopErr.Error())
+		}
+		return "", err
+	}
+	if err := os.Remove(c.Path(huyangBootstrapPending)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	*actions = append(*actions, fmt.Sprintf("finished the interrupted Huyang bootstrap at %s; enabled %s",
+		adapterShortCommit(commit), service))
+	return "updated", nil
+}
+
+// huyangResumeCheckout refuses recovery unless the checkout is provably on
+// the pin without local changes.
+func huyangResumeCheckout(c *Context, checkout, commit string) error {
+	dirty := c.GitDirty(checkout)
+	if dirty == nil || *dirty || c.GitHead(checkout) != commit {
+		return huyangResumeRefused(c, checkout, "changed or could not be read")
+	}
+	return nil
+}
+
+// huyangResumeUnit reads the unit an interrupted bootstrap left: nil when
+// there is none, otherwise its bytes, the start of the seeded unit. Only a
+// regular file holding the start of the template is the seeded unit a crash
+// cut short. A mask (a link to /dev/null) or an empty file reads as nothing,
+// which is a prefix of anything, so neither is taken for one.
+func huyangResumeUnit(c *Context, unit, service, want string) (*[]byte, error) {
+	info, err := os.Lstat(unit)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
+		return nil, Failf("an interrupted Huyang bootstrap found %s masked, empty or not a regular file; "+
+			"inspect it. Only the next run's bootstrap enables %s at boot: remove the file to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, service, c.Path(huyangBootstrapPending))
+	}
+	// A unit longer than the template cannot be the start of it, so no more
+	// than one byte past the template is ever read.
+	var raw []byte
+	if err == nil {
+		raw, err = huyangReadAtMost(unit, len(want)+1)
+	}
+	if err != nil {
+		return nil, Failf("an interrupted Huyang bootstrap could not read %s (%v); inspect it. "+
+			"Only the next run's bootstrap enables %s at boot: make it readable or remove it to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, err, service, c.Path(huyangBootstrapPending))
+	}
+	if len(raw) == 0 || !strings.HasPrefix(want, string(raw)) {
+		return nil, Failf("an interrupted Huyang bootstrap found %s changed; inspect it. "+
+			"Only the next run's bootstrap enables %s at boot: restore the seeded unit to let it "+
+			"finish, or enable the service yourself before removing %s",
+			unit, service, c.Path(huyangBootstrapPending))
+	}
+	return &raw, nil
+}
+
+// huyangReadAtMost reads up to limit bytes from the start of path.
+func huyangReadAtMost(path string, limit int) ([]byte, error) {
+	handle, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	return io.ReadAll(io.LimitReader(handle, int64(limit)))
+}
+
+// huyangResumeRefused explains why an interrupted bootstrap was not finished.
+// The pending marker is what makes a later run seed and enable the unit, so the
+// operator is told to keep it: the normal update path only restarts Huyang and
+// would leave a service that never starts at boot.
+func huyangResumeRefused(c *Context, checkout, why string) error {
+	return Failf("an interrupted Huyang bootstrap found %s %s; preserving local work. "+
+		"Keep %s: once the checkout is back on the pinned commit without local changes, "+
+		"the next run finishes the bootstrap and enables the service", checkout, why, c.Path(huyangBootstrapPending))
+}
+
 // huyangStart brings a freshly seeded unit up and proves it answers the probe.
-func huyangStart(c *Context, spec map[string]any, checkout, service string) error {
+// With restart, a unit that was already running (a crash after it was enabled,
+// or a reboot since) is restarted, because enable --now leaves a running unit
+// serving the binary it started with.
+func huyangStart(c *Context, spec map[string]any, checkout, service string, restart bool) error {
 	if _, err := c.Must([]string{"systemctl", "--user", "daemon-reload"},
 		0, "", "Huyang unit reload"); err != nil {
 		return err
@@ -644,6 +938,19 @@ func huyangStart(c *Context, spec map[string]any, checkout, service string) erro
 	if _, err := c.Must([]string{"systemctl", "--user", "enable", "--now", service},
 		60*time.Second, "", "Huyang service start"); err != nil {
 		return err
+	}
+	if restart {
+		if _, err := c.Must([]string{"systemctl", "--user", "restart", service},
+			60*time.Second, "", "Huyang service restart"); err != nil {
+			return err
+		}
+		// The socket the previous process left can still be there when
+		// restart returns, before the new process listens; settle as the
+		// ordinary update path does before probing.
+		if err := huyangWaitForSocket(c); err != nil {
+			return err
+		}
+		time.Sleep(huyangSettleDelay)
 	}
 	probe, err := huyangWaitProbe(c, checkout, huyangProbeTools(spec))
 	if err != nil {

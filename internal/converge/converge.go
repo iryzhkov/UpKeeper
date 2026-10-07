@@ -224,6 +224,7 @@ func Fleet(
 			ReconcileT3Transaction: options.ReconcileT3,
 			Host: agent.HostRef{
 				Name: name, OSID: spec.OSID, SetupCheckout: spec.SetupCheckout,
+				InstallOSPackages: spec.InstallOSPackages,
 			},
 			Components:            selected,
 			Manifest:              value.Manifest,
@@ -395,7 +396,7 @@ func ExitCodeFor(hosts []any) int {
 		return exitcode.LockContention
 	case offline:
 		return exitcode.Partial
-	case states["ahead"] || states["deferred"]:
+	case states["ahead"] || states["deferred"] || states["blocked"]:
 		return exitcode.Drift
 	default:
 		return exitcode.Success

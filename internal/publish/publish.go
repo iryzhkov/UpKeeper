@@ -94,6 +94,9 @@ func Release(root string, options Options) (map[string]any, error) {
 	var authoredManifest []byte
 	var previous release.Release
 	var historicalErr error
+	// authoredInventory is the inventory an authored release depends on and
+	// the committed one lacks, or nil when the release needs nothing from it.
+	var authoredInventory []byte
 	if options.Authored {
 		if options.ExpectedHead == "" || options.ExpectedReleaseSHA256 == "" {
 			return nil, failure.Push("authored publication requires --expect-head and --expect-release-sha256")
@@ -133,6 +136,10 @@ func Release(root string, options Options) (map[string]any, error) {
 			if fleetErr = document.CheckInventory(config.KnownHosts()); fleetErr != nil {
 				return nil, fleetErr
 			}
+		}
+		authoredInventory, err = authoredInventoryDependency(root, runner, options.ExpectedHead, captured)
+		if err != nil {
+			return nil, err
 		}
 	} else {
 		// The resident-instruction gate lives inside Capture, so it runs before
@@ -174,10 +181,14 @@ func Release(root string, options Options) (map[string]any, error) {
 	paths := releasePaths
 	if options.Authored {
 		paths = authoredReleasePaths(captured, previous)
+		if authoredInventory != nil {
+			paths = append(paths, inventoryPath)
+			sort.Strings(paths[2:])
+		}
 	}
 	var head, branch string
 	if options.Authored {
-		head, branch, err = commitAuthored(root, options, runner, captured, authoredManifest, paths, summary)
+		head, branch, err = commitAuthored(root, options, runner, captured, authoredManifest, authoredInventory, paths, summary)
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +266,58 @@ func releaseCommitMessage(controller string, summary []string) string {
 	return message
 }
 
-func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, expectedManifest []byte, paths, summary []string) (string, string, error) {
+// inventoryPath is the repository-relative inventory an authored release may
+// depend on.
+const inventoryPath = "inventory/hosts.yml"
+
+// authoredInventoryDependency decides whether an authored release needs the
+// working tree's inventory published with it. Every host the release names has
+// to be in that inventory, or nothing is published. When the inventory at the
+// expected head lacks one of them, the working inventory is part of the
+// release and its bytes are returned; otherwise nil, and an unrelated
+// inventory edit stays the operator's own uncommitted work.
+func authoredInventoryDependency(
+	root string, runner procx.Runner, head string, captured release.Release,
+) ([]byte, error) {
+	referenced, err := release.ReferencedHosts(captured)
+	if err != nil {
+		return nil, err
+	}
+	// The bytes judged here are the bytes that would be published, so the
+	// staging check below compares against exactly what was validated.
+	working, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(inventoryPath)))
+	if err != nil {
+		return nil, failure.Push("cannot read %s: %v", inventoryPath, err)
+	}
+	known, err := inventory.ParseInventory(working)
+	if err != nil {
+		return nil, err
+	}
+	unknown := []string{}
+	for _, name := range referenced {
+		if _, present := known[name]; !present {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, failure.Push("the release names hosts that %s does not know: %s; add them to the inventory, then publish both together",
+			inventoryPath, strings.Join(unknown, ", "))
+	}
+	committed := map[string]inventory.HostSpec{}
+	if shown, showErr := git(runner, root, 60*time.Second, "show", head+":"+inventoryPath); showErr == nil {
+		if parsed, parseErr := inventory.ParseInventory([]byte(shown)); parseErr == nil {
+			committed = parsed
+		}
+	}
+	for _, name := range referenced {
+		if _, present := committed[name]; !present {
+			return working, nil
+		}
+	}
+	return nil, nil
+}
+
+func commitAuthored(root string, options Options, runner procx.Runner, captured release.Release, expectedManifest, expectedInventory []byte, paths, summary []string) (string, string, error) {
 	branchRef, err := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
 		return "", "", failure.Push("cannot publish authored release from a detached HEAD")
@@ -365,6 +427,18 @@ func commitAuthored(root string, options Options, runner procx.Runner, captured 
 		sum := sha256.Sum256([]byte(payload))
 		if hex.EncodeToString(sum[:]) != expected {
 			return "", "", failure.Push("authored companion file changed while staging: %s", store)
+		}
+	}
+	if expectedInventory != nil {
+		if err = verifyRegular(inventoryPath); err != nil {
+			return "", "", err
+		}
+		stagedInventory, showErr := run("", "show", ":"+inventoryPath)
+		if showErr != nil {
+			return "", "", showErr
+		}
+		if stagedInventory != string(expectedInventory) {
+			return "", "", failure.Push("authored inventory changed while staging: %s", inventoryPath)
 		}
 	}
 	if err = verifyFences(); err != nil {

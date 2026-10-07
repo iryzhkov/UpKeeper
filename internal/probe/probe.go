@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/hostevidence"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
+	"github.com/iryzhkov/UpKeeper/internal/prereq"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/redact"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
@@ -207,7 +209,45 @@ func collect(home string, runner procx.Runner) map[string]any {
 		"source_access":           sources,
 		"components":              components(home, runner),
 		"locks":                   locks(home),
+		"prerequisites":           prerequisites(home, release, runner),
 	}
+}
+
+// prerequisites reports the OS packages this host lacks for any component, with
+// the command that installs each, so that doctor names a blocker before a
+// converge runs into it. The search path is the one the agent runs with, never
+// the SSH session's, because that is where the agent will look.
+func prerequisites(home string, release map[string]string, runner procx.Runner) map[string]any {
+	family := prereq.Family(release["ID"])
+	if family == "" && goruntime.GOOS == "darwin" {
+		family = prereq.Darwin
+	}
+	if family == "" {
+		for _, like := range strings.Fields(release["ID_LIKE"]) {
+			if family = prereq.Family(like); family != "" {
+				break
+			}
+		}
+	}
+	env := append(os.Environ(), "PATH="+prereq.AgentPath(home, os.Getenv("PATH")))
+	missing := map[string]any{}
+	for _, component := range prereq.Components() {
+		items := []any{}
+		for _, item := range prereq.Catalogue[component] {
+			if item.Present(env, runner) {
+				continue
+			}
+			items = append(items, map[string]any{
+				"name":    item.Name,
+				"install": item.Remedy(family),
+				"staging": item.Staging,
+			})
+		}
+		if len(items) > 0 {
+			missing[component] = items
+		}
+	}
+	return map[string]any{"family": nullable(family), "missing": missing}
 }
 
 // hostname reports this machine's name, or nil when the kernel will not say.
