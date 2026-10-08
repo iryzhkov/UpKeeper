@@ -34,6 +34,8 @@ type arguments struct {
 	// doctor and status
 	limit        *string
 	probeTimeout int
+	// expectFile is status's list of accepted non-converged states.
+	expectFile string
 
 	// push
 	remotes             []string
@@ -59,6 +61,9 @@ type arguments struct {
 	// transaction left at files-restored. It is its own flag rather than a
 	// mode of a general --force: it names one transaction on one host.
 	reconcileT3 string
+	// overrideHold is pull's explicit, logged passage through operator
+	// holds. Like reconcileT3 it is its own flag, never a mode of --force.
+	overrideHold bool
 
 	// shared
 	components []string
@@ -85,6 +90,10 @@ type arguments struct {
 	holdAction string
 	holdHost   string
 	holdReason string
+	// holdHosts are the hosts of an operator hold set or clear; holdHost is
+	// the one host of a scheduled marker clear.
+	holdHosts []string
+	holdUntil string
 
 	// project
 	projectAction                string
@@ -125,6 +134,11 @@ var Commands = []string{
 
 const agentCommand = "__agent"
 const probeCommand = "__probe"
+
+// holdAgentCommand is the target-side half of `hold set` and `hold clear
+// --hosts`: it records or clears an operator hold in the target's own state
+// from a JSON request on standard input.
+const holdAgentCommand = "__hold"
 
 // agentProgramFlag is the program fence on the agent's command line, spelled
 // as converge.AgentProgramFlag. An agent from before the fence rejects it as
@@ -208,7 +222,7 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 			parsed.asJSON = true
 		}
 		return parsed, nil
-	case probeCommand, "version":
+	case probeCommand, holdAgentCommand, "version":
 		if len(rest) > 0 {
 			return nil, usagef("unrecognized arguments: %s", strings.Join(rest, " "))
 		}
@@ -248,6 +262,16 @@ func parseProbeCommand(parsed *arguments, argv []string) error {
 					"argument --timeout: invalid choice: %d (choose from 5 through 60)", number)
 			}
 			parsed.probeTimeout = number
+			index = next
+		case "--expect":
+			if parsed.command != "status" {
+				return unrecognized(argv[index])
+			}
+			value, next, err := takeValue(argv, index, "--expect")
+			if err != nil {
+				return err
+			}
+			parsed.expectFile = value
 			index = next
 		default:
 			return unrecognized(argv[index])
@@ -382,6 +406,11 @@ func parsePull(parsed *arguments, argv []string, choices []string) error {
 			}
 			parsed.reconcileT3 = value
 			index = next
+		case "--override-hold":
+			if parsed.command != "pull" {
+				return unrecognized(token)
+			}
+			parsed.overrideHold = true
 		default:
 			return unrecognized(token)
 		}
@@ -766,12 +795,15 @@ func parseSelf(parsed *arguments, argv []string) error {
 	return nil
 }
 
-// parseHold reads `hold show [--json]` and `hold clear HOST --reason TEXT
-// [--json]`. The reason is required on the command line, not prompted for: a
-// cleared hold with no recorded reason is the gap this command exists to close.
+// parseHold reads `hold show [--json]`, `hold set --hosts HOST... --reason
+// TEXT [--until TIME] [--json]`, `hold clear --hosts HOST... --reason TEXT
+// [--json]` for operator holds and `hold clear HOST --reason TEXT [--json]`
+// for a scheduled marker. The reason is required on the command line, not
+// prompted for: a hold set or cleared with no recorded reason is the gap this
+// command exists to close.
 func parseHold(parsed *arguments, argv []string) error {
 	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
-		return usagef("the following arguments are required: action (show or clear)")
+		return usagef("the following arguments are required: action (show, set or clear)")
 	}
 	parsed.holdAction = argv[0]
 	rest := argv[1:]
@@ -783,7 +815,7 @@ func parseHold(parsed *arguments, argv []string) error {
 			}
 			parsed.asJSON = true
 		}
-	case "clear":
+	case "set", "clear":
 		for index := 0; index < len(rest); index++ {
 			token := rest[index]
 			switch {
@@ -796,20 +828,39 @@ func parseHold(parsed *arguments, argv []string) error {
 				}
 				parsed.holdReason = value
 				index = next
-			case strings.HasPrefix(token, "-") || parsed.holdHost != "":
+			case token == "--hosts":
+				values, next, err := takeValues(rest, index, "--hosts")
+				if err != nil {
+					return err
+				}
+				parsed.holdHosts = append(parsed.holdHosts, values...)
+				index = next
+			case token == "--until" && parsed.holdAction == "set":
+				value, next, err := takeValue(rest, index, "--until")
+				if err != nil {
+					return err
+				}
+				parsed.holdUntil = value
+				index = next
+			case strings.HasPrefix(token, "-") || parsed.holdHost != "" || parsed.holdAction == "set":
 				return unrecognized(token)
 			default:
 				parsed.holdHost = token
 			}
 		}
-		if parsed.holdHost == "" {
-			return usagef("the following arguments are required: HOST")
+		switch {
+		case parsed.holdHost != "" && len(parsed.holdHosts) > 0:
+			return usagef("argument --hosts: not allowed with a scheduled marker's HOST")
+		case parsed.holdAction == "set" && len(parsed.holdHosts) == 0:
+			return usagef("the following arguments are required: --hosts")
+		case parsed.holdHost == "" && len(parsed.holdHosts) == 0:
+			return usagef("the following arguments are required: HOST or --hosts")
 		}
 		if strings.TrimSpace(parsed.holdReason) == "" {
 			return usagef("the following arguments are required: --reason")
 		}
 	default:
-		return usagef("argument action: invalid choice: %q (choose from \"show\", \"clear\")",
+		return usagef("argument action: invalid choice: %q (choose from \"show\", \"set\", \"clear\")",
 			parsed.holdAction)
 	}
 	return nil

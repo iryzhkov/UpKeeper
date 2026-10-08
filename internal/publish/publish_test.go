@@ -46,6 +46,14 @@ type fixture struct {
 	// whether it is converged. A host without it cannot be checked at all.
 	generatorInstalled bool
 	failRemote         string
+	// remoteMain is what each remote's main is at, for the publication
+	// preflight; a remote missing from it is at rootCommit, which HEAD has.
+	remoteMain map[string]string
+	// branch is what HEAD is a symbolic ref to; "" is main.
+	branch string
+	// ancestors are the "ancestor descendant" pairs merge-base --is-ancestor
+	// confirms; nil confirms every pair.
+	ancestors          map[string]bool
 	historicalManifest string
 	onAdd              func()
 	headChanged        bool
@@ -162,6 +170,24 @@ func (f *fixture) run(command procx.Command) procx.Result {
 		return procx.Result{Stdout: setupCommit + "\n"}
 	case strings.Contains(joined, "huyang rev-parse HEAD"):
 		return procx.Result{Stdout: f.huyangHead + "\n"}
+	case strings.Contains(joined, " ls-remote --heads "):
+		remote := command.Argv[len(command.Argv)-2]
+		tip, present := f.remoteMain[remote]
+		if !present {
+			tip = rootCommit
+		}
+		if tip == "" {
+			return procx.Result{}
+		}
+		return procx.Result{Stdout: tip + "\trefs/heads/main\n"}
+	case strings.Contains(joined, " fetch --quiet --no-tags "):
+		return procx.Result{}
+	case strings.Contains(joined, " merge-base --is-ancestor "):
+		pair := strings.Join(command.Argv[len(command.Argv)-2:], " ")
+		if f.ancestors != nil && !f.ancestors[pair] {
+			return procx.Result{Code: 1}
+		}
+		return procx.Result{}
 	case strings.HasSuffix(joined, "fetch --quiet origin main"),
 		strings.Contains(joined, "merge-base --is-ancestor"):
 		return procx.Result{}
@@ -189,6 +215,12 @@ func (f *fixture) run(command procx.Command) procx.Result {
 		}
 		return procx.Result{Stdout: release.File + "\n"}
 	case strings.HasSuffix(joined, "symbolic-ref --quiet HEAD"):
+		if f.branch == "detached" {
+			return procx.Result{Code: 1}
+		}
+		if f.branch != "" {
+			return procx.Result{Stdout: "refs/heads/" + f.branch + "\n"}
+		}
 		return procx.Result{Stdout: "refs/heads/main\n"}
 	case strings.HasSuffix(joined, "rev-parse --git-path index"):
 		return procx.Result{Stdout: ".git/index\n"}
@@ -236,11 +268,12 @@ func (f *fixture) did(fragment string) bool {
 func (f *fixture) options() publish.Options {
 	return publish.Options{
 		Controller: "normandy",
-		Remotes:    []string{"origin"},
-		Commit:     true,
-		Push:       true,
-		Home:       f.home,
-		Runner:     f.run,
+		// No names: a publication goes to every configured remote.
+		Remotes: nil,
+		Commit:  true,
+		Push:    true,
+		Home:    f.home,
+		Runner:  f.run,
 	}
 }
 
@@ -304,14 +337,14 @@ func TestNoPushCommitsWithoutPublishing(t *testing.T) {
 func TestAFullRunCommitsAndPushesEveryNamedRemote(t *testing.T) {
 	subject := newFixture(t)
 	options := subject.options()
-	options.Remotes = []string{"origin", "forgejo"}
+	options.Remotes = []string{"origin", "forgejo", "backup"}
 
 	report, err := publish.Release(subject.root, options)
 	if err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 	pushed, _ := report["pushed"].([]string)
-	if len(pushed) != 2 || pushed[0] != "origin main" || pushed[1] != "forgejo main" {
+	if len(pushed) != 3 || pushed[0] != "origin main" || pushed[1] != "forgejo main" || pushed[2] != "backup main" {
 		t.Errorf("pushed is %v", pushed)
 	}
 	if !subject.did("push --quiet origin HEAD:refs/heads/main") {
@@ -554,7 +587,8 @@ func TestAuthoredPublicationRealGitReconcilesOwnedIndexOnly(t *testing.T) {
 		}
 		return strings.TrimSpace(result.Stdout)
 	}
-	runGit("init", "--quiet")
+	// A publication is made from main, whatever git's default branch is here.
+	runGit("init", "--quiet", "--initial-branch=main")
 	runGit("config", "user.name", "UpKeeper Test")
 	runGit("config", "user.email", "upkeeper@example.invalid")
 	if err := os.WriteFile(filepath.Join(f.root, "unrelated"), []byte("base\n"), 0o644); err != nil {
@@ -709,7 +743,8 @@ func TestAuthoredPublicationRealGitNoChangeRefusesUnsafeMode(t *testing.T) {
 		}
 		return strings.TrimSpace(result.Stdout)
 	}
-	runGit("init", "--quiet")
+	// A publication is made from main, whatever git's default branch is here.
+	runGit("init", "--quiet", "--initial-branch=main")
 	runGit("config", "user.name", "UpKeeper Test")
 	runGit("config", "user.email", "upkeeper@example.invalid")
 	runGit("add", ".")

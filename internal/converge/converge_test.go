@@ -61,6 +61,8 @@ func options(t *testing.T, hosts []string) converge.Options {
 		LockStore:   &locks.Store{Root: filepath.Join(base, "locks")},
 		RecordStore: &runstore.Store{Root: filepath.Join(base, "runs")},
 		StoredFiles: map[string]string{},
+		// The operator's real holds never decide a test's outcome.
+		HoldDirectory: filepath.Join(base, "operator-holds"),
 	}
 }
 

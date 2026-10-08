@@ -56,6 +56,9 @@ func printStatus(out io.Writer, report map[string]any) {
 		host, _ := item.(map[string]any)
 		if !flag(host["reachable"]) {
 			fmt.Fprintf(out, "%s: offline (%s)\n", text(host["name"]), errorText(host))
+			if accepted := text(host["accepted"]); accepted != "" {
+				fmt.Fprintf(out, "  accepted: %s\n", accepted)
+			}
 			continue
 		}
 		summaries := []string{}
@@ -67,15 +70,32 @@ func printStatus(out io.Writer, report map[string]any) {
 			if reason := text(component["reason"]); reason != "" {
 				reasons = append(reasons, "  "+text(component["name"])+": "+reason)
 			}
+			if accepted := text(component["accepted"]); accepted != "" {
+				reasons = append(reasons, "  "+text(component["name"])+": accepted: "+accepted)
+			}
 		}
 		fmt.Fprintf(out, "%s: %s [%s]\n",
 			text(host["name"]), text(host["result"]), join(summaries, ", "))
+		if accepted := text(host["accepted"]); accepted != "" {
+			fmt.Fprintf(out, "  accepted: %s\n", accepted)
+		}
 		for _, reason := range reasons {
 			fmt.Fprintln(out, reason)
 		}
 		if line := binaryLine(host); line != "" {
 			fmt.Fprintln(out, line)
 		}
+	}
+	// An expectation that matched nothing is stale: the state it accepted has
+	// gone, or it never named a real one. It fails nothing, but it is said.
+	for _, item := range list(report["expectations_unused"]) {
+		entry, _ := item.(map[string]any)
+		subject := text(entry["host"])
+		if component := text(entry["component"]); component != "" {
+			subject += " " + component
+		}
+		fmt.Fprintf(out, "expectation matched nothing: %s %s (%s)\n",
+			subject, text(entry["state"]), text(entry["reason"]))
 	}
 }
 

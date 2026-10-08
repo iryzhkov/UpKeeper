@@ -108,6 +108,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runAgent(parsed, streams)
 	case probeCommand:
 		return runProbe(streams)
+	case holdAgentCommand:
+		return runHoldAgent(streams)
 	case "version":
 		fmt.Fprintln(streams.Out, buildinfo.Summary())
 		return exitcode.Success, nil
@@ -362,6 +364,14 @@ func runConvergence(parsed *arguments, streams Streams) (int, error) {
 		return exitcode.Preflight, failure.Validation(
 			"timeout must be between 60 and 7200 seconds")
 	}
+	// An explicit pull to a held host is refused whole unless the operator
+	// says --override-hold. A rollback is recovery, not consumption of a new
+	// release, and is not held.
+	if parsed.command == "pull" && !parsed.dryRun && !parsed.overrideHold {
+		if err := pullHoldRefusal(hosts, holdClock()); err != nil {
+			return exitcode.Preflight, err
+		}
+	}
 	document, code, err := converge.Fleet(config, value, converge.Options{
 		Hosts:           hosts,
 		Components:      parsed.components,
@@ -374,6 +384,7 @@ func runConvergence(parsed *arguments, streams Streams) (int, error) {
 		SkipUnreachable: parsed.skipUnreachable,
 		Process:         procx.Run,
 		ReconcileT3:     parsed.reconcileT3,
+		OverrideHold:    parsed.overrideHold || parsed.command == "rollback",
 		// A remote host must run the program the release pins; see the
 		// agent's program fence.
 		ExpectedProgramCommit: converge.ProgramFence(value, parsed.command),
@@ -526,7 +537,19 @@ func runSelfPull(parsed *arguments, streams Streams) (int, error) {
 			scheduledRecordPath(parsed, document), code)
 		return code, nil
 	}
-	if !parsed.dryRun && !parsed.convergeOnly {
+	// An operator hold on this host stops the refresh and the self-update as
+	// well as the convergence: the host is waiting for a person, not for a
+	// newer release. The convergence below reports the host held and records
+	// the run, so the journal and the run store both say why nothing changed.
+	held := false
+	if !parsed.dryRun {
+		if hold, active := selfPullHeld(host, holdClock()); active {
+			held = true
+			fmt.Fprintf(streams.Err, "upkeeper %s: %s; refresh and self-update skipped\n",
+				parsed.command, hold.Describe())
+		}
+	}
+	if !parsed.dryRun && !parsed.convergeOnly && !held {
 		refreshed, err := selfconv.Refresh(root, procx.Run)
 		if err != nil {
 			return reportScheduledFailure(streams, parsed.command, "self-schedule", err)

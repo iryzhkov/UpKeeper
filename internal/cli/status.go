@@ -37,34 +37,26 @@ func runReleaseStatus(parsed *arguments, streams Streams) (int, error) {
 	if len(hosts) == 0 {
 		hosts = config.HostNames()
 	}
+	// The expectations are read before any host is reached, so a malformed
+	// file costs nothing and can never be mistaken for a fleet failure.
+	var expectations []*statusExpectation
+	if parsed.expectFile != "" {
+		if expectations, err = loadStatusExpectations(parsed.expectFile, config.KnownHosts()); err != nil {
+			return exitcode.Preflight, err
+		}
+		if expectations == nil {
+			expectations = []*statusExpectation{}
+		}
+	}
 	doc, _, err := converge.Fleet(config, value, converge.Options{
 		Hosts: hosts, DryRun: true, ObserveOnly: true, ManifestCommit: manifestCommit(root), Timeout: time.Duration(parsed.probeTimeout) * time.Second, Process: procx.Run,
 	})
 	if err != nil {
 		return exitcode.Preflight, err
 	}
-	code := 0
-	result := "converged"
-	for _, raw := range doc["hosts"].([]any) {
-		host := raw.(map[string]any)
-		host["name"] = host["host"]
-		if host["observe_only"] != true {
-			host["result"] = "unavailable"
-			host["error"] = "release observation unavailable; target needs a compatible UpKeeper binary"
-			code = 20
-			result = "partial"
-			continue
-		}
-		switch host["result"] {
-		case "failed":
-			code = 20
-			result = "partial"
-		case "drift":
-			if code == 0 {
-				code = 10
-				result = "drift"
-			}
-		}
+	code, result := classifyStatus(doc, expectations)
+	if parsed.expectFile != "" {
+		doc["expect_file"] = parsed.expectFile
 	}
 	doc["command"] = "status"
 	doc["result"] = result

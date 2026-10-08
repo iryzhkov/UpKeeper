@@ -8,18 +8,24 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/exitcode"
+	"github.com/iryzhkov/UpKeeper/internal/operatorhold"
 	"github.com/iryzhkov/UpKeeper/internal/pytime"
 	"github.com/iryzhkov/UpKeeper/internal/runstore"
 	"github.com/iryzhkov/UpKeeper/internal/safety"
 	"github.com/iryzhkov/UpKeeper/internal/selfconv"
 )
 
-// runHold shows or clears the scheduled hold markers on this host.
+// runHold shows holds, sets or clears operator holds, and clears scheduled
+// hold markers.
 //
-// Both actions work on this host's own state directory only: a hold is written
-// by the process that dispatched, so the laptop's marker lives on the laptop
-// and normandy's markers for the fleet live on normandy.
+// A scheduled marker is cleared on this host's own state directory only: it is
+// written by the process that dispatched, so the laptop's marker lives on the
+// laptop and normandy's markers for the fleet live on normandy. An operator
+// hold is recorded here and on each held host; see runOperatorHold.
 func runHold(parsed *arguments, streams Streams) (int, error) {
+	if len(parsed.holdHosts) > 0 {
+		return runOperatorHold(parsed, streams)
+	}
 	directory, err := selfconv.HoldDirectory()
 	if err != nil {
 		return exitcode.Preflight, err
@@ -28,9 +34,17 @@ func runHold(parsed *arguments, streams Streams) (int, error) {
 	if err != nil {
 		return exitcode.Preflight, err
 	}
-	now := time.Now()
+	now := holdClock()
 	if parsed.holdAction == "show" {
 		markers, err := selfconv.ListHolds(directory, store, now)
+		if err != nil {
+			return exitcode.Preflight, err
+		}
+		operatorDirectory, err := operatorhold.DefaultDirectory()
+		if err != nil {
+			return exitcode.Preflight, err
+		}
+		operatorHolds, err := operatorhold.List(operatorDirectory)
 		if err != nil {
 			return exitcode.Preflight, err
 		}
@@ -39,16 +53,23 @@ func runHold(parsed *arguments, streams Streams) (int, error) {
 			for _, marker := range markers {
 				entries = append(entries, holdDocument(marker))
 			}
+			operatorEntries := make([]any, 0, len(operatorHolds))
+			for _, hold := range operatorHolds {
+				operatorEntries = append(operatorEntries, hold.Document(now))
+			}
 			return exitcode.Success, printJSON(streams.Out, map[string]any{
-				"schema_version": exitcode.SchemaVersion,
-				"command":        "hold",
-				"action":         "show",
-				"directory":      directory,
-				"holds":          entries,
-				"exit_code":      exitcode.Success,
+				"schema_version":     exitcode.SchemaVersion,
+				"command":            "hold",
+				"action":             "show",
+				"directory":          directory,
+				"holds":              entries,
+				"operator_directory": operatorDirectory,
+				"operator_holds":     operatorEntries,
+				"exit_code":          exitcode.Success,
 			})
 		}
 		printHolds(streams.Out, directory, markers)
+		printOperatorHolds(streams.Out, operatorDirectory, operatorHolds, now)
 		return exitcode.Success, nil
 	}
 

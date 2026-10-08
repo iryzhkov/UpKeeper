@@ -38,7 +38,7 @@ var commandSummaries = [][2]string{
 	{"environment", "inspect operator-pinned candidate tool content offline"},
 	{"doctor", "report whether each host can be managed at all"},
 	{"status", "report what each host is running now"},
-	{"push", "capture this machine as the release manifest, commit it and push the branch"},
+	{"push", "capture this machine as the release manifest, commit it and publish it to main on every remote"},
 	{"pull", "converge hosts on an exact release manifest"},
 	{"rollback", "converge hosts on an exact release manifest"},
 	{"fleet-plan", "report the Steward fleet intent and what enrolling it would change"},
@@ -49,7 +49,7 @@ var commandSummaries = [][2]string{
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
 	{"install-pull-timer", "install the controller systemd user timer"},
-	{"hold", "show or clear the scheduled hold markers this host keeps"},
+	{"hold", "set, show or clear operator holds, and show or clear scheduled hold markers"},
 	{"self", "install, roll back or inspect this host's own UpKeeper binary generations"},
 	{"version", "print the exact source commit this binary was built from"},
 }
@@ -94,23 +94,38 @@ func helpText(program, command string) string {
 	}
 }
 
-// holdHelp documents the two hold actions. A hold is cleared by name and with
-// a reason, never in bulk: each marker stands for one host somebody has to
-// look at.
+// holdHelp documents both kinds of hold. A scheduled marker is cleared by name
+// and with a reason, never in bulk: each marker stands for one host somebody
+// has to look at. An operator hold is set and cleared with a reason too.
 func holdHelp(program string) string {
 	return "usage: " + program + " hold show [-h] [--json]\n" +
+		"       " + program + " hold set [-h] --hosts HOST [HOST ...] --reason TEXT [--until TIME] [--json]\n" +
+		"       " + program + " hold clear [-h] --hosts HOST [HOST ...] --reason TEXT [--json]\n" +
 		"       " + program + " hold clear [-h] HOST --reason TEXT [--json]\n\n" +
+		"An operator hold stops automatic consumption of releases on a host: its\n" +
+		"self-pull refreshes nothing, updates no binary and converges nothing, and no\n" +
+		"scheduled or manual pull dispatches to it. `pull --override-hold` passes\n" +
+		"through it and is logged; rollback is not held. set records the hold in\n" +
+		"~/.local/state/dev-fleet/operator-holds on this host and on each held host,\n" +
+		"so it survives reboot; a host that cannot be reached keeps only this host's\n" +
+		"copy, the run exits 20 and running it again delivers it. clear --hosts\n" +
+		"releases it the same way. Every set, clear and override is logged in\n" +
+		"HOST.log beside the hold.\n\n" +
 		"A scheduled run writes ~/.local/state/dev-fleet/scheduled-holds/HOST.hold\n" +
 		"before it dispatches and removes it only after an understood result. A\n" +
 		"marker that is still there means the run died, lost its output or failed;\n" +
 		"later scheduled runs refuse that host until the marker is cleared.\n\n" +
-		"show lists every marker on this host with its content, age and the run\n" +
-		"that wrote it. clear removes exactly one marker after you have observed the\n" +
-		"host, and records who cleared it, when and why in HOST.hold.cleared.\n\n" +
+		"show lists every operator hold and every marker on this host. clear HOST\n" +
+		"removes exactly one marker after you have observed the host, and records who\n" +
+		"cleared it, when and why in HOST.hold.cleared.\n\n" +
 		"options:\n" + helpOption + "\n" +
-		describe("  --reason TEXT", "why the hold is safe to clear (clear only; required)") +
+		describe("  --hosts HOST [HOST ...]", "exact inventory names to hold or release") +
+		describe("  --reason TEXT", "why the host is held or why it is safe to release (required)") +
+		describe("  --until TIME",
+			"end of the hold, as an RFC 3339 time or a duration such as 36h (set only; default: until cleared)") +
 		describe("  --json", "") +
-		"\nexit codes: 0 done, 2 malformed command line or no marker for HOST, 30 refused\n"
+		"\nexit codes: 0 done, 2 malformed command line or no marker for HOST, " +
+		"20 recorded here but not delivered to every host, 30 refused\n"
 }
 
 // selfHelp documents the generation commands. A self-pull updates the binary
@@ -147,6 +162,20 @@ func topHelp(program string) string {
 }
 
 func probeHelp(program, command string) string {
+	if command == "status" {
+		return "usage: " + program + " status" +
+			" [-h] [--json] [--limit HOST[,HOST...]] [--timeout SECONDS] [--expect FILE]\n\noptions:\n" +
+			helpOption + "\n" +
+			describe("  --json", "") +
+			describe("  --limit HOST[,HOST...]",
+				"exact canonical inventory names; no patterns or arbitrary expressions") +
+			describe("  --timeout SECONDS", "5 through 60, per host") +
+			describe("  --expect FILE",
+				"JSON list of accepted non-converged states with reasons; a host whose every "+
+					"non-converged state is listed does not fail status (see docs/authored-release.md)") +
+			"\nexit codes: 0 converged or accepted, 10 drift, 20 a host failed or could not be observed, " +
+			"30 refused\n"
+	}
 	return "usage: " + program + " " + command +
 		" [-h] [--json] [--limit HOST[,HOST...]] [--timeout SECONDS]\n\noptions:\n" +
 		helpOption + "\n" +
@@ -160,8 +189,13 @@ func pushHelp(program string) string {
 	return "usage: " + program + " push [-h] [--components COMPONENT [COMPONENT ...]]" +
 		" [--no-commit] [--no-push] [--publish-diverged-instructions]" +
 		" [--authored --expect-head SHA --expect-release-sha256 SHA256]" +
-		" [--json] [REMOTE ...]\n\npositional arguments:\n" +
-		describe("  REMOTE", "git remotes to push to (default: all)") +
+		" [--json] [REMOTE ...]\n\n" +
+		"A publication updates main on every configured remote. Before anything is\n" +
+		"captured or committed it refuses a checkout that is not on main, remotes\n" +
+		"whose main differ, and a main that is not an ancestor of this checkout's\n" +
+		"HEAD, naming the commits and the command that resyncs them.\n\n" +
+		"positional arguments:\n" +
+		describe("  REMOTE", "git remotes to push to (default: all); a publication must name every one") +
 		"\noptions:\n" + helpOption + "\n" +
 		describe("  --components COMPONENT [COMPONENT ...]",
 			"capture only these; every other component keeps what the release already published") +
@@ -181,11 +215,14 @@ func pullHelp(program string) string {
 	return "usage: " + program + " pull [-h] (--hosts HOST [HOST ...] | --all | --self)" +
 		" [--skip-unreachable] [--components COMPONENT [COMPONENT ...]]" +
 		" [--dry-run] [--timeout TIMEOUT] [--json]" +
-		" [--reconcile-t3-transaction NAME]\n\noptions:\n" +
+		" [--reconcile-t3-transaction NAME] [--override-hold]\n\noptions:\n" +
 		helpOption + "\n" +
 		describe("  --hosts HOST [HOST ...]", "exact inventory names") +
 		describe("  --all", "every inventory host") +
 		describe("  --self", "read this checkout and converge only this inventory machine") +
+		describe("  --override-hold",
+			"pull hosts under an operator hold anyway; every override is logged beside the hold "+
+				"(without it a held host refuses the whole pull)") +
 		describe("  --reconcile-t3-transaction NAME",
 			"verify and record one retained .upkeeper-t3-* transaction left at files-restored; "+
 				"needs one --hosts HOST and --components t3, restarts and moves nothing, "+

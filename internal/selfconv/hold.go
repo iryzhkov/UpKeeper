@@ -14,10 +14,11 @@ import (
 )
 
 // understoodResults are the outcomes that prove the run finished and was
-// reported. Anything else leaves the hold in place for a human.
+// reported. Anything else leaves the hold in place for a human. A host an
+// operator hold kept the run away from was not touched, so it is understood.
 var understoodResults = map[string]bool{
 	"converged": true, "updated": true, "ahead": true,
-	"deferred": true, "blocked": true, "lock-contention": true,
+	"deferred": true, "blocked": true, "lock-contention": true, "held": true,
 }
 
 // HoldRunner wraps a dispatcher with a durable marker written before dispatch.

@@ -17,13 +17,21 @@ GitHub-gated release and converges through its own local timer. See
 ## Release commands
 
 ```bash
-./scripts/upkeeper push                      # capture this machine, commit, push to all remotes
+./scripts/upkeeper push                      # capture this machine, commit, publish main to all remotes
 ./scripts/upkeeper push gitea --no-push      # capture and commit only
 ./scripts/upkeeper pull --hosts homelab omarchy-pc --dry-run
 ./scripts/upkeeper pull --all
 ./bin/upkeeper author --steward VERSION --omarchy-setup COMMIT [--dry-run]   # authored pins, no capture
 ./bin/upkeeper push --authored --expect-head SHA --expect-release-sha256 SHA256
+./bin/upkeeper hold set --hosts HOST... --reason TEXT [--until 48h]   # fence hosts before a release
+./bin/upkeeper hold clear --hosts HOST... --reason TEXT
+./bin/upkeeper status --expect FILE           # gate on status, accepting listed known states
 ```
+
+A publication always updates `main` on every configured remote. It refuses a checkout
+that is not on `main` and remotes whose `main` disagree, naming the commits and the
+command that resyncs them. Follow [the authored release guide](docs/authored-release.md)
+for a Steward bump: hold, author, review, push, canary, fleet and rollback, in order.
 
 `push` captures clean reachable checkout commits, the installed T3/steward pair and
 compatibility range, and the complete owned agent environment into `desired/release.json`.
