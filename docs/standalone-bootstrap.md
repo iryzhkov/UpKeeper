@@ -1,8 +1,10 @@
 # Standalone local binary bootstrap v1
 
 This separate, explicitly invoked installer provisions only a static Linux amd64
-UpKeeper Go binary. Debian 13 amd64 and Arch amd64 compatibility is **provisional**:
-injected platform fixtures are not actual distro execution certificates. It does
+UpKeeper Go binary. Debian 13 amd64, Arch amd64 and Omarchy amd64 compatibility is
+**provisional**: exact `ID=omarchy` maps to the existing `arch-amd64` receipt;
+`ID_LIKE=arch` alone does not admit other distributions.
+Injected platform fixtures are not actual distro execution certificates. It does
 not require Omarchy, inventory, desired state, a managed home, credentials, an SSH
 agent, Git, Go, jq or third-party Python modules. The operator must provide Python
 3.11+ standard library on Linux (including flock), an existing real absolute
@@ -59,7 +61,7 @@ inputs refuse. Field spelling and accepted values are:
 | repository | github.com/iryzhkov/UpKeeper |
 | source_commit | 40 lowercase hex characters |
 | release_tag | exact versioned tag, optional v prefix, three numeric components and optional prerelease/build suffix |
-| platform | debian13-amd64 or arch-amd64; must match actual local OS/uname |
+| platform | debian13-amd64 or arch-amd64 (exact Arch or Omarchy ID); must match actual local OS/uname |
 | artifact_sha256 | 64 lowercase hex characters |
 | artifact_size | positive integer, at most 256 MiB |
 | expected_version_stdout | exact stdout, at most 4 KiB |
@@ -153,7 +155,7 @@ flag or environment bypass exists. Real current-Go integration follows
 locked dependency setup, pinned collections, `make gate` and required YAML lint
 remain mandatory.
 
-Actual Debian/Arch execution has not been established by fixtures. Source
+Actual Debian/Arch/Omarchy execution has not been established by fixtures. Source
 publication compatibility is structural: the candidate adds only this standalone
 script, tests and documentation; all old source-following code and configuration
 remain byte-identical. This does not close legacy writer fencing/cutover,
