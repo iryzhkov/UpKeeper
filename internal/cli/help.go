@@ -49,6 +49,7 @@ var commandSummaries = [][2]string{
 	{"scheduled-pull", "converge the fleet on the published release, for the timer"},
 	{"install-self-timer", "install the self-convergence systemd user timer"},
 	{"install-pull-timer", "install the controller systemd user timer"},
+	{"rollout", "check, plan or run a resumable reviewed binary-only fleet rollout"},
 	{"hold", "show or clear the scheduled hold markers this host keeps"},
 	{"self", "install, roll back or inspect this host's own UpKeeper binary generations"},
 	{"version", "print the exact source commit this binary was built from"},
@@ -85,6 +86,8 @@ func helpText(program, command string) string {
 		return scheduledHelp(program, command)
 	case "install-self-timer", "install-pull-timer":
 		return installTimerHelp(program, command)
+	case "rollout":
+		return rolloutHelp(program)
 	case "hold":
 		return holdHelp(program)
 	case "self":

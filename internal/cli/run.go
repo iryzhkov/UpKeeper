@@ -50,7 +50,9 @@ type Streams struct {
 // about it, and it cannot change either: spoolInvocation prints nothing and
 // returns nothing, and the exit code was decided before it ran. See spool.go.
 func MainSpooled(program string, argv []string, streams Streams) int {
-	if len(argv) > 0 && argv[0] == "environment" {
+	// Rollout owns its journal; its read-only phases and authority refusals
+	// must not create an unrelated feedback spool.
+	if len(argv) > 0 && (argv[0] == "environment" || argv[0] == "rollout") {
 		return Main(program, argv, streams)
 	}
 	started := time.Now()
@@ -129,6 +131,8 @@ func dispatch(parsed *arguments, streams Streams) (int, error) {
 		return runSelfPull(parsed, streams)
 	case "scheduled-pull":
 		return runScheduledPull(parsed, streams)
+	case "rollout":
+		return runRollout(parsed, streams)
 	case "hold":
 		return runHold(parsed, streams)
 	case "self":
