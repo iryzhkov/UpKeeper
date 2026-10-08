@@ -4,11 +4,13 @@ The fleet now uses [independent local timers](fleet-self-convergence.md).
 The Normandy timer below is the legacy central mode; disable it after migration.
 
 Citadel U3 adds one daily systemd user timer on Normandy. Install from a clean,
-GitHub-gated main checkout with `python3 scripts/install-pull-timer`.
-It installs `upkeeper-pull.service` and `upkeeper-pull.timer`, scheduled at 06:30
-local time with up to ten minutes of jitter and catch-up after downtime.
+GitHub-gated main checkout at `~/Work/dev-fleet` with `upkeeper install-pull-timer`.
+It installs `upkeeper-pull.service` and `upkeeper-pull.timer` from the unit text
+embedded in the binary, scheduled at 06:30 local time with up to ten minutes of
+jitter and catch-up after downtime. A legacy canary drop-in UpKeeper shipped in
+`upkeeper-pull.service.d` is removed and reported; any other drop-in refuses.
 
-The timer calls `scripts/upkeeper-scheduled-pull`. It requires Normandy's inventory
+The timer calls `~/.local/bin/upkeeper scheduled-pull`. It requires Normandy's inventory
 machine-id, refuses a dirty controller and freezes the release and companion files
 from its own HEAD. It does not fetch, capture, promote pins, or follow tool releases.
 New versions become eligible only through a committed release promotion.
@@ -78,7 +80,7 @@ A failed feed request is not retried; the service fails and the journal retains 
 result. Existing pull records remain under `~/.local/state/dev-fleet`.
 
 Validate without mutation or feed posts using
-`python3 scripts/upkeeper-scheduled-pull --dry-run`. The generic drift command is
+`upkeeper scheduled-pull --dry-run`. The generic drift command is
 `upkeeper pull --all --skip-unreachable --dry-run --json`; ordinary pull without
 `--skip-unreachable` retains its original failure behavior.
 
@@ -93,3 +95,8 @@ Operations: `systemctl --user start upkeeper-pull.service` runs once;
 `systemctl --user disable --now upkeeper-pull.timer` stops future runs.
 U4 owns the laptop's own timer. This stage neither enrolls workers nor changes pins
 owned by concurrent Track S work.
+
+Retired 2026-10-07: the Python `scripts/install-pull-timer`,
+`scripts/upkeeper-scheduled-pull` and the committed Python units and canary
+drop-ins. The Go installer and units above replace them; binary rollback is
+`upkeeper self rollback`.

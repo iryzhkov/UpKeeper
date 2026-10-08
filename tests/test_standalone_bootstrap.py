@@ -24,6 +24,106 @@ bootstrap = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(bootstrap)
 BASE = "da88c9ae868d0dc4a502d908b3039226483b0d3e"
 
+HOST_PLATFORM = bootstrap.host_platform
+
+
+def host_fixture(monkeypatch, release, machine="x86_64", system="linux"):
+    # Exercise the real detector through its OS inputs, including in install tests.
+    from io import StringIO
+
+    monkeypatch.setattr(bootstrap, "host_platform", HOST_PLATFORM)
+    monkeypatch.setattr(sys, "platform", system)
+    monkeypatch.setattr(os, "uname", lambda: SimpleNamespace(machine=machine))
+
+    def os_release(path, *, encoding):
+        assert path == "/etc/os-release"
+        assert encoding == "utf-8"
+        return StringIO(release)
+
+    monkeypatch.setattr(bootstrap, "open", os_release, raising=False)
+
+
+@pytest.mark.parametrize(("release", "machine", "expected"), [
+    ("ID=arch\n", "x86_64", "arch-amd64"),
+    ('NAME="Omarchy"\nID=omarchy\nID_LIKE=arch\nVERSION_ID="4.0.4"\n',
+     "x86_64", "arch-amd64"),
+    ("ID=omarchy\n", "amd64", "arch-amd64"),
+    ('ID=debian\nVERSION_ID="13"\n', "amd64", "debian13-amd64"),
+])
+def test_host_platform_exact_supported_ids(monkeypatch, release, machine, expected):
+    host_fixture(monkeypatch, release, machine)
+    assert bootstrap.host_platform() == expected
+
+
+@pytest.mark.parametrize(("release", "machine", "system", "message"), [
+    ("ID=other\nID_LIKE=arch\n", "x86_64", "linux", "unsupported distribution"),
+    ("ID=Omarchy\nID_LIKE=arch\n", "x86_64", "linux", "unsupported distribution"),
+    ('ID=debian\nVERSION_ID="12"\n', "x86_64", "linux", "unsupported distribution"),
+    ("ID=omarchy\nID_LIKE=arch\n", "aarch64", "linux", "unsupported OS/architecture"),
+    ("ID=omarchy\n", "x86_64", "darwin", "unsupported OS/architecture"),
+    ("ID=arch\n", "aarch64", "linux", "unsupported OS/architecture"),
+    ("garbage\nID_LIKE=arch\n", "x86_64", "linux", "unsupported distribution"),
+    ("ID omarchy\n", "x86_64", "linux", "unsupported distribution"),
+    ("ID=arch\nID=omarchy\n", "x86_64", "linux", "duplicate os-release key"),
+    ("ID=omarchy\nID_LIKE=arch\nID_LIKE=arch\n",
+     "x86_64", "linux", "duplicate os-release key"),
+])
+def test_host_platform_refusals(monkeypatch, release, machine, system, message):
+    host_fixture(monkeypatch, release, machine, system)
+    with pytest.raises(bootstrap.Refusal, match=message):
+        bootstrap.host_platform()
+
+
+def omarchy_receipt(setup, monkeypatch):
+    host_fixture(monkeypatch, "ID=omarchy\nID_LIKE=arch\n")
+    obj = {**setup[4], "platform": "arch-amd64"}
+    return obj, save_receipt(setup[2], obj)
+
+
+def test_omarchy_install_uses_arch_receipt_and_private_modes(setup, monkeypatch):
+    obj, trust = omarchy_receipt(setup, monkeypatch)
+    installed = bootstrap.install(*setup[:3], trust)
+    assert installed["platform"] == "arch-amd64"
+    assert installed["artifact_sha256"] == obj["artifact_sha256"]
+    assert bootstrap.inspect(setup[0])["generation_id"] == installed["generation_id"]
+    generation = setup[0] / bootstrap.NAMESPACE / "generations" / installed["generation_id"]
+    assert generation.stat().st_mode & 0o777 == 0o500
+    assert (generation / "upkeeper").stat().st_mode & 0o777 == 0o500
+    assert (generation / "approval.json").stat().st_mode & 0o777 == 0o400
+    assert setup[5] == [(setup[1].read_bytes(), obj["expected_version_stdout"])]
+    (generation / "upkeeper").chmod(0o700)
+    with pytest.raises(bootstrap.Refusal, match="binary permissions"):
+        bootstrap.inspect(setup[0])
+
+
+@pytest.mark.parametrize("fault", ["trust", "receipt", "platform", "size", "hash", "elf"])
+def test_omarchy_validation_still_refuses_before_probe(setup, monkeypatch, fault):
+    obj, trust = omarchy_receipt(setup, monkeypatch)
+    message = {"trust": "trust digest", "receipt": "CI outcome", "platform": "platform mismatch",
+               "size": "input size", "hash": "hash mismatch", "elf": "ELF64 required"}[fault]
+    if fault == "trust":
+        trust = "0" * 64
+    elif fault == "receipt":
+        obj["ci"] = {**obj["ci"], "conclusion": "failure"}
+    elif fault == "platform":
+        obj["platform"] = "debian13-amd64"
+    elif fault == "size":
+        obj["artifact_size"] += 1
+    elif fault == "hash":
+        obj["artifact_sha256"] = "0" * 64
+    else:
+        setup[1].write_bytes(b"x" * len(setup[1].read_bytes()))
+        obj["artifact_sha256"] = bootstrap.digest(setup[1].read_bytes())
+    if fault != "trust":
+        trust = save_receipt(setup[2], obj)
+    with pytest.raises(bootstrap.Refusal, match=message):
+        bootstrap.install(*setup[:3], trust)
+    assert setup[5] == []
+    assert not os.path.lexists(setup[0] / bootstrap.NAMESPACE / "current")
+    if fault in {"trust", "receipt", "platform", "size"}:
+        assert list(setup[0].iterdir()) == []
+
+
 
 def synthetic_elf(suffix=b"fixture"):
     # Structurally static ELF, deliberately not executable test code.

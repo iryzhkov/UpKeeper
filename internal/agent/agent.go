@@ -6,9 +6,11 @@
 // python3 on the target; the Go agent is the same program compiled into the
 // binary, so a production convergence no longer needs a Python runtime anywhere.
 //
-// The agent observes every selected component, changes only what differs,
-// verifies the result and stops at the first component it could not complete.
-// It holds the target-side half of the deployment lock for the whole run.
+// The agent observes every selected component, changes only what differs and
+// verifies the result. A component it could not complete skips only the
+// components that depend on it; a failed or incomplete rollback, an unknown
+// adapter or a legacy updater it could not retire stops the host. It holds the target-side
+// half of the deployment lock for the whole run.
 package agent
 
 import (
@@ -77,7 +79,8 @@ type Blocked struct{ Message string }
 
 func (e *Blocked) Error() string { return e.Message }
 
-// StepFailed is a component step that did not complete. The host stops here.
+// StepFailed is a component step that did not complete. Its dependents are
+// skipped; the host carries on with every independent component.
 type StepFailed struct{ Message string }
 
 func (e *StepFailed) Error() string { return e.Message }
@@ -87,8 +90,9 @@ func Failf(format string, arguments ...any) *StepFailed {
 	return &StepFailed{Message: fmt.Sprintf(format, arguments...)}
 }
 
-// RolledBack is a component that failed and was successfully restored. The
-// host stops, but the machine is back in the state the run found it in.
+// RolledBack is a component that failed and was successfully restored: the
+// machine is back in the state the run found it in. Like a failure, it skips
+// only its dependents.
 type RolledBack struct{ Message string }
 
 func (e *RolledBack) Error() string { return e.Message }
@@ -418,7 +422,9 @@ func Execute(context *Context) map[string]any {
 	defer context.releaseLock()
 
 	worst := "converged"
-	stop := false
+	// abortedBy names what stopped the host, and abortState its outcome. Once
+	// it is set, every later component is skipped without being observed.
+	abortedBy, abortState := "", ""
 	// Explicit T3 transaction reconciliation only rewrites that transaction's
 	// journal, so it never performs the unrelated legacy updater retirement.
 	if context.Payload.RetireUpdater && context.Payload.ReconcileT3Transaction == "" {
@@ -426,24 +432,37 @@ func Execute(context *Context) map[string]any {
 		result["legacy_updater"] = retirement
 		state, _ := retirement["state"].(string)
 		worst = state
-		stop = state == "failed" || state == "deferred"
+		if state == "failed" || state == "deferred" {
+			abortedBy, abortState = "legacy-updater", state
+		}
 	}
 
 	entries := make([]any, 0, len(context.Selected))
-	// unavailable holds the components that are blocked, or skipped because
-	// something they depend on is; their dependents are skipped in turn.
-	unavailable := map[string]bool{}
+	// unavailable holds the reported state of every component that did not
+	// complete, and roots the first component in its chain that did not; the
+	// dependents of an unavailable component are skipped in turn.
+	unavailable := map[string]string{}
+	roots := map[string]string{}
 	for _, name := range context.Selected {
 		entry := map[string]any{"name": name, "actions": []string{}}
-		if stop {
+		if abortedBy != "" {
 			entry["state"] = "skipped"
+			entry["aborted_by"] = abortedBy
+			entry["error"] = "skipped: run aborted after " + abortState + " " + abortedBy
 			entries = append(entries, entry)
 			continue
 		}
-		if dependency := blockedDependency(name, unavailable); dependency != "" {
-			unavailable[name] = true
+		if dependency := unavailableDependency(name, unavailable); dependency != "" {
+			root := roots[dependency]
+			unavailable[name], roots[name] = "skipped", root
 			entry["state"] = "skipped"
-			entry["error"] = "skipped: depends on blocked " + dependency
+			entry["skipped_dependency"] = dependency
+			entry["skipped_root"] = root
+			reason := "skipped: depends on " + unavailable[dependency] + " " + dependency
+			if root != dependency {
+				reason += "; root cause " + unavailable[root] + " " + root
+			}
+			entry["error"] = reason
 			entries = append(entries, entry)
 			continue
 		}
@@ -452,7 +471,7 @@ func Execute(context *Context) map[string]any {
 			entry["state"] = "failed"
 			entry["error"] = "no adapter for component " + name
 			entries = append(entries, entry)
-			stop = true
+			abortedBy, abortState = name, "failed"
 			worst = "failed"
 			continue
 		}
@@ -461,7 +480,7 @@ func Execute(context *Context) map[string]any {
 		if blocker := requirementsBlock(context, name, spec, &actions); blocker != "" {
 			// Nothing was changed and nothing is observed: the operator has
 			// to provide something first, and the message says what.
-			unavailable[name] = true
+			unavailable[name], roots[name] = "blocked", name
 			entry["actions"] = actions
 			entry["state"] = "blocked"
 			entry["error"] = blocker
@@ -474,15 +493,16 @@ func Execute(context *Context) map[string]any {
 		state, entryError := runComponent(context, handler, spec, entry, &actions)
 		entry["actions"] = actions
 		entry["state"] = state
-		if state == "blocked" {
-			unavailable[name] = true
-		}
 		if entryError != "" {
 			entry["error"] = entryError
 		}
-		if state == "deferred" || state == "rolled-back" ||
-			state == "rollback-failed" || state == "failed" {
-			stop = true
+		if dependencyStates[state] {
+			unavailable[name], roots[name] = state, name
+		}
+		// A failed or incomplete rollback leaves the host in a state the run
+		// neither found nor restored, so nothing else is applied on top of it.
+		if state == "rollback-failed" {
+			abortedBy, abortState = name, state
 		}
 		if after, err := observeQuietly(context, handler, spec); err != nil {
 			entry["after"] = map[string]any{"error": err.Error()}
@@ -523,13 +543,30 @@ func classify(err error) (string, string) {
 	case *RolledBack:
 		return "rolled-back", typed.Message
 	case *StepFailed:
-		if strings.HasPrefix(typed.Message, "rollback failed") {
+		if rollbackFailed(typed.Message) {
 			return "rollback-failed", typed.Message
 		}
 		return "failed", typed.Message
 	default:
+		if rollbackFailed(err.Error()) {
+			return "rollback-failed", err.Error()
+		}
 		return "failed", err.Error()
 	}
+}
+
+// rollbackFailed reports whether a failure says the component could not put
+// back what the run found. That is the contract every adapter keeps: a
+// restoration that did not finish, or finished unverified, or stopped at a
+// concurrent change it left in place, says "rollback failed" or, for a T3
+// transaction, "rollback incomplete", anywhere in its message, because some
+// name what they restored first ("Jocasta rollback failed; inspect ...").
+// Every such failure stops the host: a component that ran after it would
+// build on a state nobody can vouch for. A refusal before any effect never
+// says so, and only skips the component's dependents.
+func rollbackFailed(message string) bool {
+	return strings.Contains(message, "rollback failed") ||
+		strings.Contains(message, "rollback incomplete")
 }
 
 func observeQuietly(

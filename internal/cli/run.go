@@ -597,14 +597,64 @@ func runInstallTimer(parsed *arguments, streams Streams) (int, error) {
 	if parsed.command == "install-pull-timer" {
 		install = units.InstallFleetTimer
 	}
-	written, err := install(root, procx.Run)
-	if err != nil {
+	done, err := install(root, procx.Run)
+	if err != nil && len(done.Written)+len(done.Removed) == 0 {
 		return exitcode.Preflight, err
 	}
-	for _, path := range written {
-		fmt.Fprintf(streams.Out, "installed %s\n", path)
+	return reportInstallation(streams, parsed.command, done, parsed.asJSON, err)
+}
+
+// reportInstallation reports the unit files a timer install wrote and the
+// legacy canary drop-ins it removed, so that an operator reconciling a host
+// can see that the drop-in is gone without listing the directory. An install
+// that failed after changing something is partial, and its report still says
+// what changed, because a rerun will no longer find what this run removed.
+func reportInstallation(
+	streams Streams, command string, done units.Installation, asJSON bool, failed error,
+) (int, error) {
+	code := exitcode.Success
+	if failed != nil {
+		code = exitcode.Partial
 	}
-	return exitcode.Success, nil
+	if asJSON {
+		report := map[string]any{
+			"command":   command,
+			"exit_code": code,
+			"installed": nonNil(done.Written),
+			"removed":   nonNil(done.Removed),
+		}
+		if failed != nil {
+			report["result"] = "partial"
+			report["error"] = redact.Text(failed.Error())
+		}
+		if err := printJSON(streams.Out, report); err != nil {
+			return exitcode.Preflight, err
+		}
+		return code, nil
+	}
+	for _, path := range done.Written {
+		if _, err := fmt.Fprintf(streams.Out, "installed %s\n", path); err != nil {
+			return exitcode.Preflight, err
+		}
+	}
+	for _, path := range done.Removed {
+		if _, err := fmt.Fprintf(streams.Out, "removed legacy drop-in %s\n", path); err != nil {
+			return exitcode.Preflight, err
+		}
+	}
+	if failed != nil {
+		fmt.Fprintf(streams.Err, "upkeeper %s: partial: %s; exit %d\n",
+			command, redact.Text(failed.Error()), code)
+	}
+	return code, nil
+}
+
+// nonNil keeps an empty list a JSON array rather than null.
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 // reportScheduledFailure keeps an unattended run's output machine readable: a
@@ -646,8 +696,9 @@ var scheduledFailureStates = map[string]bool{
 
 // printScheduledSummary writes the failure summary of a scheduled run to
 // stderr: one line per failed component, or per failed host when no component
-// got as far as failing, and a final line naming the run record and the exit
-// code. The JSON document on stdout is untouched; this is the part a person
+// got as far as failing, one line counting the components of each host that
+// completed only partially, and a final line naming the run record and the
+// exit code. The JSON document on stdout is untouched; this is the part a person
 // reads in the journal. A clean run writes nothing.
 func printScheduledSummary(
 	err io.Writer, command string, document map[string]any, recordPath string, code int,
@@ -666,6 +717,9 @@ func printScheduledSummary(
 			componentFailed = true
 			lines = append(lines, fmt.Sprintf("upkeeper %s: %s %s %s: %s",
 				command, name, text(component["name"]), state, firstLineOf(text(component["error"]))))
+		}
+		if text(host["completion"]) == "partial" {
+			lines = append(lines, partialSummary(command, name, host))
 		}
 		if componentFailed || !scheduledFailureStates[text(host["result"])] {
 			continue
@@ -686,6 +740,26 @@ func printScheduledSummary(
 	}
 	fmt.Fprintf(err, "upkeeper %s: run %s recorded at %s; exit %d\n",
 		command, text(document["run_id"]), recordPath, code)
+}
+
+// partialSummary counts a partial host's components: the ones that converged,
+// were updated or are ahead, the ones that ran and did not complete, and the
+// ones that were skipped. The three counts partition the host's components.
+func partialSummary(command, name string, host map[string]any) string {
+	succeeded, incomplete, skipped := 0, 0, 0
+	for _, entry := range list(host["components"]) {
+		component, _ := entry.(map[string]any)
+		switch text(component["state"]) {
+		case "converged", "updated", "ahead":
+			succeeded++
+		case "skipped":
+			skipped++
+		default:
+			incomplete++
+		}
+	}
+	return fmt.Sprintf("upkeeper %s: %s partial: %d succeeded, %d not completed, %d skipped",
+		command, name, succeeded, incomplete, skipped)
 }
 
 // firstLineOf keeps the first line of a message whole: the line is what the

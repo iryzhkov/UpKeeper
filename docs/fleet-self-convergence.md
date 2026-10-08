@@ -25,12 +25,18 @@ checking that the exact main commit passed CI. Use SSH Git transport when that
 host already has a GitHub SSH key; the runner accepts the canonical HTTPS or SSH
 origin. Do not replace existing checkouts or their local work.
 
-Run:
+Install the released binary at ~/.local/bin/upkeeper, then run from the checkout:
 ```sh
-python3 ~/.local/share/dev-fleet/scripts/install-self-timer
+cd ~/.local/share/dev-fleet
+upkeeper install-self-timer
 systemctl --user start upkeeper-self.service
 journalctl --user -u upkeeper-self.service
 ```
+
+The installer writes the units embedded in the binary. A legacy canary drop-in
+UpKeeper shipped is removed and reported; any other drop-in refuses the install
+and names the file (see docs/go-binary.md). The Python installer
+`scripts/install-self-timer` was retired on 2026-10-07.
 
 The timer runs daily at 09:00 with ten minutes of jitter, on startup, and with
 persistent catch-up while the user's systemd manager is running. The installer
@@ -71,7 +77,7 @@ Preview all intended hosts before a manual fleet deployment and check each recei
 Inspect each host's journal and ~/.local/state/dev-fleet/runs. A successful Git
 push or a controller skip is not proof of convergence. After an uncertain or failed
 dispatch, observe the host before clearing its local scheduled hold.
-A dry run through scripts/upkeeper-self-pull --dry-run never fetches or advances HEAD.
+A dry run through `upkeeper self-pull --dry-run` never fetches or advances HEAD.
 
 When the gated release pins an UpKeeper binary whose program differs from the
 one a host runs, that host's self-pull installs the pinned binary, verified by

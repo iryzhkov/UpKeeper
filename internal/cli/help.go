@@ -83,6 +83,8 @@ func helpText(program, command string) string {
 		return authorHelp(program)
 	case "self-pull", "scheduled-pull":
 		return scheduledHelp(program, command)
+	case "install-self-timer", "install-pull-timer":
+		return installTimerHelp(program, command)
 	case "hold":
 		return holdHelp(program)
 	case "self":
@@ -343,6 +345,29 @@ func scheduledHelp(program, command string) string {
 		purpose + "\n\noptions:\n" + helpOption + "\n" +
 		describe("  --dry-run", "observe; change nothing") +
 		describe("  --converge", "skip the refresh and converge the checkout as it stands")
+}
+
+// installTimerHelp documents the timer installers, including what they do
+// with a canary drop-in left from the Python units.
+func installTimerHelp(program, command string) string {
+	purpose := "install the self-convergence systemd user timer"
+	service := "upkeeper-self.service"
+	if command == "install-pull-timer" {
+		purpose = "install the controller systemd user timer"
+		service = "upkeeper-pull.service"
+	}
+	return "usage: " + program + " " + command + " [-h] [--json]\n\n" +
+		purpose + "\n\n" +
+		"Writes the unit text embedded in this binary to ~/.config/systemd/user, reloads\n" +
+		"systemd and enables the timer. A 10-upkeeper-binary.conf drop-in in\n" +
+		"~/.config/systemd/user/" + service + ".d that is byte for byte the canary\n" +
+		"drop-in UpKeeper shipped is removed after the unit is written; any other\n" +
+		"drop-in refuses the install before anything is written, naming the file.\n" +
+		"Rolling back the binary is `" + program + " self rollback`.\n\n" +
+		"options:\n" + helpOption + "\n" +
+		describe("  --json", "") +
+		"\nexit codes: 0 installed, 2 malformed command line, 20 partial (the report " +
+		"names what changed before the failure), 30 refused (nothing written)\n"
 }
 
 func plainHelp(program, command string) string {

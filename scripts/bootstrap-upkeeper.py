@@ -127,7 +127,7 @@ def host_platform():
                 info[key] = value.strip('"').strip("'")
     if info.get("ID") == "debian" and info.get("VERSION_ID") == "13":
         return "debian13-amd64"
-    require(info.get("ID") == "arch", "unsupported distribution")
+    require(info.get("ID") in ("arch", "omarchy"), "unsupported distribution")
     return "arch-amd64"
 
 

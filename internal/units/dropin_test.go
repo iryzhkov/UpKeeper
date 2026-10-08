@@ -9,10 +9,9 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
-// The drop-in and the installed unit are not composable: a host that has run
-// the installer and then deletes the drop-in still runs the binary, while
-// believing it rolled back. The installer refuses rather than making the
-// rollback silently do nothing.
+// A drop-in that is not byte for byte one UpKeeper shipped would silently
+// change the unit the installer writes, so the installer refuses it, even
+// under the legacy canary's file name.
 func TestInstallRefusesWhenADropInOverridesTheUnit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

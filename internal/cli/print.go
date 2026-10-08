@@ -203,9 +203,9 @@ func printPull(out io.Writer, report map[string]any) {
 	if flag(report["dry_run"]) {
 		mode = " (dry run)"
 	}
-	fmt.Fprintf(out, "run %s controller=%s exit=%s%s\n",
+	fmt.Fprintf(out, "run %s controller=%s exit=%s%s%s\n",
 		text(report["run_id"]), text(report["controller"]),
-		scalar(report["exit_code"]), mode)
+		scalar(report["exit_code"]), incomplete(report, " completion=%s"), mode)
 	for _, item := range list(report["hosts"]) {
 		host, _ := item.(map[string]any)
 		if flag(host["self_managed"]) {
@@ -220,7 +220,8 @@ func printPull(out io.Writer, report map[string]any) {
 			}
 			continue
 		}
-		fmt.Fprintf(out, "%s: %s\n", text(host["host"]), text(host["result"]))
+		fmt.Fprintf(out, "%s: %s%s\n", text(host["host"]), text(host["result"]),
+			incomplete(host, " (completion %s)"))
 		if retirement, ok := host["legacy_updater"].(map[string]any); ok {
 			fmt.Fprintf(out, "  legacy updater: %s\n", text(retirement["state"]))
 			for _, action := range stringList(retirement["actions"]) {
@@ -253,6 +254,17 @@ func printPull(out io.Writer, report map[string]any) {
 			}
 		}
 	}
+}
+
+// incomplete formats a report's or a host's completion when it is present and
+// not complete, and is empty otherwise, so a complete run, and a report from
+// before completion existed, reads exactly as it always has.
+func incomplete(document map[string]any, format string) string {
+	completion := text(document["completion"])
+	if completion == "" || completion == "complete" {
+		return ""
+	}
+	return fmt.Sprintf(format, completion)
 }
 
 func errorText(host map[string]any) string {

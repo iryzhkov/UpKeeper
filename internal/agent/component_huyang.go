@@ -715,7 +715,8 @@ func huyangBootstrap(c *Context, spec map[string]any, actions *[]string, prepare
 			[]string{"systemctl", "--user", "disable", "--now", service},
 			60*time.Second, "", "stop failed Huyang bootstrap",
 		); stopErr != nil {
-			return "", Failf("%s; %s", err.Error(), stopErr.Error())
+			// An unproven service may still run and start at boot.
+			return "", Failf("rollback failed: %s; %s", err.Error(), stopErr.Error())
 		}
 		return "", err
 	}
@@ -847,7 +848,7 @@ func huyangResumeBootstrap(
 			[]string{"systemctl", "--user", "disable", "--now", service},
 			60*time.Second, "", "stop failed Huyang bootstrap",
 		); stopErr != nil {
-			return "", Failf("%s; %s", err.Error(), stopErr.Error())
+			return "", Failf("rollback failed: %s; %s", err.Error(), stopErr.Error())
 		}
 		return "", err
 	}

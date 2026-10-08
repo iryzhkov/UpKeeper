@@ -261,6 +261,16 @@ func Fleet(
 	}
 
 	exitCode := ExitCodeFor(results)
+	// Completion is reported for a convergence, not for an observation.
+	completion := ""
+	if !options.ObserveOnly {
+		for _, item := range results {
+			if host, ok := item.(map[string]any); ok && host != nil {
+				host["completion"] = HostCompletion(host)
+			}
+		}
+		completion = ReportCompletion(results)
+	}
 	report := map[string]any{
 		"schema_version":          exitcode.SchemaVersion,
 		"command":                 commandName(options.Command),
@@ -276,6 +286,9 @@ func Fleet(
 	if options.SelfUpdate != nil {
 		report["self_update"] = options.SelfUpdate
 	}
+	if completion != "" {
+		report["completion"] = completion
+	}
 	if !options.DryRun {
 		final := *record
 		final.Phase = "finished"
@@ -284,6 +297,9 @@ func Fleet(
 			final.Result = "exit-" + itoa(exitCode)
 		}
 		final.Details = map[string]any{"hosts": results}
+		if completion != "" {
+			final.Details["completion"] = completion
+		}
 		if options.SelfUpdate != nil {
 			final.Details["self_update"] = options.SelfUpdate
 		}

@@ -135,11 +135,13 @@ rollback failure, and `60` is lock contention.
 ## The compiled binary
 
 The same command surface is being migrated to a single Go binary, `cmd/upkeeper`,
-so that a supported host needs no Python, no `uv` and no Ansible. The Python
-package stays as the reference implementation and the rollback path until a host
-has been canaried onto the binary. See [the binary guide](docs/go-binary.md) for
-the package boundaries, the transport change, what a host still needs, and how
-to move a host onto the binary and back.
+so that a supported host needs no Python, no `uv` and no Ansible. The binary is
+the production path: hosts install their timers with `upkeeper
+install-self-timer` (or `install-pull-timer` on normandy) and roll the binary
+back with `upkeeper self rollback`. The Python package is no longer a rollback
+path and is removed in a later step. See [the binary guide](docs/go-binary.md)
+for the package boundaries, the transport change, what a host still needs, and
+how a host moves onto the binary's timer.
 
 ```bash
 make go-gate                                 # format, vet, tests, race, cross-builds
