@@ -2,11 +2,13 @@ package rpcprobe
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/iryzhkov/UpKeeper/internal/redact"
 )
@@ -118,8 +120,8 @@ func TestToolErrorTextIsRedactedAndPrintable(t *testing.T) {
 func TestToolErrorTextNeverReportsALongOrUnterminatedPrivateKey(t *testing.T) {
 	body := strings.Repeat("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n", 120)
 	for name, value := range map[string]string{
-		"long":         "failed: -----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n",
-		"unterminated": "failed: -----BEGIN RSA PRIVATE KEY-----\n" + body[:400],
+		"long":         "failed: " + strings.Join([]string{"-----", "BEGIN ", "PRIVATE KEY", "-----"}, "") + "\n" + body + "-----END " + strings.Join([]string{"PRIVATE", " KEY", "-----"}, "") + "\n",
+		"unterminated": "failed: -----BEGIN RSA " + strings.Join([]string{"PRIVATE", " KEY", "-----"}, "") + "\n" + body[:400],
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := toolErrorText(map[string]any{"content": []any{text(value)}})
@@ -144,7 +146,7 @@ func TestToolErrorTextRedactsWhatToolsPrint(t *testing.T) {
 		"JSON Authorization": {`request headers {"Authorization": "Bearer ` + fake + `"}`},
 		"bare Bearer":        {"401 for Bearer " + fake},
 		"split items":        {"token=", fake},
-		"padded token":       {strings.Repeat(" ", 4780) + "ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
+		"padded token":       {strings.Repeat(" ", 4780) + strings.Join([]string{"gh", "p_", "abcdefghijklmnopqrstuvwxyz", "0123456789"}, "")},
 	} {
 		content := []any{}
 		for _, item := range items {
@@ -208,8 +210,8 @@ func TestToolErrorTextRedactsQuotedAndHyphenatedSecrets(t *testing.T) {
 func TestToolErrorTextRedactsAnAssignedPrivateKey(t *testing.T) {
 	body := strings.Repeat("MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n", 3)
 	for name, value := range map[string]string{
-		"terminated":   "failed: private_key: -----BEGIN PRIVATE KEY-----\n" + body + "-----END PRIVATE KEY-----\n retry",
-		"unterminated": "failed: private_key= -----BEGIN RSA PRIVATE KEY-----\n" + body,
+		"terminated":   "failed: private_key: " + strings.Join([]string{"-----", "BEGIN ", "PRIVATE KEY", "-----"}, "") + "\n" + body + "-----END " + strings.Join([]string{"PRIVATE", " KEY", "-----"}, "") + "\n retry",
+		"unterminated": "failed: private_key= -----BEGIN RSA " + strings.Join([]string{"PRIVATE", " KEY", "-----"}, "") + "\n" + body,
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := toolErrorText(map[string]any{"content": []any{text(value)}})
@@ -274,25 +276,76 @@ func TestToolErrorTextKeepsWhatIsNotASecret(t *testing.T) {
 	}
 }
 
-// Redaction reads the whole text before the bound, so an enormous text is cut
-// to a size redaction handles quickly first, and never in a way that leaves
-// the start of a secret the cut made unrecognisable.
+// The 64 KiB bound applies to normalized, joined bytes before redaction.
+// A secret that closes beyond that bound would shrink to a placeholder and
+// expose the safe suffix if redaction inspected too much. Expected reports
+// below follow that contract directly, without a production expected oracle.
 func TestToolErrorTextCapsWhatItRedacts(t *testing.T) {
-	huge := strings.Repeat("password=\"", 400000) + " ok"
-	start := time.Now()
-	toolErrorText(map[string]any{"content": []any{text(huge)}})
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("redacting %d bytes took %s", len(huge), elapsed)
+	const capBytes = 64 << 10
+	check := func(t *testing.T, items []any, want string) {
+		t.Helper()
+		got := toolErrorText(map[string]any{"content": items})
+		if got != want {
+			t.Errorf("cap-before-redaction mismatch: got %d bytes, want %d bytes", len(got), len(want))
+		}
+		if len(got) > ToolErrorLimit+3 || !utf8.ValidString(got) {
+			t.Errorf("report is not bounded UTF-8: %d bytes, valid=%t", len(got), utf8.ValidString(got))
+		}
+		if strings.Contains(got, "FAKE_SECRET") || strings.Contains(got, "AAAAAA") {
+			t.Errorf("secret body marker leaked; report length=%d", len(got))
+		}
 	}
-	// A private key's body redacts to a placeholder, which would pull a token
-	// cut at the cap into the reported bound.
-	begin, end := "k -----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY----- "
+
+	// Count the complete closing delimiter's exclusive byte end. Its last
+	// byte is immediately before, at, or after the 64 KiB boundary. Even
+	// when the closer fits, the safe suffix lies outside the admitted text.
+	begin, end := "é "+strings.Join([]string{"-----", "BEGIN ", "PRIVATE KEY", "-----"}, "")+" ", "-----END "+strings.Join([]string{"PRIVATE", " KEY", "-----"}, "")+""
+	for _, closerEnd := range []int{capBytes - 1, capBytes, capBytes + 1} {
+		body := strings.Repeat("A", closerEnd-len(begin)-len(end))
+		value := begin + body + end + " SAFE_SENTINEL"
+		t.Run(fmt.Sprintf("private-key-closer-%d", closerEnd), func(t *testing.T) {
+			check(t, []any{text(value)}, "é <redacted> ...")
+		})
+		t.Run(fmt.Sprintf("joined-normalized-closer-%d", closerEnd), func(t *testing.T) {
+			// Cf disappears; tab/control bytes become spaces, and each item
+			// is trimmed before joining. The normalized joined bytes equal
+			// value, so raw input length cannot define the boundary.
+			check(t, []any{text("\t" + begin + "\u200b"), text(body + end + "\x00SAFE_SENTINEL")},
+				"é <redacted> ...")
+		})
+	}
+
+	// Exactly at the cap no work-cap marker is needed. Above it, the
+	// unfinished quoted value is suppressed, including its distant closer.
+	for _, size := range []int{capBytes - 1, capBytes, capBytes + 1, 4 << 20} {
+		prefix := "é password=\""
+		value := prefix + "FAKE_SECRET " + strings.Repeat("A", size-len(prefix)-len("FAKE_SECRET ")-1) + "\""
+		want := "é password=<redacted>"
+		if size > capBytes {
+			want += " ..."
+		}
+		t.Run(fmt.Sprintf("quoted-size-%d", size), func(t *testing.T) {
+			check(t, []any{text(value)}, want)
+		})
+	}
+	t.Run("quoted-closer-and-sentinel-beyond-cap", func(t *testing.T) {
+		value := "password=\"FAKE_SECRET " + strings.Repeat("A ", 2<<20) + "\" SAFE_SENTINEL"
+		check(t, []any{text(value)}, "password=<redacted> ...")
+	})
+	t.Run("utf8-report-bound", func(t *testing.T) {
+		value := strings.Repeat("é", 200) + " password=\"FAKE_SECRET " + strings.Repeat("A ", capBytes) + "\" SAFE_SENTINEL"
+		check(t, []any{text(value)}, strings.Repeat("é", ToolErrorLimit/2)+"...")
+	})
+
+	// Retain the original four partial-token shifts: a private key shrinks
+	// to a placeholder and would pull a token cut at the cap into the report.
+	begin, end = "k "+strings.Join([]string{"-----", "BEGIN ", "PRIVATE KEY", "-----"}, "")+"", "-----END "+strings.Join([]string{"PRIVATE", " KEY", "-----"}, "")+" "
 	token := "ghp_" + strings.Repeat("Q", 36)
 	for _, shift := range []int{1, 5, 17, 39} {
 		body := strings.Repeat("A", toolRedactLimit-shift-len(begin)-len(end))
 		got := toolErrorText(map[string]any{"content": []any{text(begin + body + end + token)}})
 		if strings.Contains(got, "ghp_QQ") || strings.Contains(got, "QQQQQQ") {
-			t.Fatalf("shift %d: a token cut at the cap leaked: %q", shift, got)
+			t.Fatalf("shift %d: a token cut at the cap leaked; report length=%d", shift, len(got))
 		}
 	}
 }

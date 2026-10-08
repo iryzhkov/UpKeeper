@@ -733,7 +733,7 @@ func stewardApplyPinnedBinary(
 	hookInstalled := false
 	unitPresent := stewardUnitPresent(c, service)
 	serviceWasActive := false
-	if !existed && unitPresent {
+	if unitPresent {
 		activity := c.Run([]string{"systemctl", "--user", "is-active", service}, 10*time.Second, "")
 		switch {
 		case activity.OK && activity.Output == "active":
@@ -751,6 +751,7 @@ func stewardApplyPinnedBinary(
 			failure:          failure,
 			restartAttempted: restartAttempted,
 			serviceWasActive: serviceWasActive,
+			unitPresent:      unitPresent,
 			service:          service,
 			backup:           backup,
 			existed:          existed,
@@ -858,6 +859,7 @@ type stewardRestoration struct {
 	failure          error
 	restartAttempted bool
 	serviceWasActive bool
+	unitPresent      bool
 	binary           string
 	service          string
 	backup           string
@@ -916,6 +918,17 @@ func stewardRestorePrevious(
 	if err := stewardRestoreBinary(c, before, state); err != nil {
 		return Failf("rollback failed: steward restoration failed")
 	}
+	if state.hookInstalled && !hookRestoreFailed {
+		if state.hookExisted {
+			body, err := os.ReadFile(state.hookPath)
+			info, statErr := os.Lstat(state.hookPath)
+			hookRestoreFailed = err != nil || statErr != nil || !bytes.Equal(body, state.hookBefore) ||
+				!info.Mode().IsRegular() || info.Mode().Perm() != state.hookMode
+		} else {
+			_, err := os.Lstat(state.hookPath)
+			hookRestoreFailed = !errors.Is(err, fs.ErrNotExist)
+		}
+	}
 	if hookRestoreFailed {
 		return Failf("rollback failed: steward restored but session hook restoration failed")
 	}
@@ -930,12 +943,29 @@ func stewardRestoreBinary(c *Context, before map[string]any, state stewardRestor
 	if err := os.Rename(restore, state.binary); err != nil {
 		return err
 	}
-	if _, err := c.Must([]string{"systemctl", "--user", "restart", state.service},
-		0, "", "restore steward"); err != nil {
-		return err
+	if state.unitPresent {
+		action := "stop"
+		if state.serviceWasActive {
+			action = "restart"
+		}
+		if _, err := c.Must([]string{"systemctl", "--user", action, state.service},
+			0, "", "restore steward"); err != nil {
+			return err
+		}
+		activity := c.Run([]string{"systemctl", "--user", "is-active", state.service}, 10*time.Second, "")
+		if state.serviceWasActive {
+			if !activity.OK || activity.Output != "active" {
+				return Failf("previous steward activity did not verify")
+			}
+		} else if (activity.Code != 0 && activity.Code != 3) || activity.Output != "inactive" {
+			return Failf("previous steward inactivity did not verify")
+		}
 	}
 	previousDigest, _ := before["binary_sha256"].(string)
-	if c.SHA256File(state.binary) != previousDigest || !c.UnitActive(state.service) {
+	info, err := os.Lstat(state.binary)
+	backupInfo, backupErr := os.Stat(state.backup)
+	if c.SHA256File(state.binary) != previousDigest || err != nil || backupErr != nil ||
+		!info.Mode().IsRegular() || info.Mode().Perm() != backupInfo.Mode().Perm() {
 		return Failf("previous steward did not verify")
 	}
 	return nil
