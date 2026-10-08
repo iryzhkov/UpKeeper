@@ -79,6 +79,19 @@ func stewardReadUnit(c *Context) ([]byte, error) {
 	return raw, err
 }
 
+// stewardUnitActivity admits only proven steady active/inactive states.
+// is-active normally exits 3 for inactivity; runners may report it with 0.
+func stewardUnitActivity(c *Context) (bool, error) {
+	result := c.Run([]string{"systemctl", "--user", "is-active", "t3-steward.service"}, 0, "")
+	if result.OK && result.Output == "active" {
+		return true, nil
+	}
+	if (result.Code == 0 || result.Code == 3) && result.Output == "inactive" && !result.TimedOut {
+		return false, nil
+	}
+	return false, Failf("cannot prove Steward unit activity: %s", result.Output)
+}
+
 // The pending original is durable before replacement. An interrupted activation
 // is retried only when the live unit still equals either known transaction image.
 func stewardApplyPinned(c *Context, spec, before map[string]any, actions *[]string) (string, error) {
@@ -111,6 +124,12 @@ func stewardApplyPinned(c *Context, spec, before map[string]any, actions *[]stri
 			return "", err
 		}
 		return "updated", nil
+	}
+	// Observe activity independently of the binary observation, before any
+	// migration effect. A failed/ambiguous probe is not proof of inactivity.
+	priorActive, err := stewardUnitActivity(c)
+	if err != nil {
+		return "", err
 	}
 	receipt := c.Path(stewardUnitPending)
 	if err := fleetOwnedPathSafe(c.Home, receipt); err != nil {
@@ -180,10 +199,27 @@ func stewardApplyPinned(c *Context, spec, before map[string]any, actions *[]stri
 			_, restoreErr = c.Must([]string{"systemctl", "--user", "daemon-reload"}, 0, "", "reload restored Steward unit")
 		}
 		if restoreErr == nil {
-			_, restoreErr = c.Must([]string{"systemctl", "--user", "restart", "t3-steward.service"}, 0, "", "restart restored Steward unit")
+			verb := "stop"
+			if priorActive {
+				verb = "restart"
+			}
+			_, restoreErr = c.Must([]string{"systemctl", "--user", verb, "t3-steward.service"}, 0, "", "restore prior Steward activity")
 		}
-		// The original unit is not back in force, so the host needs a person:
-		// the agent stops it for a failure that says its rollback failed.
+		if restoreErr == nil {
+			current, restoreErr = stewardReadUnit(c)
+			if restoreErr == nil && !bytes.Equal(current, original) {
+				restoreErr = Failf("restored Steward unit bytes differ from original")
+			}
+		}
+		if restoreErr == nil {
+			var restoredActive bool
+			restoredActive, restoreErr = stewardUnitActivity(c)
+			if restoreErr == nil && restoredActive != priorActive {
+				restoreErr = Failf("restored Steward activity differs from prior state")
+			}
+		}
+		// Command success alone does not prove restoration. An incomplete or
+		// unverified rollback stops Execute before later components run.
 		if restoreErr != nil {
 			restoreErr = fmt.Errorf("rollback failed: restoring the original Steward unit: %w", restoreErr)
 		}
