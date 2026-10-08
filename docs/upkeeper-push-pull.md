@@ -289,8 +289,9 @@ per partial host, `upkeeper <command>: <host> partial: N succeeded, M not comple
 skipped`, where the three counts partition its components; and the fleet feed summary
 carries `completion` for the run and each host.
 
-The Python reference implementation in `src/dev_fleet`, kept as the rollback path, still
-stops at the first failure; the fleet runs the Go agent.
+The Python reference implementation in `src/dev_fleet`, retained for reference tests, still
+stops at the first failure; the fleet runs the Go agent. Binary rollback uses
+`upkeeper self rollback`; the Python canary rollback path has been retired.
 
 Environment materialization rebases structured home paths, preserves the local Claude
 text outside the managed block, merges owned JSON keys and permission allows, preserves
