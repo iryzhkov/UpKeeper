@@ -29,9 +29,9 @@ a frozen pair. Historical setup modules 26-t3 and 45-agents are refused.
 ## Capture and publication
 
 ```bash
-./scripts/upkeeper push
-./scripts/upkeeper push github gitea
-./scripts/upkeeper push --no-push
+upkeeper push
+upkeeper push github gitea
+upkeeper push --no-push
 ```
 
 Capture requires a clean release repository and clean installed checkouts whose exact
@@ -172,10 +172,10 @@ U0 leaves the worker hosts map empty.
 ## Pull and observation
 
 ```bash
-./scripts/upkeeper pull --hosts homelab omarchy-pc --dry-run
-./scripts/upkeeper pull --hosts homelab --components agent-environment
-./scripts/upkeeper pull --hosts homelab --components t3
-./scripts/upkeeper pull --all
+upkeeper pull --hosts homelab omarchy-pc --dry-run
+upkeeper pull --hosts homelab --components agent-environment
+upkeeper pull --hosts homelab --components t3
+upkeeper pull --all
 ```
 
 The controller validates and carries an in-memory Python module bundle and release
@@ -368,9 +368,9 @@ operations still require a qualified executor/journal/fence with independent acc
 Pull component compensation is not atomic fleet rollback. Operator rollback reads immutable release intent without moving the controller checkout:
 
 ```bash
-./scripts/upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward --dry-run
-./scripts/upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward
-./scripts/upkeeper pull --hosts omarchy-pc --components t3-steward
+upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward --dry-run
+upkeeper rollback --to <release-commit> --hosts omarchy-pc --components t3-steward
+upkeeper pull --hosts omarchy-pc --components t3-steward
 ```
 
 The hash must resolve to an ancestor of controller HEAD (HEAD itself is allowed).

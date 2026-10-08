@@ -597,14 +597,64 @@ func runInstallTimer(parsed *arguments, streams Streams) (int, error) {
 	if parsed.command == "install-pull-timer" {
 		install = units.InstallFleetTimer
 	}
-	written, err := install(root, procx.Run)
-	if err != nil {
+	done, err := install(root, procx.Run)
+	if err != nil && len(done.Written)+len(done.Removed) == 0 {
 		return exitcode.Preflight, err
 	}
-	for _, path := range written {
-		fmt.Fprintf(streams.Out, "installed %s\n", path)
+	return reportInstallation(streams, parsed.command, done, parsed.asJSON, err)
+}
+
+// reportInstallation reports the unit files a timer install wrote and the
+// legacy canary drop-ins it removed, so that an operator reconciling a host
+// can see that the drop-in is gone without listing the directory. An install
+// that failed after changing something is partial, and its report still says
+// what changed, because a rerun will no longer find what this run removed.
+func reportInstallation(
+	streams Streams, command string, done units.Installation, asJSON bool, failed error,
+) (int, error) {
+	code := exitcode.Success
+	if failed != nil {
+		code = exitcode.Partial
 	}
-	return exitcode.Success, nil
+	if asJSON {
+		report := map[string]any{
+			"command":   command,
+			"exit_code": code,
+			"installed": nonNil(done.Written),
+			"removed":   nonNil(done.Removed),
+		}
+		if failed != nil {
+			report["result"] = "partial"
+			report["error"] = redact.Text(failed.Error())
+		}
+		if err := printJSON(streams.Out, report); err != nil {
+			return exitcode.Preflight, err
+		}
+		return code, nil
+	}
+	for _, path := range done.Written {
+		if _, err := fmt.Fprintf(streams.Out, "installed %s\n", path); err != nil {
+			return exitcode.Preflight, err
+		}
+	}
+	for _, path := range done.Removed {
+		if _, err := fmt.Fprintf(streams.Out, "removed legacy drop-in %s\n", path); err != nil {
+			return exitcode.Preflight, err
+		}
+	}
+	if failed != nil {
+		fmt.Fprintf(streams.Err, "upkeeper %s: partial: %s; exit %d\n",
+			command, redact.Text(failed.Error()), code)
+	}
+	return code, nil
+}
+
+// nonNil keeps an empty list a JSON array rather than null.
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 // reportScheduledFailure keeps an unattended run's output machine readable: a
