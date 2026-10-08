@@ -484,7 +484,9 @@ func controlledCodexApply(c *Context, raw, before map[string]any, actions *[]str
 			return "", e
 		}
 		if e = os.Rename(candidate, root); e != nil {
-			_ = os.Rename(backup, root)
+			if restoreErr := os.Rename(backup, root); restoreErr != nil {
+				return "", Failf("controlled Codex tree rollback failed: %v; previous tree kept at %s: %v", e, backup, restoreErr)
+			}
 			return "", e
 		}
 	}
@@ -525,7 +527,7 @@ func controlledCodexApply(c *Context, raw, before map[string]any, actions *[]str
 	}
 	current, _ := os.Readlink(link)
 	if current != wanted {
-		return "", Failf("controlled Codex activation failed; concurrent entry point preserved")
+		return "", Failf("rollback failed: controlled Codex activation failed; concurrent entry point preserved")
 	}
 	if hadPrevious {
 		e = controlledAtomicSymlink(previous, link)

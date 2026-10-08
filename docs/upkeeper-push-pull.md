@@ -187,10 +187,110 @@ repository. pull --self is the explicit target-side repository exception describ
 
 Each host is locked on controller and target; dry run observes without writes or service
 effects. Components run in fixed order. Selecting either t3 or t3-steward in a new release
-selects the pair. A failure or deferred T3 restart stops later components on that host.
-A blocked component (see [Fresh host](#fresh-host)) does not: only the components that
-depend on it are skipped.
+selects the pair. A component that does not complete skips only the components that depend
+on it, and every independent component still runs; see
+[Component dependencies and partial runs](#component-dependencies-and-partial-runs).
 A successful earlier component is not automatically rolled back by a later failure.
+
+### Component dependencies and partial runs
+
+A component that is `blocked` (see [Fresh host](#fresh-host)), `deferred`, `rolled-back`
+or `failed` is unavailable to the components that depend on it, and they are `skipped`,
+directly or through another skipped component. Every independent component after it runs
+in the fixed order, so one broken component no longer leaves the rest of the host behind.
+A skipped component's adapter is never called, neither to observe nor to apply.
+
+The dependencies are a static table in code, `componentDependencies` in
+`internal/agent/dependencies.go`, not part of the release manifest, so an older binary
+reading a newer manifest is unaffected. Every edge points to an earlier component in the
+convergence order, and a test keeps it so. An edge exists only where the later adapter
+needs state the earlier component installs in the same run; reading another component's
+manifest entry is not a dependency. The table:
+
+- `t3` depends on `t3-steward`: the T3 adapter proves its pair by running the installed
+  `t3-steward check` (`component_t3.go`, `t3Observe` and every artifact path).
+- `worker-configuration` depends on `t3-steward`: it projects the bootstrap of the steward
+  that `t3-steward` installs. It runs no steward binary, but a projection for a steward
+  that did not install is the half-applied pair the table exists to prevent.
+- `steward-fleet-configuration` depends on `t3-steward`: its policy gate runs the installed
+  `t3-steward policy` (`fleet/route_policy.go`).
+
+The audit of every other component (2026-10-07) found no further edge:
+
+- `omarchy-setup` is first, needs only git and pulls its own checkout.
+- `agent-config` writes files from the release's stored content and never reads the
+  omarchy-setup checkout.
+- `agent-tooling` reads only the agent-environment manifest entry for its health check
+  environment; the mise shims it needs are an OS prerequisite, not a component.
+- `jocasta` and `codex-controlled-runtime` download, install and prove their own binaries
+  with `gh`; neither uses anything agent-tooling installs.
+- `agent-environment` registers MCP servers by the path of the wrappers agent-tooling
+  installs, but never runs or inspects them, so registration completes without them. Its
+  overlap with omarchy-setup on `~/.claude` paths is a matter of write order, which the
+  fixed order keeps, not of need.
+- `huyang` clones, builds and probes its own checkout and needs only OS git, go and make.
+- `t3-steward` installs its own binary and units; it reads the t3 manifest entry and
+  observes the running T3, which does not need the t3 component to have run.
+- `worker-configuration` and `steward-fleet-configuration` do not depend on `t3`: neither
+  runs T3 or reads anything it installs. `steward-fleet-configuration` reads only the
+  worker-configuration manifest entry to refuse a disagreeing release, so it does not
+  depend on `worker-configuration` either.
+
+A few outcomes still stop the host, because applying anything more would build on a state
+the run cannot vouch for. This abort class is a legacy updater retirement that `failed` or
+`deferred`, a selected component with no adapter, and `rollback-failed`, which leaves the
+host in a state the run neither found nor restored. A failure is `rollback-failed` when its
+message says `rollback failed` or `rollback incomplete` anywhere, because some adapters
+name what they restored first (`Jocasta rollback failed; inspect ...`), so such a failure
+now exits 50 rather than 40. Every adapter keeps that wording for every restoration that
+did not finish, finished unverified, or stopped at a concurrent change it left in place:
+the agent-environment restore for an I/O error, a T3 transaction left at `files restored`
+(`rollback incomplete: files restored; previous service health not verified; ...`), the
+Steward unit and session hook restores, a new Steward binary or hook that could not be
+removed, a Huyang bootstrap whose unproven service could not be stopped, a controlled Codex
+tree that could not be moved back, and the Jocasta and controlled Codex rollbacks that met
+a concurrent change. A refusal before any effect never says so, even when it names
+what it preserved, and only skips the component's dependents. Every later component is
+`skipped`.
+The refusals before any component runs are unchanged: preflight, the controller or target
+lock, the program fence, and a self-pull program update or moved checkout.
+
+Every skipped entry says why:
+
+- A dependency skip carries `skipped_dependency` (the direct dependency), `skipped_root`
+  (the first component in the chain that did not complete) and the error
+  `skipped: depends on <state> <dependency>`, with `; root cause <state> <root>` appended
+  when the two differ: if c depends on b and b on a failed a, c reports
+  `skipped: depends on skipped b; root cause failed a`. With today's table every chain
+  is one edge long, so a skip on t3-steward reads `skipped: depends on failed t3-steward`.
+- An abort skip carries `aborted_by` (the component, or `legacy-updater`) and the error
+  `skipped: run aborted after <state> <name>`.
+
+The host `result` is still its worst outcome, and the exit codes are unchanged: any
+failure still exits 40, or 50 for `rollback-failed`, so timers and the scheduled hold
+marker see a failure exactly as before. What is new is `completion`, which the controller
+computes from each host's component list, so a host running an older agent that stopped
+at its failure gets one too:
+
+- `complete`: every selected component converged, was updated or is ahead, including a
+  host with no components to converge;
+- `partial`: at least one component succeeded and at least one did not;
+- `none`: no component succeeded, including a host that failed, was locked or was
+  unreachable before its components ran.
+
+It is set on every host entry, on the report and in the run record's details; the run
+is `complete` when every host is, `none` when every host is, and `partial` otherwise.
+Every host counts: a self-managed host left to its local timer, or one skipped with
+`--skip-unreachable`, does not change the exit code but is `none`, so a run beside it is
+`partial`. `status` reports no completion.
+The text output adds ` completion=<value>` to the run line and ` (completion <value>)` to
+the host line only when the value is not `complete`; a scheduled run adds one stderr line
+per partial host, `upkeeper <command>: <host> partial: N succeeded, M not completed, K
+skipped`, where the three counts partition its components; and the fleet feed summary
+carries `completion` for the run and each host.
+
+The Python reference implementation in `src/dev_fleet`, kept as the rollback path, still
+stops at the first failure; the fleet runs the Go agent.
 
 Environment materialization rebases structured home paths, preserves the local Claude
 text outside the managed block, merges owned JSON keys and permission allows, preserves
@@ -316,7 +416,8 @@ installs an OS package.
 The dry run reports a missing prerequisite or credential as the component state `blocked`
 with the remedy, before anything changes. A blocked component changes nothing, and the
 components after it still converge unless they depend on it (t3, worker-configuration and
-steward-fleet-configuration depend on t3-steward); a blocked host exits 10, like drift.
+steward-fleet-configuration depend on t3-steward), as after a failed one; a blocked host
+exits 10, like drift.
 Create what the message names and pull again.
 
 On the first converge of a fresh host, expect:
@@ -389,4 +490,7 @@ Exit codes retain the existing interface: 0 converged/updated, 10 ahead/deferred
 20 partial/offline when no deployment-failure result takes precedence, 40 failed or
 rolled-back, 50 rollback-failed, 60 lock contention. A dry-run update describes a planned
 change and retains the existing exit-0 reporting convention. A transport failure
-currently carries result failed and therefore returns 40; it is never success.
+currently carries result failed and therefore returns 40; it is never success. Partial
+runs did not change these codes: a host whose independent components converged around a
+failure still returns 40, and its report says `completion` `partial`; exit 20 keeps its
+offline meaning.

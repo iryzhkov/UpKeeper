@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/iryzhkov/UpKeeper/internal/agentenv"
-	"github.com/iryzhkov/UpKeeper/internal/fleet"
 	"github.com/iryzhkov/UpKeeper/internal/prereq"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -21,7 +20,7 @@ import (
 // host's operator can provide, an OS package or a per-host credential that
 // UpKeeper must never copy. A blocked component changes nothing, tells the
 // operator exactly what to do, and does not stop the components after it;
-// only the ones that really depend on it are skipped.
+// only the ones that really depend on it (dependencies.go) are skipped.
 
 // credential is one per-host secret a component needs. Present must never
 // read the secret into anything that is reported. A credential with a Tool is
@@ -45,32 +44,10 @@ var componentCredentials = map[string][]credential{
 	}},
 }
 
-// componentDependencies names, for each component, the earlier components it
-// cannot be converged without. A component that is blocked, or skipped for
-// one of those, skips its dependents. Failures still stop the whole host.
-var componentDependencies = map[string][]string{
-	// The T3 adapter proves its pair through the installed steward binary.
-	"t3": {"t3-steward"},
-	// Both configure the steward that t3-steward installs.
-	"worker-configuration": {"t3-steward"},
-	fleet.Component:        {"t3-steward"},
-}
-
 // componentPrerequisites returns what a component needs from the OS. A test
 // can replace it.
 var componentPrerequisites = func(name string) []prereq.Prerequisite {
 	return prereq.Catalogue[name]
-}
-
-// blockedDependency names the earlier component that keeps name from running,
-// or "".
-func blockedDependency(name string, unavailable map[string]bool) string {
-	for _, dependency := range componentDependencies[name] {
-		if unavailable[dependency] {
-			return dependency
-		}
-	}
-	return ""
 }
 
 // requirementsBlock checks a component's OS prerequisites and credentials

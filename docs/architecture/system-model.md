@@ -126,8 +126,12 @@ reporting zero running threads. Missing, failed or busy evidence yields deferred
 configuration checks reference availability before projecting only the selected
 host's bootstrap. It retains a private prior copy and never enrolls a worker.
 
-The first failed, rolled-back or deferred component stops later components on
-that host. Previously verified components and other hosts are independent.
+A failed, rolled-back, deferred or blocked component skips only the components
+that depend on it (a static table in internal/agent/dependencies.go); every
+independent component on that host still runs, and the host reports completion
+partial with its worst result and exit code unchanged. Only a failed rollback,
+an unknown adapter or a legacy updater retirement that failed or deferred stops
+the host. Previously verified components and other hosts are independent.
 This is not an atomic fleet transaction. npm/service failures are reported for
 observation; no implicit npm downgrade is attempted.
 

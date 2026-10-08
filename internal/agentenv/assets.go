@@ -1450,7 +1450,24 @@ func activate(
 
 // restore puts every activated path back and then verifies the whole previous
 // environment, not only the paths it touched.
+//
+// Every error it returns begins "rollback failed", an I/O error included: any
+// of them leaves part of the previous environment unrestored, and the agent
+// stops the whole host only for a failure that says its rollback failed.
 func restore(
+	observation *Observation, paths map[string]string,
+	modes map[string]os.FileMode, activated []string,
+) error {
+	if err := restorePaths(observation, paths, modes, activated); err != nil {
+		if strings.HasPrefix(err.Error(), "rollback failed") {
+			return err
+		}
+		return fmt.Errorf("rollback failed: %w", err)
+	}
+	return nil
+}
+
+func restorePaths(
 	observation *Observation, paths map[string]string,
 	modes map[string]os.FileMode, activated []string,
 ) error {

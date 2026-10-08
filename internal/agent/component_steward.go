@@ -732,18 +732,33 @@ func stewardApplyPinnedBinary(
 
 	hookInstalled := false
 	unitPresent := stewardUnitPresent(c, service)
-	failure := stewardInstall(c, service, binary, candidate, hookCandidate, hookPath, unitPresent, &hookInstalled)
+	serviceWasActive := false
+	if !existed && unitPresent {
+		activity := c.Run([]string{"systemctl", "--user", "is-active", service}, 10*time.Second, "")
+		switch {
+		case activity.OK && activity.Output == "active":
+			serviceWasActive = true
+		case (activity.Code == 0 || activity.Code == 3) && activity.Output == "inactive":
+		default:
+			return "", Failf("steward service activity could not be proven before installation: %s", activity.Output)
+		}
+	}
+	restartAttempted := false
+	failure := stewardInstall(c, service, binary, candidate, hookCandidate, hookPath, unitPresent, &hookInstalled, &restartAttempted)
 	if failure != nil {
 		return "", stewardRestorePrevious(c, before, stewardRestoration{
-			binary:        binary,
-			service:       service,
-			backup:        backup,
-			existed:       existed,
-			hookPath:      hookPath,
-			hookInstalled: hookInstalled,
-			hookExisted:   hookExisted,
-			hookBefore:    hookBefore,
-			hookMode:      hookMode,
+			binary:           binary,
+			failure:          failure,
+			restartAttempted: restartAttempted,
+			serviceWasActive: serviceWasActive,
+			service:          service,
+			backup:           backup,
+			existed:          existed,
+			hookPath:         hookPath,
+			hookInstalled:    hookInstalled,
+			hookExisted:      hookExisted,
+			hookBefore:       hookBefore,
+			hookMode:         hookMode,
 		})
 	}
 
@@ -776,7 +791,7 @@ func stewardNoUnitAction(service string) string {
 // host without a steward unit gets the binary proved without a restart.
 func stewardInstall(
 	c *Context, service, binary, candidate, hookCandidate, hookPath string,
-	unitPresent bool, hookInstalled *bool,
+	unitPresent bool, hookInstalled, restartAttempted *bool,
 ) error {
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		return err
@@ -823,6 +838,8 @@ func stewardInstall(
 		_, _, err := stewardVerifyPairBinary(c, binary)
 		return err
 	}
+	// A failed restart may still have started the candidate before reporting an error.
+	*restartAttempted = true
 	if _, err := c.Must([]string{"systemctl", "--user", "restart", service},
 		0, "", "restart pinned steward"); err != nil {
 		return err
@@ -838,15 +855,18 @@ func stewardInstall(
 
 // stewardRestoration is what a failed install has to put back.
 type stewardRestoration struct {
-	binary        string
-	service       string
-	backup        string
-	existed       bool
-	hookPath      string
-	hookInstalled bool
-	hookExisted   bool
-	hookBefore    []byte
-	hookMode      fs.FileMode
+	failure          error
+	restartAttempted bool
+	serviceWasActive bool
+	binary           string
+	service          string
+	backup           string
+	existed          bool
+	hookPath         string
+	hookInstalled    bool
+	hookExisted      bool
+	hookBefore       []byte
+	hookMode         fs.FileMode
 }
 
 // stewardRestorePrevious puts the machine back the way the run found it.
@@ -857,6 +877,21 @@ type stewardRestoration struct {
 func stewardRestorePrevious(
 	c *Context, before map[string]any, state stewardRestoration,
 ) error {
+	// Stop the candidate while its binary still exists, then prove inactivity.
+	// A missing previous binary cannot restore a service that was already active.
+	var serviceRestoreError error
+	if !state.existed && state.restartAttempted {
+		_, stopError := c.Must([]string{"systemctl", "--user", "stop", state.service}, 0, "", "stop unverified steward")
+		activity := c.Run([]string{"systemctl", "--user", "is-active", state.service}, 10*time.Second, "")
+		switch {
+		case stopError != nil:
+			serviceRestoreError = stopError
+		case (activity.Code != 0 && activity.Code != 3) || activity.Output != "inactive":
+			serviceRestoreError = Failf("steward inactivity could not be proven: %s", activity.Output)
+		case state.serviceWasActive:
+			serviceRestoreError = Failf("previous active steward cannot be restored without its binary")
+		}
+	}
 	hookRestoreFailed := false
 	if state.hookInstalled {
 		if !state.hookExisted {
@@ -870,14 +905,19 @@ func stewardRestorePrevious(
 		}
 	}
 	if !state.existed {
-		_ = os.Remove(state.binary)
-		return Failf("new steward failed; removed unverified binary")
+		if err := os.Remove(state.binary); (err != nil && !errors.Is(err, fs.ErrNotExist)) || hookRestoreFailed {
+			return Failf("rollback failed: new steward failed; the unverified binary or session hook could not be removed; binary removal: %v; service restoration: %v; install failure: %v", err, serviceRestoreError, state.failure)
+		}
+		if serviceRestoreError != nil {
+			return Failf("rollback failed: new steward failed; removed unverified binary; service restoration failed: %v; install failure: %v", serviceRestoreError, state.failure)
+		}
+		return Failf("new steward failed; removed unverified binary; install failure: %v", state.failure)
 	}
 	if err := stewardRestoreBinary(c, before, state); err != nil {
 		return Failf("rollback failed: steward restoration failed")
 	}
 	if hookRestoreFailed {
-		return Failf("steward restored but session hook restoration failed")
+		return Failf("rollback failed: steward restored but session hook restoration failed")
 	}
 	return RolledBackf("restored previous steward binary, service and session hook")
 }
