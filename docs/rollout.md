@@ -10,9 +10,13 @@ rollback without executing commands. `upkeeper rollout run --config rollout.json
 A rollout is an operator-authored maintenance window. Use a dedicated local
 release checkout and journal directory, outside candidate-managed paths. The
 previous release is a full immutable Git commit, not a branch or captured host.
-All mutation, including resume, requires `--yes`. There is no implicit fleet
-approval: record the operator's words in `FleetApproval` before starting.
-The journal binds the exact configuration; retain that file throughout resume.
+All mutation, including resume, requires `--yes`. Start with `FleetApproval`
+empty: the canary and soak run under standing authority, then the command stops
+before the first fleet host. Present that evidence to the operator, record the
+explicit go in `FleetApproval`, and resume with `--yes`. Authorization is saved
+separately in the journal before the first fleet host and retained on later
+resumes; a different nonempty approval refuses. The journal binds all operational
+configuration fields; retain them unchanged throughout resume.
 Use an absolute `StatePath` and `Checkout`. Prepare the isolated checkout on
 its main branch, at the agreed main commit, with the configured remote names
 (origin and gitea in the example) pointing to the intended release repositories.
@@ -58,7 +62,7 @@ insensitive; underscores are not aliases):
   "ReadinessSeconds": 180,
   "SoakSeconds": 1800,
   "ReviewFile": "/absolute/path/to/review.md",
-  "FleetApproval": "operator approval, window and source"
+  "FleetApproval": ""
 }
 ```
 
@@ -143,7 +147,7 @@ This unit does not delete it or change its independent review procedure.
 | 7 independent release review | external review of frozen package |
 | 8 authored publication and release CI | run: publish, release-ci |
 | 9 canary and soak | run: canary host, soak |
-| 10 operator fleet go | frozen FleetApproval |
+| 10 operator fleet go | run: record FleetApproval after canary/soak, then resume --yes |
 | 11 ordered fleet and rollback | run: one host at a time; automatic immutable rollback |
 | 12 per-worker enrollment | run: enroll |
 | 13 final verification | run: verify |

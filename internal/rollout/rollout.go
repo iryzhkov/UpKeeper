@@ -48,6 +48,7 @@ type Config struct {
 
 type State struct {
 	ConfigDigest   string
+	FleetApproval  string
 	Completed      map[string]bool
 	InFlight       string
 	Failed         string
@@ -144,6 +145,8 @@ func contains(xs []string, x string) bool {
 	return false
 }
 func (c Config) Digest() string {
+	// Fleet authorization is obtained after the canary and journaled separately.
+	c.FleetApproval = ""
 	b, _ := json.Marshal(c)
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
@@ -275,6 +278,9 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 	if err != nil {
 		return err
 	}
+	if s.FleetApproval != "" && c.FleetApproval != "" && s.FleetApproval != c.FleetApproval {
+		return errors.New("fleet approval differs from the recorded authorization")
+	}
 	if strings.HasPrefix(s.InFlight, "rollback:") {
 		return resumeRollback(ctx, c, b, s)
 	}
@@ -304,8 +310,16 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 			if err = b.Execute(ctx, c, "release-ci", s); err != nil {
 				return err
 			}
-			if strings.TrimPrefix(step.Action, "host:") != c.Canary && c.FleetApproval == "" {
-				return errors.New("fleet approval must be recorded in configuration")
+			if strings.TrimPrefix(step.Action, "host:") != c.Canary && s.FleetApproval == "" {
+				if strings.TrimSpace(c.FleetApproval) == "" {
+					return errors.New("fleet approval required after canary and soak; record it in FleetApproval and resume with --yes")
+				}
+				// Authorization is separate from the frozen operational configuration.
+				// Persist it before dispatching the first fleet host.
+				s.FleetApproval = c.FleetApproval
+				if err = s.Save(); err != nil {
+					return err
+				}
 			}
 		}
 		s.InFlight = step.Action
