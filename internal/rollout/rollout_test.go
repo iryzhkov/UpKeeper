@@ -154,6 +154,7 @@ func TestInterruptedHostRollsBackOnResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.InFlight = "host:middle"
+	s.Extra["host-pre:middle"] = json.RawMessage(`{"prior":"snapshot"}`)
 	if err = s.Save(); err != nil {
 		t.Fatal(err)
 	}

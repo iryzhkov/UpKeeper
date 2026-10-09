@@ -13,6 +13,8 @@ release tags (`v0.1.x`).
   timer fences, coordinator backup and restore drill, canary soak, ordered
   fleet verification and immutable rollback. A durable journal resumes
   interrupted work and records explicit fleet approval after the canary.
+  Hard interruptions before a host's prior snapshot retry preflight without
+  rollback; interrupted effects retain immutable rollback recovery.
   Check and plan are read-only. See [the rollout guide](docs/rollout.md).
 
 - A failed controlled T3 activation now journals its original cause and every

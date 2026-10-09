@@ -120,7 +120,10 @@ waits through the observed 20–60 second reconnect window; drained hosts
 are held to the same readiness gate. Epoch changes are allowed only for
 the coordinator step, followed by all-worker reconnection checks.
 
-Resume skips verified hosts. An interrupted host effect is ambiguous, so
+Resume skips verified hosts. A hard interruption during host preflight, before
+its prior snapshot is saved, clears the in-flight step and retries preflight
+without rollback. The snapshot is saved before convergence can be dispatched.
+An interrupted host effect with that saved snapshot is ambiguous, so
 resume rolls it back to the immutable previous release and stops rather
 than repeating convergence. A failed host gate automatically rolls that
 host back and records a terminal failure. A pre-convergence refusal clears the

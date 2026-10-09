@@ -66,6 +66,8 @@ type State struct {
 
 // Backend is the effect boundary; Check must never mutate. Execute must persist
 // evidence via State.Save before an effect that needs prior-state recovery.
+// Host convergence must save Extra["host-pre:"+host] before dispatch; its absence
+// proves an interrupted host step was still in preflight.
 type Backend interface {
 	Check(context.Context, Config) error
 	Execute(context.Context, Config, string, *State) error
@@ -288,7 +290,13 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 		return fmt.Errorf("rollout stopped: %s; retain fences and recovery evidence", s.Failed)
 	}
 	if strings.HasPrefix(s.InFlight, "host:") {
-		return failHost(ctx, c, b, s, s.InFlight, errors.New("interrupted host effect; reconciling by immutable rollback"))
+		host := strings.TrimPrefix(s.InFlight, "host:")
+		if _, recorded := s.Extra["host-pre:"+host]; recorded {
+			return failHost(ctx, c, b, s, s.InFlight, errors.New("interrupted host effect; reconciling by immutable rollback"))
+		}
+		// No host effect can precede its durable prior snapshot. Retry preflight
+		// after a hard interruption just as after a pre-convergence refusal.
+		s.InFlight = ""
 	}
 	if s.InFlight == "publish" && len(s.Extra["publication-started"]) > 0 {
 		return errors.New("publication was interrupted; reconcile all remote receipts before resuming")
