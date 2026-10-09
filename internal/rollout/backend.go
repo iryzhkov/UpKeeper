@@ -931,7 +931,24 @@ func (b *ProductionBackend) quiet(ctx context.Context, c Config) error {
 	_, err := b.command(ctx, c, "", c.QuietCommand[0], c.QuietCommand[1:]...)
 	return err
 }
-func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *State) error {
+
+// A refusal before convergence has no host effect to roll back.
+type hostPreflightError struct {
+	err           error
+	refreshBackup bool
+}
+
+func (e *hostPreflightError) Error() string { return e.err.Error() }
+func (e *hostPreflightError) Unwrap() error { return e.err }
+
+func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *State) (err error) {
+	started := false
+	refreshBackup := false
+	defer func() {
+		if err != nil && !started {
+			err = &hostPreflightError{err: err, refreshBackup: refreshBackup}
+		}
+	}()
 	if host == c.LaptopHost || !contains(append([]string{c.Canary}, c.FleetOrder...), host) {
 		return errors.New("host outside rollout scope")
 	}
@@ -947,6 +964,7 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	}
 	if host == c.CoordinatorHost {
 		if s.BackupCreated.IsZero() || b.Now().Before(s.BackupCreated) || b.Now().Sub(s.BackupCreated) > time.Duration(c.BackupMaxAgeSeconds)*time.Second {
+			refreshBackup = true
 			return errors.New("coordinator backup absent or stale")
 		}
 		var kv map[string]string
@@ -1010,6 +1028,7 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = record(s, "identity-pre:"+host, preID); err != nil {
 		return err
 	}
+	started = true
 	p, err = b.command(ctx, c, "", "upkeeper", "pull", "--hosts", host, "--components", "t3-steward", "--json")
 	if err != nil {
 		return err

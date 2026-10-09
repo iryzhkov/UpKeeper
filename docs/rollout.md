@@ -12,9 +12,9 @@ release checkout and journal directory, outside candidate-managed paths. The
 previous release is a full immutable Git commit, not a branch or captured host.
 All mutation, including resume, requires `--yes`. Start with `FleetApproval`
 empty: the canary and soak run under standing authority, then the command stops
-before the first fleet host. Present that evidence to the operator, record the
+before the binding coordinator backup and the first fleet host. Present that evidence to the operator, record the
 explicit go in `FleetApproval`, and resume with `--yes`. Authorization is saved
-separately in the journal before the first fleet host and retained on later
+separately in the journal before backup or any fleet host and retained on later
 resumes; a different nonempty approval refuses. The journal binds all operational
 configuration fields; retain them unchanged throughout resume.
 Use an absolute `StatePath` and `Checkout`. Prepare the isolated checkout on
@@ -123,7 +123,9 @@ the coordinator step, followed by all-worker reconnection checks.
 Resume skips verified hosts. An interrupted host effect is ambiguous, so
 resume rolls it back to the immutable previous release and stops rather
 than repeating convergence. A failed host gate automatically rolls that
-host back and records a terminal failure. Failed enrollment or final fleet
+host back and records a terminal failure. A pre-convergence refusal clears the
+in-flight step and resumes without rollback; a stale coordinator backup is
+retaken on resume before coordinator convergence. Failed enrollment or final fleet
 verification rolls completed hosts back in reverse order; the durable recovery
 queue resumes at its interrupted host. Enrollment itself is retained for forward
 recovery. A failed rollback is retried on resume. Interrupted publication requires receipt/remote reconciliation;
@@ -142,7 +144,7 @@ This unit does not delete it or change its independent review procedure.
 | --- | --- |
 | 1 tag/build, 2 assets, 3 base/remotes | check; repeated at run preflight |
 | 4 timer fence | run: fence; prior states in journal |
-| 5 snapshot rehearsal, 11a binding snapshot | run: backup before coordinator |
+| 5 snapshot rehearsal, 11a binding snapshot | run: backup after operator go, immediately before coordinator |
 | 6 author and previews | run: prepare |
 | 7 independent release review | external review of frozen package |
 | 8 authored publication and release CI | run: publish, release-ci |

@@ -21,7 +21,7 @@ func TestReviewFleetApprovalAfterCanary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s.Completed["host:"+c.Canary] || !s.Completed["soak"] || !s.Completed["backup"] || s.FleetApproval != "" {
+	if !s.Completed["host:"+c.Canary] || !s.Completed["soak"] || s.Completed["backup"] || s.FleetApproval != "" {
 		t.Fatalf("wrong approval boundary: %+v", s)
 	}
 	for _, h := range c.FleetOrder {
@@ -32,7 +32,7 @@ func TestReviewFleetApprovalAfterCanary(t *testing.T) {
 	c.FleetApproval = "operator go after reviewing canary and soak"
 	f.actions = nil
 	f.before = func(a string, _ *State) {
-		if a == "host:"+c.FleetOrder[0] {
+		if a == "backup" || a == "host:"+c.FleetOrder[0] {
 			disk, err := loadState(c)
 			if err != nil {
 				t.Fatal(err)
@@ -45,8 +45,8 @@ func TestReviewFleetApprovalAfterCanary(t *testing.T) {
 	if err := Run(context.Background(), c, f, true, io.Discard); err != nil {
 		t.Fatalf("cannot resume after fleet approval: %v; actions=%v", err, f.actions)
 	}
-	if contains(f.actions, "host:"+c.Canary) || contains(f.actions, "backup") || contains(f.actions, "canary-observe") {
-		t.Fatalf("repeated completed canary/soak/backup: %v", f.actions)
+	if contains(f.actions, "host:"+c.Canary) || !contains(f.actions, "backup") || contains(f.actions, "canary-observe") {
+		t.Fatalf("wrong resumed canary/soak/backup: %v", f.actions)
 	}
 }
 

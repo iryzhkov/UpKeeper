@@ -305,21 +305,20 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 		if s.Completed[step.Action] {
 			continue
 		}
+		if (step.Action == "backup" || (strings.HasPrefix(step.Action, "host:") && step.Action != "host:"+c.Canary)) && s.FleetApproval == "" {
+			if strings.TrimSpace(c.FleetApproval) == "" {
+				return errors.New("fleet approval required after canary and soak; record it in FleetApproval and resume with --yes")
+			}
+			// Persist authority before the binding backup or any fleet host.
+			s.FleetApproval = c.FleetApproval
+			if err = s.Save(); err != nil {
+				return err
+			}
+		}
 		if strings.HasPrefix(step.Action, "host:") {
 			// Recheck CI and fences before every host, including after process restart.
 			if err = b.Execute(ctx, c, "release-ci", s); err != nil {
 				return err
-			}
-			if strings.TrimPrefix(step.Action, "host:") != c.Canary && s.FleetApproval == "" {
-				if strings.TrimSpace(c.FleetApproval) == "" {
-					return errors.New("fleet approval required after canary and soak; record it in FleetApproval and resume with --yes")
-				}
-				// Authorization is separate from the frozen operational configuration.
-				// Persist it before dispatching the first fleet host.
-				s.FleetApproval = c.FleetApproval
-				if err = s.Save(); err != nil {
-					return err
-				}
 			}
 		}
 		s.InFlight = step.Action
@@ -333,6 +332,14 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 		}
 		if err != nil {
 			if strings.HasPrefix(step.Action, "host:") {
+				var refusal *hostPreflightError
+				if errors.As(err, &refusal) {
+					s.InFlight = ""
+					if refusal.refreshBackup {
+						delete(s.Completed, "backup")
+					}
+					return errors.Join(err, s.Save())
+				}
 				return failHost(ctx, c, b, s, step.Action, err)
 			}
 			if step.Action == "verify" || step.Action == "enroll" {
