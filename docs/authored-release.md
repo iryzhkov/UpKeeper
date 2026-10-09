@@ -188,6 +188,20 @@ accepts.
 
 ## Rollback
 
+After a failed canary, retain the entire fleet fence until a corrective release is
+verified. First replace any expiring holds with indefinite holds on every host,
+including the canary, before rolling it back:
+
+```bash
+upkeeper hold set --hosts omarchy-pc laptop normandy homelab \
+  --reason "canary rejected rc.120; awaiting verified corrective release"
+upkeeper hold show
+```
+
+Confirm delivery to every host; a `held here only` result is not a fleet fence (see
+step 1). Do not clear any hold while `main` still pins the rejected release. Holding
+only the rolled-back canary does not protect the other hosts from timers or reboot.
+
 While the fleet is held, only the canary has moved. Roll the canary back to the
 previous release:
 
@@ -198,16 +212,37 @@ upkeeper rollback --to "$PREVIOUS" --hosts omarchy-pc --components t3-steward
 
 `rollback` reads the release at `$PREVIOUS` from Git history and passes through
 operator holds, logging the pass. It does not move `main`: the canary's own timer
-would take the new release again. Either keep the canary held too
-(`upkeeper hold set --hosts omarchy-pc --reason ...`) or publish a release that
-restores the previous pin, by authoring it as in step 2 with the previous Steward
-version and publishing it as in step 4. Never rewrite `main`.
+would take the rejected release again without its hold. Keep all hosts held while
+authoring a corrective release as in step 2 with the previous Steward version.
+Review its full release diff and fleet preview as in step 3, then publish it to
+`main` on every configured remote as in step 4. Never rewrite `main`.
+
+Before clearing any hold, confirm that every remote's `main` points to the reviewed
+corrective release restoring the safe pin and that GitHub CI passed for that exact
+corrective release commit. If correction is deferred, leave the entire fleet held
+indefinitely; completing the local rollback alone never authorizes clearing holds.
+Verify the corrective release on the held canary with an explicit override:
+
+```bash
+upkeeper pull --hosts omarchy-pc --override-hold
+upkeeper status --limit omarchy-pc
+```
+
+Read the canary's journal and run record and verify the restored Steward version.
+If publication, CI or canary verification fails, retain every hold.
 
 If the UpKeeper binary itself is the problem, `upkeeper self rollback` on the host
 makes the previous binary generation current again; see [the binary guide](go-binary.md).
 
-When the rollback is done, clear the holds as in step 6 so that the fleet resumes
-following `main`.
+Only after the corrective publication, exact-commit CI and canary verification
+above succeed, clear the holds so the fleet resumes following the corrected `main`:
+
+```bash
+upkeeper hold clear --hosts omarchy-pc laptop normandy homelab \
+  --reason "corrective release reviewed, exact-commit CI passed, canary verified"
+```
+
+Then verify the remaining hosts as in step 6.
 
 ## Status as a gate
 
