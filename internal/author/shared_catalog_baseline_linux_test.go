@@ -512,6 +512,7 @@ func TestCatalogBaselineClosedArchiveGrammar(t *testing.T) {
 					case "manifest-hash":
 						rows[0]["sha256"] = strings.Repeat("0", 64)
 					}
+					var e error
 					b, e = json.Marshal(rows)
 					if e != nil {
 						t.Fatal(e)
