@@ -1048,6 +1048,14 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = record(s, "identity-pre:"+host, preID); err != nil {
 		return err
 	}
+	if err = b.checkoutFence(ctx, c, s); err != nil {
+		return err
+	}
+	if host == c.CoordinatorHost {
+		if err = b.configAtPull(ctx, c, s); err != nil {
+			return err
+		}
+	}
 	started = true
 	p, err = b.command(ctx, c, "", "upkeeper", "pull", "--hosts", host, "--components", "t3-steward", "--json")
 	if err != nil {
@@ -1193,8 +1201,9 @@ cd "$HOME"
 snap="$HOME/$1" scratch="$HOME/$2"
 b="$HOME/.local/bin/t3-steward"
 umask 077
-mkdir -p "$(dirname "$snap")"
-chmod 700 "$(dirname "$snap")"
+snap_parent=$(dirname "$snap") || exit $?
+mkdir -p "$snap_parent"
+chmod 700 "$snap_parent"
 trap 'systemctl --user start t3-steward.service t3-steward-worker.service' EXIT
 systemctl --user stop t3-steward.service t3-steward-worker.service
 stopped=0
@@ -1269,14 +1278,22 @@ chmod 600 "$scratch/config.yaml"
 mode=$(sed -n 's/^  mode: *//p' "$scratch/config.yaml" | head -1)
 [ "$mode" = coordinator ] || { echo "scratch config: backlog_v2.mode is '$mode', not coordinator"; exit 1; }
 # No production write path may survive in the scratch file.
-if grep -nE '^(state_path| +(artifacts|bundles|workspaces|dir|destination)):' "$scratch/config.yaml" | grep -v -F "$scratch"; then
-  echo "scratch config still names a non-scratch write path; refusing the drill"; exit 1
-fi
+paths_rc=0
+write_paths=$(grep -nE '^(state_path| +(artifacts|bundles|workspaces|dir|destination)):' "$scratch/config.yaml") || paths_rc=$?
+[ "$paths_rc" -eq 0 ] || { echo "scratch write-path inventory failed ($paths_rc)" >&2; exit 1; }
+outside_rc=0
+outside_paths=$(printf '%s\n' "$write_paths" | grep -v -F "$scratch") || outside_rc=$?
+case "$outside_rc" in
+  0) echo "scratch config still names a non-scratch write path; refusing the drill"; exit 1 ;;
+  1) ;; # grep's documented no-match status is the only safe negative result.
+  *) echo "scratch write-path safety check failed ($outside_rc)" >&2; exit 1 ;;
+esac
 prod_inode=$(stat -c %i "$db")
 rc=0
 (
   # A T3_STEWARD_STATE_PATH (or any other override) would redirect the restore away from scratch.
-  for v in $(compgen -e); do case $v in T3_STEWARD_*) unset "$v" ;; esac; done
+  env_names=$(compgen -e) || exit $?
+  for v in $env_names; do case $v in T3_STEWARD_*) unset "$v" || exit $? ;; esac; done
   "$b" backlog backup restore "$snap" --config "$scratch/config.yaml"
 ) >"$scratch/restore.json" 2>"$scratch/restore.err" || rc=$?
 if [ "$rc" -ne 0 ]; then
@@ -1287,7 +1304,8 @@ if [ "$rc" -ne 0 ]; then
   echo "scratch restore failed with $rc"
   exit 1
 fi
-[ "$(stat -c %i "$db")" = "$prod_inode" ] || { echo "production state.db changed identity during the drill"; exit 1; }
+post_inode=$(stat -c %i "$db") || exit $?
+[ "$post_inode" = "$prod_inode" ] || { echo "production state.db changed identity during the drill"; exit 1; }
 [ -f "$scratch/state.db" ] && [ -d "$scratch/artifacts" ] || { echo "restore did not publish into the scratch targets"; exit 1; }
 python3 - "$scratch/state.db" <<'PY'
 import sqlite3, sys
@@ -1311,6 +1329,9 @@ func (b *ProductionBackend) backup(ctx context.Context, c Config, s *State) erro
 	if err := b.timers(ctx, c, true); err != nil {
 		return err
 	}
+	// Use a conservative pre-effect time: restore and reconnect can take longer
+	// than the freshness window, and completion must never rejuvenate a snapshot.
+	created := b.Now()
 	var out []byte
 	var err error
 	if len(c.BackupCommand) > 0 {
@@ -1338,9 +1359,13 @@ func (b *ProductionBackend) backup(ctx context.Context, c Config, s *State) erro
 	}); err != nil {
 		return err
 	}
+	now := b.Now()
+	if created.IsZero() || now.Before(created) || now.Sub(created) > time.Duration(c.BackupMaxAgeSeconds)*time.Second {
+		return errors.New("backup snapshot is future-dated or stale after scratch drill and coordinator readiness")
+	}
 	s.BackupSnapshot = kv["snapshot"]
 	s.BackupScratch = kv["scratch"]
-	s.BackupCreated = b.Now()
+	s.BackupCreated = created
 	return record(s, "backup", kv)
 }
 func quoted(xs []string) []string {
@@ -1378,10 +1403,13 @@ func (b *ProductionBackend) enroll(ctx context.Context, c Config, s *State) erro
 				continue
 			}
 			found = true
-			if w.Requirement.Draining || w.State == "draining" {
+			if w.Requirement.Draining {
 				return errors.New("active worker is actually drained")
 			}
-			if w.Enrolled && len(w.Requirement.CatalogRevision) > 0 && bytes.Equal(w.Requirement.CatalogRevision, w.Enrollment.Request.CatalogRevision) {
+			if w.Snapshot.Inventory.Telemetry.RunningAttempts == nil || *w.Snapshot.Inventory.Telemetry.RunningAttempts != 0 {
+				return errors.New("named catalog reconciliation requires known idle worker")
+			}
+			if w.State == "observed" && w.Enrolled && len(w.Requirement.CatalogRevision) > 0 && bytes.Equal(w.Requirement.CatalogRevision, w.Enrollment.Request.CatalogRevision) {
 				continue
 			}
 			if _, err = b.on(ctx, c, c.CoordinatorHost, "exec \"$HOME/.local/bin/t3-steward\" worker enroll "+quote(h)+" --current-catalog --reason "+quote("binary-only rollout "+c.Version)); err != nil {
@@ -1492,7 +1520,7 @@ func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) erro
 	if final.Health != "healthy" || final.Epoch != id.Epoch {
 		return errors.New("final coordinator identity changed")
 	}
-	return nil
+	return b.finalConfiguration(ctx, c, s)
 }
 func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) error {
 	if err := b.timers(ctx, c, true); err != nil {
@@ -1558,6 +1586,17 @@ func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string
 	}
 	if strings.HasPrefix(action, "observe:") {
 		return b.observeTarget(ctx, c, strings.TrimPrefix(action, "observe:"), s)
+	}
+	if strings.HasPrefix(action, "dropin-restore:") {
+		host := strings.TrimPrefix(action, "dropin-restore:")
+		id, err := b.identity(ctx, c)
+		if err != nil {
+			return err
+		}
+		if id.Health != "healthy" || id.Epoch == "" {
+			return errors.New("drop-in recovery requires healthy current epoch")
+		}
+		return b.dropinRestore(ctx, c, host, s, id.Epoch.String())
 	}
 	if strings.HasPrefix(action, "dropin:") {
 		return b.dropinRepair(ctx, c, strings.TrimPrefix(action, "dropin:"), s)

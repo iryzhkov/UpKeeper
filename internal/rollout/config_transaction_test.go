@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,7 +146,7 @@ func configFixture(t *testing.T) (*ProductionBackend, Config, *State, string) {
 	now := time.Now()
 	r := &configShellRunner{home: home}
 	b := &ProductionBackend{Runner: r, Now: func() time.Time { return now }}
-	c := Config{LocalHost: "normandy", CoordinatorHost: "normandy", BackupMaxAgeSeconds: 3600, CoordinatorConfig: &ConfigChange{BeforeSHA256: digest([]byte(before)), AfterSHA256: digest([]byte(after)), Content: after, ValidateCommand: []string{"python3", "-c", "import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_text() == 'after: reviewed\\n'", "{config}"}}}
+	c := Config{LocalHost: "normandy", CoordinatorHost: "normandy", BackupMaxAgeSeconds: 3600, CoordinatorConfig: &ConfigChange{BeforeSHA256: digest([]byte(before)), AfterSHA256: digest([]byte(after)), Content: after, ValidateCommand: []string{"python3", "-c", "import pathlib,sys,json,hashlib; data=pathlib.Path(sys.argv[1]).read_bytes(); assert data == b'after: reviewed\\n'; print(json.dumps(dict(schema_version=1,kind='config-validation',valid=True,file_sha256=hashlib.sha256(data).hexdigest())))", "{config}"}}}
 	s := &State{Extra: map[string]json.RawMessage{}, BackupCreated: now, BackupSnapshot: "verified-snapshot", BackupScratch: "verified-scratch", Save: func() error { return nil }}
 	if err := record(s, "backup", map[string]string{"restore_integrity": "ok", "restore_fk_violations": "0", "snapshot": s.BackupSnapshot, "scratch": s.BackupScratch}); err != nil {
 		t.Fatal(err)
@@ -425,7 +426,7 @@ func TestDropinShellPreservesOriginalAndAmbiguousRestart(t *testing.T) {
 	r := &configShellRunner{home: home}
 	b := &ProductionBackend{Runner: r}
 	c := Config{LocalHost: "agent-b"}
-	if _, err := b.on(context.Background(), c, "agent-b", dropinScript, "remove", digest(data)); err == nil {
+	if _, err := b.on(context.Background(), c, "agent-b", dropinScript, "remove", digest(data), "416", fmt.Sprint(os.Getuid()), fmt.Sprint(os.Getgid())); err == nil {
 		t.Fatal("valid output nonzero restart accepted")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -442,7 +443,7 @@ func TestDropinShellPreservesOriginalAndAmbiguousRestart(t *testing.T) {
 	if err = os.WriteFile(shim, []byte("#!/bin/bash\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = b.on(context.Background(), c, "agent-b", dropinScript, "restore", digest(data)); err != nil {
+	if _, err = b.on(context.Background(), c, "agent-b", dropinScript, "restore", digest(data), "416", fmt.Sprint(os.Getuid()), fmt.Sprint(os.Getgid())); err != nil {
 		t.Fatal(err)
 	}
 	got, err = os.ReadFile(path)

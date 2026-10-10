@@ -17,6 +17,7 @@ import (
 
 type backendFake struct {
 	c               Config
+	configHome      string
 	calls           []string
 	stdin           []string
 	head            string
@@ -44,7 +45,13 @@ type backendFake struct {
 func backendFixture(t *testing.T) (*ProductionBackend, *backendFake, Config, *State) {
 	t.Helper()
 	c := fixture(t)
-	f := &backendFake{c: c, head: strings.Repeat("b", 40), mask: "masked", fenced: map[string]bool{}, upgraded: map[string]bool{}, artifact: map[string][]byte{}}
+	home := attachLegacyCoordinatorConfig(t, &c)
+	for _, h := range append([]string{c.Canary}, c.FleetOrder...) {
+		c.AcceptedEffects = append(c.AcceptedEffects,
+			AcceptedEffect{Host: h, Component: "t3-steward", State: "updated", Actions: []string{"install " + c.Version}, Reason: "reviewed binary update"},
+			AcceptedEffect{Host: h, Component: "agent-tooling", State: "converged", Actions: []string{"mise upgrade --yes --no-prune"}, Reason: "retained reviewed tooling action"})
+	}
+	f := &backendFake{c: c, configHome: home, head: strings.Repeat("b", 40), mask: "masked", fenced: map[string]bool{}, upgraded: map[string]bool{}, artifact: map[string][]byte{}}
 	for i, p := range []string{"linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64"} {
 		name := "t3-steward_" + c.Version + "_" + p + ".tar.gz"
 		archive := testArchive(t, []byte(p))
@@ -148,9 +155,15 @@ func (f *backendFake) preview(full bool) []byte {
 		}
 		hosts = append(hosts, map[string]any{"host": h, "components": components})
 	}
+	if full {
+		hosts = append(hosts, map[string]any{"host": f.c.LaptopHost, "components": []any{map[string]any{"name": "t3-steward", "state": "converged", "actions": []string{}}}})
+	}
 	return jsonBytes(map[string]any{"hosts": hosts})
 }
 func (f *backendFake) Run(ctx context.Context, dir, stdin, name string, args ...string) ([]byte, error) {
+	if stdin == configTransactionScript {
+		return runLegacyConfigCommand(ctx, f.configHome, stdin, name, args...)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -256,6 +269,8 @@ func (f *backendFake) Run(ctx context.Context, dir, stdin, name string, args ...
 				f.changed = true
 			}
 			return []byte("{}"), nil
+		case "status":
+			return seedStatus(f), nil
 		case "fleet-plan":
 			return jsonBytes(map[string]any{"release_sha256": strings.Repeat("e", 64)}), nil
 		case "pull":
@@ -278,6 +293,7 @@ func (f *backendFake) Run(ctx context.Context, dir, stdin, name string, args ...
 			}
 			return []byte("{}"), nil
 		case "push":
+			f.changed = false // authored publication commits the staged release
 			f.pushes++
 			f.head = strings.Repeat("f", 40)
 			return []byte("{}"), nil
@@ -541,6 +557,7 @@ func TestCriterion8ProductionCanaryReadinessAndEpoch(t *testing.T) {
 			b, f, c, s := backendFixture(t)
 			fencedFake(f)
 			seedAssets(t, s)
+			seedPublication(t, c, s)
 			f.epochDrift = fault
 			f.reconnect = 5
 			err := b.host(context.Background(), c, c.Canary, s)
@@ -585,6 +602,7 @@ func TestCriterion8ProductionCanaryReadinessAndEpoch(t *testing.T) {
 }
 func TestCriterion9ProductionImmutableRollbackAndPriorState(t *testing.T) {
 	b, f, c, s := backendFixture(t)
+	seedPublication(t, c, s)
 	fencedFake(f)
 	seedAssets(t, s)
 	if err := b.host(context.Background(), c, c.Canary, s); err != nil {

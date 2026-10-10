@@ -15,6 +15,7 @@ import (
 
 func rc122Fixture(t *testing.T) Config {
 	c := fixture(t)
+	c.AcceptedEffects = nil
 	c.Canary = "agent-b"
 	c.CoordinatorHost = "normandy"
 	c.LocalHost = "omarchy-pc"

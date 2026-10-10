@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"testing"
 	"time"
 )
 
@@ -109,6 +111,35 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 		if err = s.Save(); err != nil {
 			return err
 		}
+		if step.Action == "backup" && s.Completed["config-patch"] {
+			if production, ok := b.(*ProductionBackend); ok {
+				if err = production.configRestore(ctx, c, s); err != nil {
+					return err
+				}
+				// The historical retry harness retains the restored receipt and
+				// acknowledgement before opening a new configuration transaction.
+				if err = record(s, "legacy-config-restored", json.RawMessage(s.Extra["config-intent"])); err != nil {
+					return err
+				}
+				if err = os.Rename(attemptPath(c, "phase:config-patch"), c.StatePath+".legacy-config-restored-attempt"); err != nil {
+					return err
+				}
+				delete(s.Extra, "config-intent")
+				delete(s.Completed, "config-patch")
+				if err = s.Save(); err != nil {
+					return err
+				}
+			}
+		}
+		var configAck func() error
+		if step.Action == "config-patch" {
+			if production, ok := b.(*ProductionBackend); ok {
+				configAck, err = beginAttempt(c, "phase:config-patch", "", production.Now())
+				if err != nil {
+					return err
+				}
+			}
+		}
 		if step.Action == "soak" {
 			err = soak(ctx, c, b, s)
 		} else {
@@ -137,9 +168,48 @@ func Run(ctx context.Context, c Config, b Backend, yes bool, out io.Writer) erro
 		if err = s.Save(); err != nil {
 			return err
 		}
+		if configAck != nil {
+			if err = configAck(); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
+
+// attachLegacyCoordinatorConfig supplies actual configuration bytes and a staged
+// validator to inherited backend tests. It never uses an operator configuration.
+func attachLegacyCoordinatorConfig(t *testing.T, c *Config) string {
+	t.Helper()
+	before, after := "before: original\n", "after: reviewed\n"
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "t3-steward", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(before), 0640); err != nil {
+		t.Fatal(err)
+	}
+	c.CoordinatorConfig = &ConfigChange{
+		BeforeSHA256: digest([]byte(before)), AfterSHA256: digest([]byte(after)), Content: after,
+		ValidateCommand: []string{"python3", "-c", "import pathlib,sys,json,hashlib; data=pathlib.Path(sys.argv[1]).read_bytes(); assert data == b'after: reviewed\\n'; print(json.dumps(dict(schema_version=1,kind='config-validation',valid=True,file_sha256=hashlib.sha256(data).hexdigest())))", "{config}"},
+	}
+	return home
+}
+
+func runLegacyConfigCommand(ctx context.Context, home, stdin, name string, args ...string) ([]byte, error) {
+	var cmd *exec.Cmd
+	if name == "ssh" {
+		// Run the exact remote Bash argv locally in the isolated fake host.
+		cmd = exec.CommandContext(ctx, "bash", "-c", args[len(args)-1])
+	} else {
+		cmd = exec.CommandContext(ctx, name, args...)
+	}
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.CombinedOutput()
+}
+
 func soak(ctx context.Context, c Config, b Backend, s *State) error {
 	var start time.Time
 	if raw := s.Extra["soak-start"]; len(raw) > 0 {

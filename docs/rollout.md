@@ -80,10 +80,21 @@ Additional required rc122 inputs:
   actions. All intended Targets including laptop must be present, components
   uniquely inventoried, failure-free and every accepted entry matched.
 
-The supplied historical evidence does not define a supported machine-readable
-activity/Haiku adapter or a configuration validation CLI. Those exact adapter
-commands and their source/contract verification remain parent readiness gates.
-The candidate refuses without them. Historical configuration bytes are
+Supported read-only adapters are `upkeeper rollout activity --config FILE --json HOST EPOCH`
+and `upkeeper rollout haiku --config FILE --json HOST EPOCH`. Configure argv through
+`--json`; the observer supplies HOST EPOCH. Both check authenticated Steward identity
+and worker-list producer status, exact schema, fresh snapshot and epoch. Activity is
+conservative quiet-only: any active/unknown assignment, missing journal or deferral
+capability, or turn-end hold refuses; heartbeats never prove task activity. Haiku
+checks the literal available model in snapshot.inventory.providers, including the
+supported draining row during catalog reconciliation. The reviewed source API pin is
+Steward 3d55d6fffb82c7702b74121a46fe4fdbb2a73247.
+
+The separate Steward CLI `t3-steward config validate --file {config} --json` remains
+an external accepted-binary prerequisite. UpKeeper is only its strict staged-file
+consumer: exit zero, schema_version 1, kind config-validation, valid true and exact
+file_sha256, with no extra fields, duplicate keys, trailing JSON or staged mutation.
+No UpKeeper validator substitute is supplied. Historical configuration bytes are
 review inputs, not installation authority. Keep secretrefs as references.
 
 ## D2 transaction
@@ -98,7 +109,8 @@ or a vanished descriptor from a live process refuses.
 A durable configuration intent precedes any remote installation. The original
 config.yaml.bak-rc122-pre is created exclusively, hashed and never overwritten;
 its owner/group/mode are preserved. The staged after content is hashed, fsynced,
-validated with checked status, rechecks the live digest, then is atomically
+validated with checked status and unchanged staged inode/metadata/content, rechecks
+the live digest and fresh backup at the effect boundary, then is atomically
 installed and directory-synced. Retry only verifies a completed matching
 transaction with the original before backup; an unfinished effect never
 authorizes installation again. Corrupt/future/mismatched evidence refuses.
@@ -107,8 +119,10 @@ dispatching immutable binary rollback.
 
 ## D5 and recovery
 
-Named enrollment preserves drains; it never uses --all. Agent-b's D5 completion
-precedes agent-a. Both must advertise Haiku 5.5 and have no running attempts.
+Named enrollment preserves drains; it never uses --all. Agent-b\'s D5 completion
+precedes agent-a. Haiku/catalog/named enrollment and drain reconciliation complete
+with their own durable phase receipt before drop-in removal. Both must advertise
+Haiku 5.5 and have no running attempts.
 Drop-in repair records an exclusive original backup/digest/metadata before
 removal, reloads/restarts the worker, verifies readiness and runs the isolated
 test command. Any failed or uncertain check restores the original and leaves
@@ -129,7 +143,12 @@ enrolls. A fresh rollout attempt requires a newly reviewed parent plan/state,
 with prior evidence retained. For a database incompatible with the old binary,
 the parent supervises stopped-holder proof, preservation of failed
 DB/sidecars/artifacts, restore into absent targets, restart and verification.
-Enrollment recovery is forward and per-worker, not a broad snapshot rollback.
+For interrupted D5 on agent-b/agent-a, the same named recover command requires the
+unfinished immutable enroll intent and matching original drop-in digest/mode/owner
+receipt. It restores the original, verifies metadata, reloads/restarts and checks
+current-epoch readiness. A failed first restore may be retried through a new permanent
+recovery intent; the original failed enrollment and every failed restore remain fenced.
+It never performs forward enrollment or authorizes advancement.
 
 The permanent invocation intent is durable before effects and independent of
 JSON replacement. Completion is an unbuffered acknowledgement appended only
@@ -137,6 +156,19 @@ after all checked JSON writes/fsync/rename/directory sync and gates succeed.
 Loss of that last acknowledgement on power failure refuses continuation.
 Unknown inventory, missing acknowledgement or success-shaped bytes left by a
 failed persistence operation do not authorize the next host.
+
+Immediately before each host pull, the published HEAD, actual-checkout canonical
+release digest, clean index/worktree/assets and immutable accepted package must match.
+Immediately before coordinator pull, completed D2 and the live after digest plus
+original backup/metadata are rechecked. Snapshot age starts before the backup effect;
+a two-hour drill cannot become fresh at completion.
+
+Final verification retains a fresh full `upkeeper status --json` bound to exact HEAD
+and digest and containing every intended target, including laptop. Producer failures,
+exit 20, configuration errors on agent-a/b, omitted targets and undispositioned drift
+refuse. This conservative implementation requires converged full status; legitimate
+nonconfiguration drift requires a separately reviewed disposition before this gate can
+be widened, never a host-level failure expectation or laptop exclusion.
 
 Timers, schedules, operational holds and laptop mask retain their fences.
 Timer release requires a separate full parent release disposition. Tests use

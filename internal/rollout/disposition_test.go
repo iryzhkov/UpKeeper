@@ -16,10 +16,11 @@ func TestRC122FullDispositionIncludesLaptopAndConvergedActions(t *testing.T) {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatal(err)
 	}
-	p.Hosts = append(p.Hosts, p.Hosts[0])
-	p.Hosts[len(p.Hosts)-1].Host = c.LaptopHost
 	for _, row := range p.Hosts {
 		for _, component := range row.Components {
+			if component.State == "converged" && len(component.Actions) == 0 {
+				continue
+			}
 			c.AcceptedEffects = append(c.AcceptedEffects, AcceptedEffect{Host: row.Host, Component: component.Name, State: component.State, Actions: component.Actions, Reason: "parent release reviewed exact effect"})
 		}
 	}

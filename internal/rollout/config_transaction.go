@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -31,7 +32,7 @@ func (p ConfigChange) Validate() error {
 			found = true
 		}
 	}
-	if len(p.ValidateCommand) == 0 || !found {
+	if !validArgv(p.ValidateCommand) || !found {
 		return errors.New("configuration patch requires staged-file validator")
 	}
 	return nil
@@ -93,6 +94,9 @@ func (b *ProductionBackend) configPatch(ctx context.Context, c Config, s *State)
 	}
 	r = configReceipt{Before: p.BeforeSHA256, After: p.AfterSHA256, IntentAt: now}
 	if err := transactionRecord(s, "config-intent", r); err != nil {
+		return err
+	}
+	if err := freshBackupAt(c, s, b.Now()); err != nil {
 		return err
 	}
 	if _, err := b.configCommand(ctx, c, "install", p); err != nil {
@@ -181,7 +185,7 @@ if mode=="before":
  if live!=before: raise RuntimeError("coordinator backup must use reviewed before configuration")
  print("configuration_before=ok")
  sys.exit(0)
-if live not in (before,after): raise RuntimeError("unreviewed live configuration")
+if live not in (before,after) and mode!="restore": raise RuntimeError("unreviewed live configuration")
 if os.path.lexists(backup):
  saved=read(backup); original=regular(backup)
  if sha(saved)!=before: raise RuntimeError("original backup digest mismatch")
@@ -209,8 +213,24 @@ elif mode in ("install","restore"):
     os.fchown(f.fileno(),original.st_uid,original.st_gid); os.fchmod(f.fileno(),stat.S_IMODE(original.st_mode))
     f.write(target); f.flush(); os.fsync(f.fileno())
    if mode=="install":
+    os.chmod(tmp,0o600)
     command=[arg.replace("{config}",tmp) for arg in json.loads(validator)]
-    subprocess.run(command,check=True,stdout=sys.stderr)
+    def validation_facts(s): return (s.st_dev,s.st_ino,s.st_nlink,s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+    staged_facts=validation_facts(regular(tmp))
+    result=subprocess.run(command,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if len(result.stdout)>4096: raise RuntimeError("oversized validation receipt")
+    def unique(pairs):
+     d={}
+     for k,v in pairs:
+      if k in d: raise RuntimeError("duplicate validation field")
+      d[k]=v
+     return d
+    receipt=json.loads(result.stdout,object_pairs_hook=unique)
+    expected={"schema_version":1,"kind":"config-validation","valid":True,"file_sha256":want}
+    if receipt!=expected or type(receipt.get("schema_version")) is not int or receipt.get("valid") is not True: raise RuntimeError("invalid validation receipt")
+    if sha(read(tmp))!=want or validation_facts(regular(tmp))!=staged_facts or stat.S_IMODE(regular(tmp).st_mode)!=0o600: raise RuntimeError("validator changed staged file")
+    os.chmod(tmp,stat.S_IMODE(original.st_mode))
+    with open(tmp,"rb") as staged: os.fsync(staged.fileno())
    if sha(read(path))!=live: raise RuntimeError("concurrent configuration change")
    os.replace(tmp,path); syncdir()
    if sha(read(path))!=want: raise RuntimeError("installed configuration digest mismatch")
@@ -253,6 +273,7 @@ func (b *ProductionBackend) haikuAdvertisement(ctx context.Context, c Config, ho
 
 type dropinReceipt struct {
 	Host, SHA256           string
+	Mode, UID, GID         int
 	Absent, Done, Restored bool
 	IntentAt               time.Time
 }
@@ -310,6 +331,9 @@ func (b *ProductionBackend) dropinRepair(ctx context.Context, c Config, host str
 	if err = json.Unmarshal(raw, &r); err != nil {
 		return err
 	}
+	if !r.Absent && (r.Mode <= 0 || r.Mode > 0777 || r.UID < 0 || r.GID < 0 || !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(r.SHA256)) {
+		return errors.New("incomplete original drop-in metadata")
+	}
 	r.Host = host
 	r.IntentAt = b.Now()
 	if r.Absent && !contains(c.DropinAbsentHosts, host) {
@@ -326,7 +350,7 @@ func (b *ProductionBackend) dropinRepair(ctx context.Context, c Config, host str
 		}
 	}()
 	if !r.Absent {
-		if _, err = b.on(ctx, c, host, dropinScript, "remove", r.SHA256); err != nil {
+		if _, err = b.on(ctx, c, host, dropinScript, "remove", r.SHA256, fmt.Sprint(r.Mode), fmt.Sprint(r.UID), fmt.Sprint(r.GID)); err != nil {
 			return err
 		}
 	}
@@ -376,10 +400,24 @@ func (b *ProductionBackend) dropinRestore(ctx context.Context, c Config, host st
 	if err := transactionRecord(s, "dropin-restore-intent:"+host, r); err != nil {
 		return err
 	}
-	if _, err := b.on(ctx, c, host, dropinScript, "restore", r.SHA256); err != nil {
+	if _, err := b.on(ctx, c, host, dropinScript, "restore", r.SHA256, fmt.Sprint(r.Mode), fmt.Sprint(r.UID), fmt.Sprint(r.GID)); err != nil {
 		return err
 	}
 	if err := b.waitWorker(ctx, c, host, epoch, c.Version); err != nil {
+		return err
+	}
+	id, err := b.identity(ctx, c)
+	if err != nil {
+		return err
+	}
+	if id.Health != "healthy" || id.Epoch.String() != epoch {
+		return errors.New("coordinator changed during drop-in recovery")
+	}
+	ws, err := b.workers(ctx, c)
+	if err != nil {
+		return err
+	}
+	if err = drains(ws, c); err != nil {
 		return err
 	}
 	r.Restored = true
@@ -409,12 +447,14 @@ if mode=="inspect":
   print(json.dumps({"Absent":True}))
  else:
   data,s=read(path)
-  print(json.dumps({"SHA256":sha(data)}))
+  print(json.dumps({"SHA256":sha(data),"Mode":stat.S_IMODE(s.st_mode),"UID":s.st_uid,"GID":s.st_gid}))
  sys.exit(0)
 want=sys.argv[2]
 if mode=="remove":
  data,s=read(path)
  if sha(data)!=want: raise RuntimeError("drop-in changed")
+ expected=tuple(int(x) for x in sys.argv[3:6])
+ if len(expected)!=3 or (stat.S_IMODE(s.st_mode),s.st_uid,s.st_gid)!=expected: raise RuntimeError("original metadata changed")
  os.makedirs(directory,mode=0o700,exist_ok=True)
  ds=os.lstat(directory)
  if not stat.S_ISDIR(ds.st_mode) or ds.st_uid!=os.getuid() or stat.S_IMODE(ds.st_mode)!=0o700: raise RuntimeError("unsafe backup directory")
@@ -426,19 +466,26 @@ if mode=="remove":
   with os.fdopen(fd,"wb") as f:
    os.fchown(f.fileno(),s.st_uid,s.st_gid); os.fchmod(f.fileno(),stat.S_IMODE(s.st_mode)); f.write(data); f.flush(); os.fsync(f.fileno())
   syncdir(directory)
+  syncdir(os.path.dirname(directory))
  if sha(read(path)[0])!=want: raise RuntimeError("concurrent drop-in change")
  os.unlink(path); syncdir(os.path.dirname(path))
 elif mode=="restore":
  data,s=read(backup)
  if sha(data)!=want: raise RuntimeError("backup changed")
+ expected=tuple(int(x) for x in sys.argv[3:6])
+ if len(expected)!=3 or (stat.S_IMODE(s.st_mode),s.st_uid,s.st_gid)!=expected: raise RuntimeError("backup metadata changed")
  if os.path.lexists(path):
-  if sha(read(path)[0])!=want: raise RuntimeError("conflicting original")
+  restored,rs=read(path)
+  if sha(restored)!=want or (stat.S_IMODE(rs.st_mode),rs.st_uid,rs.st_gid)!=expected: raise RuntimeError("conflicting original")
  else:
   fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,stat.S_IMODE(s.st_mode))
   with os.fdopen(fd,"wb") as f:
    os.fchown(f.fileno(),s.st_uid,s.st_gid); os.fchmod(f.fileno(),stat.S_IMODE(s.st_mode)); f.write(data); f.flush(); os.fsync(f.fileno())
   syncdir(os.path.dirname(path))
 else: raise RuntimeError("unknown drop-in operation")
+if mode=="restore":
+ restored,rs=read(path)
+ if sha(restored)!=want or (stat.S_IMODE(rs.st_mode),rs.st_uid,rs.st_gid)!=expected: raise RuntimeError("restored drop-in differs")
 subprocess.run(["systemctl","--user","daemon-reload"],check=True)
 subprocess.run(["systemctl","--user","restart","t3-steward-worker.service"],check=True)
 print("dropin_"+mode+"=ok")

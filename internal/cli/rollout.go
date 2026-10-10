@@ -15,6 +15,9 @@ func parseRollout(p *arguments, argv []string) error {
 		return usagef("rollout requires check, plan, prepare, run, enroll, verify or recover")
 	}
 	p.rolloutAction = argv[0]
+	if argv[0] == "activity" || argv[0] == "haiku" {
+		return parseRolloutDiagnostic(p, argv[1:])
+	}
 	if p.rolloutAction != "check" && p.rolloutAction != "plan" && p.rolloutAction != "run" && p.rolloutAction != "enroll" && p.rolloutAction != "verify" && p.rolloutAction != "recover" && p.rolloutAction != "prepare" {
 		return usagef("unknown rollout phase: %s", argv[0])
 	}
@@ -63,14 +66,22 @@ func parseRollout(p *arguments, argv []string) error {
 	return nil
 }
 func rolloutHelp(program string) string {
-	return "usage: " + program + " rollout check|plan|prepare|run|enroll|verify|recover --config FILE [--host HOST --yes] [--json]\n\n" +
+	return "usage: " + program + " rollout check|plan|prepare|run|enroll|verify|recover --config FILE [--host HOST --yes] [--json]\n" +
+		program + " rollout activity|haiku --config FILE --json HOST EPOCH\n\n" +
+		"activity and haiku are checked read-only diagnostics; activity refuses active assignments.\n" +
 		"check and plan are read-only. run prints every step and rollback, requires\n" +
 		"--yes and --host. One host runs per invocation; failed attempts permit rollback recovery only.\n" +
 		"See docs/rollout.md for the configuration and external review gate.\n"
 }
 func runRollout(p *arguments, streams Streams) (int, error) {
+	if p.rolloutAction == "activity" || p.rolloutAction == "haiku" {
+		return runRolloutDiagnostic(p, streams)
+	}
 	c, err := rollout.LoadConfig(p.rolloutConfig)
 	if err != nil {
+		return exitcode.Preflight, err
+	}
+	if err := rollout.ValidateWalk(c); err != nil {
 		return exitcode.Preflight, err
 	}
 	steps, err := rollout.Plan(c)

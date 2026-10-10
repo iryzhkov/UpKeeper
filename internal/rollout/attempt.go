@@ -49,7 +49,7 @@ func readAttempt(c Config, path string, now time.Time) (attemptIntent, bool, err
 	if dec.Decode(new(any)) != io.EOF || intent.ConfigDigest != c.Digest() ||
 		intent.Started.IsZero() || intent.Started.After(now) ||
 		attemptPath(c, intent.Action) != path ||
-		!(intent.Action == "verify" && intent.Host == "" ||
+		!(validPhaseIntent(intent.Action, intent.Host) || intent.Action == "verify" && intent.Host == "" ||
 			intent.Action == "run:"+intent.Host && contains(rc122Order, intent.Host) ||
 			intent.Action == "enroll:"+intent.Host && contains(c.ActiveWorkers, intent.Host)) {
 		return intent, false, errors.New("mismatched or future attempt intent")
@@ -91,7 +91,7 @@ func attemptPending(c Config, now time.Time) error {
 }
 func beginAttempt(c Config, action, host string, now time.Time) (func() error, error) {
 	dir := c.StatePath + ".attempts"
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := durableDirectory(dir); err != nil {
 		return nil, err
 	}
 	st, err := os.Lstat(dir)

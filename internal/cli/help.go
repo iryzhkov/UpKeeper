@@ -50,7 +50,7 @@ var commandSummaries = [][2]string{
 	{"install-self-timer", "install the self-convergence systemd user timer"},
 	{"install-pull-timer", "install the controller systemd user timer"},
 	{"hold", "set, show or clear operator holds, and show or clear scheduled hold markers"},
-	{"rollout", "check, plan or run a resumable reviewed binary-only fleet rollout"},
+	{"rollout", "check, prepare and run a reviewed single-host rollout with terminal uncertainty fences"},
 	{"self", "install, roll back or inspect this host's own UpKeeper binary generations"},
 	{"version", "print the exact source commit this binary was built from"},
 }

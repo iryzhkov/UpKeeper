@@ -33,6 +33,16 @@ func productionHostFixture(t *testing.T) (*ProductionBackend, *backendFake, Conf
 	if err := os.MkdirAll(filepath.Dir(c.StatePath), 0700); err != nil {
 		t.Fatal(err)
 	}
+	seedPublication(t, c, s)
+	for action := range s.Completed {
+		ack, err := beginAttempt(c, "phase:"+action, "", b.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = ack(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := saveState(c.StatePath, s); err != nil {
 		t.Fatal(err)
 	}

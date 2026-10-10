@@ -32,6 +32,7 @@ type arguments struct {
 	rolloutConfig string
 	rolloutYes    bool
 	rolloutHost   string
+	rolloutEpoch  string
 	catalog       toolcatalog.Options
 	asJSON        bool
 
