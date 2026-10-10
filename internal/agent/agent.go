@@ -67,6 +67,10 @@ type Payload struct {
 	// binary to be built from, or "" for no requirement. It is omitted when
 	// empty so that a payload without it is byte for byte what it always was.
 	ExpectedProgramCommit string `json:"expected_program_commit,omitempty"`
+	// OverrideHold is an explicit operator pull's permission to converge this
+	// host although it holds an operator hold. It is omitted when false, so a
+	// payload without it is byte for byte what it always was.
+	OverrideHold bool `json:"override_hold,omitempty"`
 }
 
 // programCommit is the source commit of the running binary; a variable so that
@@ -405,6 +409,15 @@ func Execute(context *Context) map[string]any {
 				"this host runs upkeeper built from %s and the release requires %s; "+
 					"update it with `upkeeper self-pull` on the host, or install that "+
 					"release's binary, before converging it", running, expected)
+			return result
+		}
+	}
+	// The operator hold this host keeps for itself. A controller checks its
+	// own copy before dispatching, but a hold set on this host directly, or
+	// from another controller, is only here. Like the program fence it is
+	// checked before the lock, so a held payload has touched nothing.
+	if !context.DryRun {
+		if held := checkOperatorHold(context, result); held {
 			return result
 		}
 	}

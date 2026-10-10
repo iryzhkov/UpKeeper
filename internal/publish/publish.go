@@ -2,7 +2,7 @@
 // release and publish it.
 //
 // Publishing means committing desired/release.json plus the stored agent files
-// to this repository and pushing the current branch to the named remotes.
+// to this repository and pushing it to main on every configured remote.
 // Targets never read the remote themselves; the controller carries the manifest
 // to them with `upkeeper pull`. Publishing exists so that the release is
 // durable, reviewable and recoverable from another controller.
@@ -88,6 +88,16 @@ func Release(root string, options Options) (map[string]any, error) {
 	}
 	if unknown := missing(options.Remotes, known); len(unknown) > 0 {
 		return nil, failure.Push("unknown git remote(s): %s", strings.Join(unknown, ", "))
+	}
+	if len(options.Remotes) == 0 {
+		options.Remotes = known
+	}
+	// A publication is checked whole before anything is captured or written:
+	// all remotes, main only, and remotes that agree. See checkPublication.
+	if options.Commit && options.Push {
+		if err := checkPublication(root, runner, options.Remotes, known); err != nil {
+			return nil, err
+		}
 	}
 
 	var captured release.Release
@@ -223,14 +233,12 @@ func Release(root string, options Options) (map[string]any, error) {
 	if !options.Push {
 		return report, nil
 	}
-	if !options.Authored {
-		branch, err = git(runner, root, 60*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
-		if err != nil {
-			return nil, err
-		}
-	}
-	if branch == "HEAD" {
-		return nil, failure.Push("cannot push a detached HEAD; check out a branch first")
+	// The preflight proved the checkout is on main; the push names main
+	// rather than whatever the branch is called now, so that a branch switched
+	// during the run can never become the publication's name.
+	branch = PublicationBranch
+	if ref, refErr := git(runner, root, 60*time.Second, "symbolic-ref", "--quiet", "HEAD"); refErr != nil || ref != publicationRef {
+		return nil, failure.Push("the checkout left %s during the publication; nothing was pushed", PublicationBranch)
 	}
 	pushSource := "HEAD"
 	if options.Authored {

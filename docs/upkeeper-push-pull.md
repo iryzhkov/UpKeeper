@@ -39,12 +39,22 @@ commits are reachable on origin/main. It refuses unpublished/local steward build
 missing compatibility output, incompatible npm versions, malformed existing manifests,
 and credential-bearing MCP registration fields. It never silently substitutes defaults
 for a damaged existing manifest. After capture, push commits only release paths and
-pushes to explicitly named remotes or all configured remotes.
+pushes them to `main` on every configured remote.
+
+A publication, captured or authored, is checked whole before anything is captured,
+staged or committed. It must name every configured remote (naming none means all of
+them); the checkout must be on `main`, never a detached `HEAD` or another branch, whose
+name a release was once published under by mistake; every remote's `main` must be the
+same commit; and that commit must be an ancestor of `HEAD`. Each refusal names what it
+found: the remotes and their commits, and either the `git push` that brings lagging
+remotes level with the one that contains them all or the statement that their histories
+have diverged and need a person. `--no-push` touches no remote and may commit on any
+branch. The step-by-step procedure is [the authored release guide](authored-release.md).
 
 ## Authored releases
 
 ```bash
-git switch -c release/steward-rc96 origin/main
+git switch main && git pull --ff-only origin main
 ./bin/upkeeper author --steward 0.11.0-rc.96 --omarchy-setup <commit> --dry-run
 ./bin/upkeeper author --steward 0.11.0-rc.96 --omarchy-setup <commit>
 git commit -m "Pin Steward 0.11.0-rc.96" -- desired/release.json

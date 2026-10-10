@@ -8,6 +8,28 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- Operator holds. `upkeeper hold set --hosts HOST... --reason TEXT [--until TIME]`
+  fences hosts before a release, and `hold clear --hosts HOST... --reason TEXT`
+  releases them. A hold is recorded in
+  `~/.local/state/dev-fleet/operator-holds/HOST.json` on this host and, through the
+  new target-side `__hold` command over SSH, on each held host, so it survives reboot
+  and every path honours it: a held host's self-pull refreshes nothing, updates no
+  binary and converges nothing; scheduled and controller pulls report the host `held`
+  and dispatch nothing; the agent refuses a payload for a host held in its own state.
+  An explicit `pull --override-hold` passes through and is logged in `HOST.log` on the
+  controller and the target; rollback, dry runs and status are never held. A host that
+  cannot be reached keeps the controller's copy and the command exits 20. `hold show`
+  lists operator holds with reason, setter and expiry beside the scheduled markers. A
+  hold record that cannot be read holds. Before this, the only fence was stopping
+  `upkeeper-self.timer` on every host, which a reboot re-armed.
+- `upkeeper status --expect FILE` reads a JSON list of accepted non-converged states,
+  each with a reason. A host whose every non-converged state is listed no longer fails
+  status, so status can gate a rollout; the report lists what was accepted and the
+  entries that matched nothing. Without `--expect` status is unchanged.
+- `docs/authored-release.md`: the authored release procedure for a binary-only Steward
+  bump (hold, author, review package, push, canary, fleet, rollback), linked from the
+  README.
+
 - A failed controlled T3 activation now journals its original cause and every
   failed installed, served, health, native and unit predicate sample before
   rollback, and reports the restoration result beside that cause instead of
@@ -128,6 +150,14 @@ release tags (`v0.1.x`).
   (F-16).
 
 ### Changed
+
+- Every publication (`push` and `push --authored`) updates `main` on every configured
+  remote. Before capturing or committing anything it refuses a remote list that omits
+  a configured remote, a checkout on any branch but `main` (an authored push from a
+  clone on another branch used to publish under that branch's name), remotes whose
+  `main` differ (naming each remote, its commit and the `git push` that resyncs them,
+  after Gitea's main lagged GitHub's for a week unnoticed), and a remote `main` that
+  `HEAD` does not contain. `--no-push` is unaffected.
 
 - `fleet-plan` lists a quota binding that appears, moves or disappears
   ("worker W binds I to quota pool P", "rebinds", "unbinds"), and names the

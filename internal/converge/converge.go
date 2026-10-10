@@ -24,6 +24,7 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/failure"
 	"github.com/iryzhkov/UpKeeper/internal/inventory"
 	"github.com/iryzhkov/UpKeeper/internal/locks"
+	"github.com/iryzhkov/UpKeeper/internal/operatorhold"
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 	"github.com/iryzhkov/UpKeeper/internal/redact"
 	"github.com/iryzhkov/UpKeeper/internal/release"
@@ -69,6 +70,15 @@ type Options struct {
 	// ExpectedProgramCommit, when set, is sent to every agent, which refuses
 	// the payload unless it runs a binary built from exactly that commit.
 	ExpectedProgramCommit string
+	// OverrideHold is an explicit operator pull's permission to dispatch to a
+	// host under an operator hold. Each override is logged beside the hold, on
+	// this host and by the agent on the target. Scheduled runs never set it.
+	OverrideHold bool
+	// HoldDirectory is where this host's operator holds live, or "" for the
+	// user's default; see package operatorhold.
+	HoldDirectory string
+	// Now is the clock holds are judged against, or the zero time for now.
+	Now time.Time
 }
 
 // Controller names the inventory host this process is running on, or
@@ -195,6 +205,19 @@ func Fleet(
 		}
 	}
 
+	// An operator hold blocks every run that would change a host; a dry run or
+	// an observation changes nothing and is never held.
+	holdDirectory := options.HoldDirectory
+	if holdDirectory == "" && !options.DryRun {
+		if holdDirectory, err = operatorhold.DefaultDirectory(); err != nil {
+			return nil, 0, err
+		}
+	}
+	now := options.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	results := make([]any, 0, len(options.Hosts))
 	for _, name := range options.Hosts {
 		spec := config.Hosts[name]
@@ -207,6 +230,20 @@ func Fleet(
 				"self_managed": true, "error": "converges through its local timer",
 			})
 			continue
+		}
+		var overridden map[string]any
+		if !options.DryRun {
+			if hold, held := operatorhold.Check(holdDirectory, name, now); held {
+				if !options.OverrideHold {
+					results = append(results, HeldResult(name, hold, now))
+					continue
+				}
+				if err := operatorhold.RecordOverride(holdDirectory, hold, operatorhold.UserName(),
+					commandName(options.Command), runID, now); err != nil {
+					return nil, 0, err
+				}
+				overridden = hold.Document(now)
+			}
 		}
 		if options.SkipUnreachable {
 			if preflight := reachability(spec); preflight != nil {
@@ -231,6 +268,7 @@ func Fleet(
 			Manifest:              value.Manifest,
 			StoredFiles:           stored,
 			ExpectedProgramCommit: options.ExpectedProgramCommit,
+			OverrideHold:          options.OverrideHold,
 			Lock: map[string]any{
 				"schema_version":          exitcode.SchemaVersion,
 				"run_id":                  runID,
@@ -255,9 +293,13 @@ func Fleet(
 			}
 			return nil, 0, err
 		}
-		results = append(results, dispatchWithLock(lockStore, name, runID, func() map[string]any {
+		dispatched := dispatchWithLock(lockStore, name, runID, func() map[string]any {
 			return runner(spec, payload, options.Timeout, options.SelfOnly)
-		}))
+		})
+		if dispatched != nil && overridden != nil {
+			dispatched["hold_overridden"] = overridden
+		}
+		results = append(results, dispatched)
 	}
 
 	exitCode := ExitCodeFor(results)
@@ -413,7 +455,7 @@ func ExitCodeFor(hosts []any) int {
 		return exitcode.LockContention
 	case offline:
 		return exitcode.Partial
-	case states["ahead"] || states["deferred"] || states["blocked"]:
+	case states["ahead"] || states["deferred"] || states["blocked"] || states["held"]:
 		return exitcode.Drift
 	default:
 		return exitcode.Success

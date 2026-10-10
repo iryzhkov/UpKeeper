@@ -296,21 +296,22 @@ func spoolVersion() string {
 var spoolSubcommands = map[string][]string{
 	"project":  {"add", "remove", "update"},
 	"provider": {"add", "remove"},
-	"hold":     {"show", "clear"},
+	"hold":     {"show", "set", "clear"},
 	"self":     {"install", "rollback", "status"},
 }
 
 // spoolCommands is every command this program publishes. The top-level list
 // comes from commandSummaries, which is the same list the help screen prints,
-// plus the two commands a controller invokes over SSH and that no operator
+// plus the three commands a controller invokes over SSH and that no operator
 // types.
 func spoolCommands() map[string]struct{} {
-	commands := make(map[string]struct{}, len(commandSummaries)+2)
+	commands := make(map[string]struct{}, len(commandSummaries)+3)
 	for _, summary := range commandSummaries {
 		commands[summary[0]] = struct{}{}
 	}
 	commands[agentCommand] = struct{}{}
 	commands[probeCommand] = struct{}{}
+	commands[holdAgentCommand] = struct{}{}
 	return commands
 }
 
@@ -319,11 +320,11 @@ func spoolCommands() map[string]struct{} {
 // to derive this from; a contract test in this package reads args.go and fails
 // when the parser accepts an option this list does not have.
 var spoolFlags = []string{
-	"after-update", "all", "authored", "components", "converge", "default-ref", "dry-run", "expect-head",
+	"after-update", "all", "authored", "components", "converge", "default-ref", "dry-run", "expect", "expect-head",
 	"expect-program", "expect-release-sha256", "expect-sha256", "help", "h",
-	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "previous",
+	"hosts", "json", "limit", "models", "no-commit", "no-push", "omarchy-setup", "omarchy-setup-repo", "override-hold", "previous",
 	"publish-diverged-instructions", "quota-pool", "reason", "reconcile-t3-transaction", "repository",
-	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "update-transaction", "workers",
+	"self", "setup-profile", "skip-unreachable", "steward", "timeout", "to", "type", "until", "update-transaction", "workers",
 }
 
 func spoolDeclaredFlags() map[string]struct{} {
