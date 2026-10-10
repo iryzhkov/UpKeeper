@@ -104,6 +104,35 @@ func acceptedAssets(c Config, s *State, v *assetEvidence) error {
 	return decodeDiagnostic(pkg.Evidence["assets"], v)
 }
 
+// This envelope comes from converge.Run, including the dirty manifest's parent
+// commit. Inventory equality alone cannot authorize effects for another release.
+func fullPreviewBinding(p preview, head, release string) error {
+	canonicalHex := func(value string, length int) bool {
+		if len(value) != length {
+			return false
+		}
+		for _, ch := range value {
+			if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+				return false
+			}
+		}
+		return true
+	}
+	if p.SchemaVersion == nil || *p.SchemaVersion != 1 || p.Command != "pull" ||
+		p.DryRun == nil || !*p.DryRun || p.ExitCode == nil || *p.ExitCode != 0 {
+		return errors.New("reviewed full preview producer schema differs")
+	}
+	if !canonicalHex(p.ReleaseSHA256, 64) || !canonicalHex(release, 64) ||
+		p.ReleaseSHA256 != release {
+		return errors.New("reviewed full preview release digest differs")
+	}
+	if !canonicalHex(p.DesiredManifestCommit, 40) || !canonicalHex(head, 40) ||
+		p.DesiredManifestCommit != head {
+		return errors.New("reviewed full preview preparation parent differs")
+	}
+	return nil
+}
+
 // The release declares the component universe; the reviewed full preview binds
 // that complete universe to each intended host, including self-managed laptop.
 func packageComponents(c Config, pkg *reviewedPackage) (map[string]map[string]bool, error) {
@@ -116,6 +145,9 @@ func packageComponents(c Config, pkg *reviewedPackage) (map[string]map[string]bo
 	}
 	var fp preview
 	if err := decodeDiagnostic(pkg.Evidence["preview-full"], &fp); err != nil {
+		return nil, err
+	}
+	if err := fullPreviewBinding(fp, pkg.Head, pkg.Release); err != nil {
 		return nil, err
 	}
 	expected := map[string]map[string]bool{}

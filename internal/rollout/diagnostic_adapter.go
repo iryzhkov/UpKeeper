@@ -133,6 +133,9 @@ func diagnosticJSONValue(d *json.Decoder, depth int) error {
 	return err
 }
 func diagnosticFresh(stamp time.Time, now time.Time) bool {
+	// Producer timestamps are serialized wall time. Strip any local monotonic
+	// readings so wall steps cannot hide future or stale evidence.
+	stamp, now = stamp.Round(0), now.Round(0)
 	return !stamp.IsZero() && !stamp.After(now) && now.Sub(stamp) <= 60*time.Second
 }
 func selectDiagnosticWorker(p []byte, host string, epoch int64, now time.Time) (*diagnosticWorker, error) {
@@ -185,7 +188,7 @@ func (b *ProductionBackend) Diagnostic(ctx context.Context, c Config, kind, host
 		return nil, errors.New("worker producer failed")
 	}
 	now := b.Now()
-	w, err := selectDiagnosticWorker(p, host, epoch, now)
+	w, err := selectDiagnosticWorker(p, host, epoch, now.Round(0))
 	if err != nil {
 		return nil, err
 	}
@@ -207,18 +210,19 @@ func (b *ProductionBackend) Diagnostic(ctx context.Context, c Config, kind, host
 		return nil, errors.New("unsupported worker reporting capability")
 	}
 	finalNow := b.Now()
-	if finalNow.Before(now) {
+	if finalNow.Round(0).Before(now.Round(0)) || finalNow.Before(now) {
 		return nil, errors.New("clock regressed during diagnostic")
 	}
-	if !diagnosticFresh(w.Snapshot.ObservedAt, finalNow) || !w.Snapshot.ValidUntil.After(finalNow) {
+	wallNow := finalNow.Round(0)
+	if !diagnosticFresh(w.Snapshot.ObservedAt, wallNow) || !w.Snapshot.ValidUntil.Round(0).After(wallNow) {
 		return nil, errors.New("worker snapshot expired during diagnostic")
 	}
 	for _, a := range w.Snapshot.Assignments {
-		if !diagnosticFresh(a.ObservedAt, finalNow) || a.Journal == nil || a.Journal.UpdatedAt.IsZero() || a.Journal.UpdatedAt.After(finalNow) {
+		if !diagnosticFresh(a.ObservedAt, finalNow) || a.Journal == nil || a.Journal.UpdatedAt.IsZero() || a.Journal.UpdatedAt.Round(0).After(wallNow) {
 			return nil, errors.New("assignment freshness refused")
 		}
 	}
-	now = finalNow
+	now = wallNow
 	if kind == "haiku" {
 		matches := 0
 		available := false

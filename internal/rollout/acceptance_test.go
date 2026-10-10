@@ -45,7 +45,7 @@ func seedPublication(t *testing.T, c Config, s *State) {
 		}
 		hosts = append(hosts, map[string]any{"host": host, "components": components})
 	}
-	s.Extra["preview-full"] = jsonBytes(map[string]any{"hosts": hosts})
+	s.Extra["preview-full"] = jsonBytes(map[string]any{"schema_version": 1, "command": "pull", "dry_run": true, "exit_code": 0, "desired_manifest_commit": s.ExpectHead, "release_sha256": s.ReleaseSHA256, "hosts": hosts})
 	if s.Extra["assets"] == nil {
 		seedAssets(t, s)
 	}

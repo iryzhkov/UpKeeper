@@ -548,7 +548,13 @@ func manifestScope(before, after []byte, version string) error {
 }
 
 type preview struct {
-	Hosts []struct {
+	SchemaVersion         *int   `json:"schema_version"`
+	Command               string `json:"command"`
+	DryRun                *bool  `json:"dry_run"`
+	ExitCode              *int   `json:"exit_code"`
+	ReleaseSHA256         string `json:"release_sha256"`
+	DesiredManifestCommit string `json:"desired_manifest_commit"`
+	Hosts                 []struct {
 		Host, Name, Result string
 		Components         []struct {
 			Name, State string
@@ -681,6 +687,9 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 		return err
 	}
 	s.ExpectHead = strings.TrimSpace(string(p))
+	if s.ExpectHead != base {
+		return errors.New("preparation parent HEAD moved")
+	}
 	p, err = b.command(ctx, c, "", "upkeeper", "fleet-plan", "--json")
 	if err != nil {
 		return err
@@ -703,8 +712,11 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 		return fullErr
 	}
 	var fp preview
-	if err = json.Unmarshal(full, &fp); err != nil || len(fp.Hosts) == 0 {
+	if err = decodeDiagnostic(full, &fp); err != nil || len(fp.Hosts) == 0 {
 		return errors.New("full preview unavailable")
+	}
+	if err = fullPreviewBinding(fp, s.ExpectHead, s.ReleaseSHA256); err != nil {
+		return err
 	}
 	if err = record(s, "preview-full", json.RawMessage(full)); err != nil {
 		return err
@@ -757,6 +769,9 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 	}
 	// Review must explicitly bind this stable canonical package digest and both fences.
 	pkg := reviewedPackage{s.ExpectHead, s.ReleaseSHA256, s.ConfigDigest, s.TimerPrior, s.Extra}
+	if _, err = packageComponents(c, &pkg); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(pkg)
 	if err != nil {
 		return err

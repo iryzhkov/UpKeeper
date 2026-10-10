@@ -107,7 +107,7 @@ func (f *backendFake) host(args []string) string {
 }
 func (f *backendFake) snapshot(host string) map[string]string {
 	up := f.upgraded[host]
-	version, hash, pid, start := "0.11.0-rc.117", "old", "11", "before"
+	version, hash, pid, start := "0.11.0-rc.117", digest([]byte("old")), "11", "before"
 	if up {
 		version, hash, pid, start = f.c.Version, digest([]byte("linux_amd64")), "22", "after"
 	}
@@ -174,7 +174,7 @@ func (f *backendFake) preview(full bool) []byte {
 		}
 		hosts = append(hosts, map[string]any{"host": f.c.LaptopHost, "components": components})
 	}
-	return jsonBytes(map[string]any{"hosts": hosts})
+	return jsonBytes(map[string]any{"schema_version": 1, "command": "pull", "dry_run": true, "exit_code": 0, "desired_manifest_commit": f.head, "release_sha256": strings.Repeat("e", 64), "hosts": hosts})
 }
 func (f *backendFake) Run(ctx context.Context, dir, stdin, name string, args ...string) ([]byte, error) {
 	if stdin == configTransactionScript {

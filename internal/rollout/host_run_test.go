@@ -49,7 +49,12 @@ func fakeRuntime() (Runtime, *time.Time) {
 func protocolBackend() *fakeBackend {
 	return &fakeBackend{before: func(action string, s *State) {
 		if strings.HasPrefix(action, "host:") {
-			s.Extra["host-pre:"+strings.TrimPrefix(action, "host:")] = json.RawMessage("{}")
+			s.Extra["host-pre:"+strings.TrimPrefix(action, "host:")] = jsonBytes(map[string]string{
+				"arch": "x86_64", "version": "t3-steward rc121", "binary_sha256": digest([]byte("previous-reviewed-binary")),
+				"t3code.service.MainPID": "33", "t3code.service.ExecMainStartTimestamp": "same",
+				"t3-steward.service.ActiveState": "active", "t3-steward.service.MainPID": "11", "t3-steward.service.ExecMainStartTimestamp": "before",
+				"t3-steward-worker.service.ActiveState": "active", "t3-steward-worker.service.MainPID": "12", "t3-steward-worker.service.ExecMainStartTimestamp": "before",
+			})
 			s.Extra["identity-post:"+strings.TrimPrefix(action, "host:")] = json.RawMessage(`{"Health":"healthy","Epoch":1,"Release":"reviewed"}`)
 		}
 	}}

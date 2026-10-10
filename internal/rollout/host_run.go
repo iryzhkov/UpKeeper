@@ -216,7 +216,7 @@ func observeHost(ctx context.Context, c Config, b Backend, s *State, host string
 	}
 	for {
 		now := r.Now()
-		if now.Before(last) || now.Sub(last) > 60*time.Second {
+		if now.Round(0).Before(last.Round(0)) || now.Before(last) || now.Sub(last) > 60*time.Second {
 			return errors.New("observation clock moved or monitoring gap exceeded")
 		}
 		if err := b.Execute(ctx, c, "observe:"+host, s); err != nil {
@@ -224,7 +224,7 @@ func observeHost(ctx context.Context, c Config, b Backend, s *State, host string
 		}
 		samples++
 		last = r.Now()
-		if last.Before(now) || last.Sub(now) > 60*time.Second {
+		if last.Round(0).Before(now.Round(0)) || last.Before(now) || last.Sub(now) > 60*time.Second {
 			return errors.New("observation sample exceeded monitored interval")
 		}
 		if last.Sub(start) >= duration {
@@ -242,6 +242,7 @@ func observeHost(ctx context.Context, c Config, b Backend, s *State, host string
 	if err := record(s, "observation:"+host, receipt); err != nil {
 		return err
 	}
+	s.Invocation.EffectReturned = true
 	s.Completed["host:"+host] = true
 	if host == c.Canary {
 		s.Completed["soak"] = true
@@ -382,6 +383,9 @@ func RunHostWithRuntime(ctx context.Context, c Config, b Backend, host string, y
 			// remains the uncertainty fence if recording the failure also fails.
 			return recoverHost(ctx, c, b, s, host, err)
 		}
+		if err := saveEnclosingAuthority(c, s, "run:"+host, r.Now()); err != nil {
+			return terminal(s, err)
+		}
 		return complete()
 	})
 }
@@ -422,6 +426,9 @@ func FinishWorker(ctx context.Context, c Config, b Backend, host string, yes boo
 			if err := executeSaved(ctx, c, b, s, "dropin:"+host, r.Now()); err != nil {
 				return err
 			}
+		}
+		if err := saveEnclosingAuthority(c, s, "enroll:"+host, r.Now()); err != nil {
+			return terminal(s, err)
 		}
 		return complete()
 	})
@@ -471,7 +478,7 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 		if err != nil {
 			return err
 		}
-		if (authority.Operation == "dropin:"+host || authority.Operation == "enroll-worker:"+host) && (s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0)) {
+		if (authority.Operation == "dropin:"+host || authority.Operation == "enroll-worker:"+host) && (s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0) || authority.EnclosingAttempt == "enroll:"+host) {
 			intent, done, err := readAttempt(c, attemptPath(c, "enroll:"+host), runtimeFor(b).Now())
 			if err != nil || intent.Action != "enroll:"+host || done {
 				return errors.New("D5 recovery requires unfinished matching enrollment intent")

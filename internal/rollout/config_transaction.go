@@ -112,7 +112,9 @@ func (b *ProductionBackend) configRestore(ctx context.Context, c Config, s *Stat
 		return nil
 	}
 	if _, ok := s.Extra["config-intent"]; !ok {
-		return nil
+		// Absence cannot prove that installation never took effect. The frozen
+		// configuration requires its original durable receipt before recovery.
+		return errors.New("missing configuration intent: original configuration restoration is unknown")
 	}
 	if s.Save == nil {
 		return errors.New("configuration restore requires durable journal")
@@ -133,6 +135,9 @@ func (b *ProductionBackend) configRestore(ctx context.Context, c Config, s *Stat
 	}
 	if _, err := b.configCommand(ctx, c, "restore", p); err != nil {
 		return err
+	}
+	if err := b.configBefore(ctx, c); err != nil {
+		return fmt.Errorf("verify original configuration after restore: %w", err)
 	}
 	r.Restored = true
 	return transactionRecord(s, "config-intent", r)

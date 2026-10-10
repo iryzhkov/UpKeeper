@@ -15,7 +15,9 @@ import (
 // JSON checkpoint. Completion is appended only after every effect, observation,
 // receipt write/fsync/rename/dirsync returned success. The final unbuffered
 // acknowledgement is deliberately not followed by a fallible durability gate:
-// losing it on power failure fails closed, while preceding receipts are durable.
+// losing its unsynced append is uncertainty, while preceding receipts are durable.
+// Run and enrollment save exact enclosing recovery authority before this append;
+// its loss permits named recovery only and never forward continuation.
 type attemptIntent struct {
 	Action, Host, ConfigDigest string
 	Started                    time.Time
