@@ -63,7 +63,13 @@ func TestNamedD5RecoveryRealRestoreAfterInterruptionAndFirstFailure(t *testing.T
 			receipt.Host = "agent-b"
 			receipt.IntentAt = b.Now()
 			s := &State{ConfigDigest: c.Digest(), Completed: map[string]bool{}, TimerPrior: map[string]string{}, Extra: map[string]json.RawMessage{}, InFlight: "dropin:agent-b"}
+			intent, _, err := readAttempt(c, attemptPath(c, "enroll:agent-b"), b.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.Invocation = &InvocationAuthority{Host: "agent-b", Operation: "dropin:agent-b", Attempt: "enroll:agent-b", ConfigDigest: c.Digest(), Started: intent.Started}
 			s.Extra["dropin:agent-b"] = jsonBytes(receipt)
+			seedPublication(t, c, s)
 			if err = saveState(c.StatePath, s); err != nil {
 				t.Fatal(err)
 			}

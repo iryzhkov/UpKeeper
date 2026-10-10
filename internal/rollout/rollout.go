@@ -52,21 +52,23 @@ type Config struct {
 }
 
 type State struct {
-	ConfigDigest   string
-	FleetApproval  string
-	Completed      map[string]bool
-	InFlight       string
-	Failed         string
-	ReleaseCommit  string
-	ExpectHead     string
-	ReleaseSHA256  string
-	PackageDigest  string
-	TimerPrior     map[string]string
-	BackupCreated  time.Time
-	BackupSnapshot string
-	BackupScratch  string
-	Extra          map[string]json.RawMessage
-	Save           func() error `json:"-"`
+	ConfigDigest     string
+	FleetApproval    string
+	Completed        map[string]bool
+	InFlight         string
+	Failed           string
+	Invocation       *InvocationAuthority
+	FailedInvocation *InvocationAuthority
+	ReleaseCommit    string
+	ExpectHead       string
+	ReleaseSHA256    string
+	PackageDigest    string
+	TimerPrior       map[string]string
+	BackupCreated    time.Time
+	BackupSnapshot   string
+	BackupScratch    string
+	Extra            map[string]json.RawMessage
+	Save             func() error `json:"-"`
 }
 
 // Backend is the effect boundary; Check must never mutate. Execute must persist

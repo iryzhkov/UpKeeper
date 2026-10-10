@@ -49,7 +49,7 @@ func validateWalk(c Config) error {
 		return err
 	}
 	if !reflect.DeepEqual(append([]string{c.Canary}, c.FleetOrder...), rc122Order) ||
-		c.CoordinatorHost != "normandy" || c.LastHost != "omarchy-pc" {
+		c.CoordinatorHost != "normandy" || c.LastHost != "omarchy-pc" || !reflect.DeepEqual(c.ActiveWorkers, d5Order) {
 		return errors.New("rc122 requires agent-b, normandy, homelab, agent-a, omarchy-pc in fixed order")
 	}
 	if c.CoordinatorConfig == nil || !validArgv(c.QuietCommand) || (len(c.BackupCommand) > 0 && !validArgv(c.BackupCommand)) || !validArgv(c.ActivityCommand) || !validArgv(c.HaikuCheckCommand) || !validArgv(c.DropinTestCommand) {
@@ -99,15 +99,31 @@ func withJournal(c Config, r Runtime, fn func(*State) error) error {
 	return fn(s)
 }
 func terminal(s *State, cause error) error {
+	failInvocation(s)
 	s.Failed = cause.Error()
+	if s.FailedInvocation != nil && s.FailedInvocation.Failure == "" {
+		s.FailedInvocation.Failure = cause.Error()
+	}
 	return errors.Join(cause, s.Save())
 }
 func recoverHost(ctx context.Context, c Config, b Backend, s *State, host string, cause error) error {
-	acknowledge, err := beginRecoveryFor(c, "rollback", host, runtimeFor(b).Now())
+	if _, err := recoveryAuthority(c, s, host, runtimeFor(b).Now()); err != nil {
+		return errors.Join(cause, err)
+	}
+	failInvocation(s)
+	s.Failed = cause.Error()
+	if s.FailedInvocation != nil && s.FailedInvocation.Failure == "" {
+		s.FailedInvocation.Failure = cause.Error()
+	}
+	if err := s.Save(); err != nil {
+		return errors.Join(cause, err)
+	}
+	recoveryNow := runtimeFor(b).Now()
+	acknowledge, recoveryAction, err := beginRecoveryInvocation(c, "rollback", host, recoveryNow)
 	if err != nil {
 		return errors.Join(cause, err)
 	}
-	s.Failed = cause.Error()
+	startRecoveryEvidence(s.FailedInvocation, "rollback:"+host, recoveryAction, recoveryNow)
 	s.InFlight = "rollback:" + host
 	if err := s.Save(); err != nil {
 		return errors.Join(cause, err)
@@ -117,11 +133,19 @@ func recoverHost(ctx context.Context, c Config, b Backend, s *State, host string
 	if err := b.Execute(recovery, c, s.InFlight, s); err != nil {
 		return errors.Join(cause, fmt.Errorf("rollback recovery required: %w", err))
 	}
+	recoveryEffectReturned(s.FailedInvocation)
+	if err := s.Save(); err != nil {
+		return errors.Join(cause, err)
+	}
 	s.InFlight = ""
 	if err := s.Save(); err != nil {
 		return errors.Join(cause, err)
 	}
 	if err := acknowledge(); err != nil {
+		return errors.Join(cause, err)
+	}
+	recoveryAcknowledged(s.FailedInvocation)
+	if err := s.Save(); err != nil {
 		return errors.Join(cause, err)
 	}
 	return fmt.Errorf("%w; rollback completed; attempt remains terminal", cause)
@@ -146,13 +170,13 @@ func executeSaved(ctx context.Context, c Config, b Backend, s *State, action str
 	if err != nil {
 		return err
 	}
-	s.InFlight = action
-	if err := s.Save(); err != nil {
+	if err := saveInvocation(c, s, action, "phase:"+action, operationHost(c, action), now); err != nil {
 		return err
 	}
 	if err := b.Execute(ctx, c, action, s); err != nil {
 		return terminal(s, fmt.Errorf("%s: %w", action, err))
 	}
+	s.Invocation.EffectReturned = true
 	s.Completed[action] = true
 	s.InFlight = ""
 	if err := s.Save(); err != nil {
@@ -184,7 +208,9 @@ func observeHost(ctx context.Context, c Config, b Backend, s *State, host string
 	}
 	last := start
 	samples := 0
-	s.InFlight = "observe:" + host
+	if err := saveInvocation(c, s, "observe:"+host, "phase:observe:"+host, host, start); err != nil {
+		return err
+	}
 	if err := record(s, "observation-intent:"+host, start); err != nil {
 		return err
 	}
@@ -311,15 +337,24 @@ func RunHostWithRuntime(ctx context.Context, c Config, b Backend, host string, y
 				}
 			}
 		}
-		accept, err := beginAttempt(c, "phase:accept:"+host, "", r.Now())
+		acceptNow := r.Now()
+		accept, err := beginAttempt(c, "phase:accept:"+host, "", acceptNow)
 		if err != nil {
+			return err
+		}
+		if err := saveInvocation(c, s, "accept:"+host, "phase:accept:"+host, host, acceptNow); err != nil {
 			return err
 		}
 		if err := b.Execute(ctx, c, "release-ci", s); err != nil {
 			return terminal(s, err)
 		}
+		s.Invocation.EffectReturned = true
+		s.InFlight = ""
+		if err := s.Save(); err != nil {
+			return terminal(s, err)
+		}
 		if err := accept(); err != nil {
-			return err
+			return terminal(s, err)
 		}
 		if host == c.CoordinatorHost {
 			for _, action := range []string{"backup", "config-patch"} {
@@ -329,8 +364,11 @@ func RunHostWithRuntime(ctx context.Context, c Config, b Backend, host string, y
 			}
 		}
 		fmt.Fprintf(out, "host %s: converge, verify and observe; rollback --to %s --hosts %s\n", host, c.PreviousRelease, host)
-		s.InFlight = "host:" + host
-		if err := s.Save(); err != nil {
+		intent, _, err := readAttempt(c, attemptPath(c, "run:"+host), r.Now())
+		if err != nil {
+			return err
+		}
+		if err := saveInvocation(c, s, "host:"+host, "run:"+host, host, intent.Started); err != nil {
 			return err
 		}
 		if err := b.Execute(ctx, c, s.InFlight, s); err != nil {
@@ -370,8 +408,8 @@ func FinishWorker(ctx context.Context, c Config, b Backend, host string, yes boo
 		if s.Completed["enroll-worker:"+host] {
 			return errors.New("worker enrollment already completed")
 		}
-		if host == "agent-a" && !s.Completed["enroll-worker:agent-b"] {
-			return errors.New("agent-b D5 must precede agent-a")
+		if err := priorD5(c, s, host, r.Now()); err != nil {
+			return err
 		}
 		complete, err := beginAttempt(c, "enroll:"+host, host, r.Now())
 		if err != nil {
@@ -405,10 +443,8 @@ func VerifyRollout(ctx context.Context, c Config, b Backend, yes bool) error {
 				return err
 			}
 		}
-		for _, h := range c.ActiveWorkers {
-			if !s.Completed["enroll-worker:"+h] {
-				return errors.New("named active enrollment incomplete")
-			}
+		if err := requiredD5(c, s, c.ActiveWorkers, r.Now()); err != nil {
+			return err
 		}
 		complete, err := beginAttempt(c, "verify", "", r.Now())
 		if err != nil {
@@ -431,7 +467,11 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 		return errors.New("named recovery host and --yes required")
 	}
 	return withJournal(c, runtimeFor(b), func(s *State) error {
-		if s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0) {
+		authority, err := recoveryAuthority(c, s, host, runtimeFor(b).Now())
+		if err != nil {
+			return err
+		}
+		if (authority.Operation == "dropin:"+host || authority.Operation == "enroll-worker:"+host) && (s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0)) {
 			intent, done, err := readAttempt(c, attemptPath(c, "enroll:"+host), runtimeFor(b).Now())
 			if err != nil || intent.Action != "enroll:"+host || done {
 				return errors.New("D5 recovery requires unfinished matching enrollment intent")
@@ -443,18 +483,28 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 			if receipt.Host != host || receipt.Absent {
 				return errors.New("D5 recovery requires matching original backup receipt")
 			}
-			acknowledge, err := beginRecovery(c, host, runtimeFor(b).Now())
+			recoveryNow := runtimeFor(b).Now()
+			acknowledge, recoveryAction, err := beginRecoveryInvocation(c, "dropin", host, recoveryNow)
 			if err != nil {
 				return err
 			}
+			failInvocation(s)
 			if s.Failed == "" {
 				s.Failed = "interrupted D5 attempt; recovery only"
 			}
+			if s.FailedInvocation.Failure == "" {
+				s.FailedInvocation.Failure = s.Failed
+			}
+			startRecoveryEvidence(s.FailedInvocation, "dropin-restore:"+host, recoveryAction, recoveryNow)
 			s.InFlight = "dropin-restore:" + host
 			if err := s.Save(); err != nil {
 				return err
 			}
 			if err := b.Execute(ctx, c, s.InFlight, s); err != nil {
+				return err
+			}
+			recoveryEffectReturned(s.FailedInvocation)
+			if err := s.Save(); err != nil {
 				return err
 			}
 			s.InFlight = ""
@@ -464,7 +514,8 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 			if err := acknowledge(); err != nil {
 				return err
 			}
-			return errors.New("original drop-in restored; failed attempt remains terminal")
+			recoveryAcknowledged(s.FailedInvocation)
+			return errors.Join(errors.New("original drop-in restored; failed attempt remains terminal"), s.Save())
 		}
 		if strings.HasPrefix(s.InFlight, "rollback:") && s.InFlight != "rollback:"+host {
 			return errors.New("another host owns rollback recovery")
@@ -480,11 +531,21 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 		if complete && s.Failed == "" && s.InFlight == "" {
 			return errors.New("completed host does not authorize uncertain-effect recovery")
 		}
-		if len(s.Extra["host-pre:"+host]) > 0 {
+		if len(s.Extra["host-pre:"+host]) > 0 && (authority.Operation == "host:"+host || authority.Operation == "observe:"+host) {
 			return recoverHost(ctx, c, b, s, host, errors.New("operator requested host rollback recovery"))
 		}
-		if host == c.CoordinatorHost && len(s.Extra["config-intent"]) > 0 {
+		if host == c.CoordinatorHost && authority.Operation == "config-patch" && len(s.Extra["config-intent"]) > 0 {
+			failInvocation(s)
 			s.Failed = "coordinator configuration attempt failed; recovery only"
+			if s.FailedInvocation.Failure == "" {
+				s.FailedInvocation.Failure = s.Failed
+			}
+			recoveryNow := runtimeFor(b).Now()
+			acknowledge, recoveryAction, err := beginRecoveryInvocation(c, "rollback", host, recoveryNow)
+			if err != nil {
+				return err
+			}
+			startRecoveryEvidence(s.FailedInvocation, "config-restore", recoveryAction, recoveryNow)
 			s.InFlight = "config-restore"
 			if err := s.Save(); err != nil {
 				return err
@@ -492,7 +553,18 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 			if err := b.Execute(ctx, c, "config-restore", s); err != nil {
 				return err
 			}
+			recoveryEffectReturned(s.FailedInvocation)
+			if err := s.Save(); err != nil {
+				return err
+			}
 			s.InFlight = ""
+			if err := s.Save(); err != nil {
+				return err
+			}
+			if err := acknowledge(); err != nil {
+				return err
+			}
+			recoveryAcknowledged(s.FailedInvocation)
 			return errors.Join(errors.New("configuration restored; attempt remains terminal"), s.Save())
 		}
 		return errors.New("no saved host effect to recover; retain attempt and obtain newly reviewed plan")

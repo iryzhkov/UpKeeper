@@ -66,6 +66,12 @@ func validPhaseIntent(action, host string) bool {
 	for _, h := range rc122Order {
 		for _, prefix := range []string{"accept:", "observe:", "dropin:", "enroll-worker:"} {
 			if phase == prefix+h {
+				if prefix == "dropin:" {
+					return h == "agent-b" || h == "agent-a"
+				}
+				if prefix == "enroll-worker:" {
+					return contains(d5Order, h)
+				}
 				return true
 			}
 		}
@@ -90,6 +96,15 @@ func requiredAttempts(c Config, s *State, now time.Time) error {
 			return fmt.Errorf("journal requires intent inventory: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
+		return err
+	}
+	var completedD5 []string
+	for _, host := range c.ActiveWorkers {
+		if s.Completed["enroll-worker:"+host] {
+			completedD5 = append(completedD5, host)
+		}
+	}
+	if err := requiredD5(c, s, completedD5, now); err != nil {
 		return err
 	}
 	for action, done := range s.Completed {

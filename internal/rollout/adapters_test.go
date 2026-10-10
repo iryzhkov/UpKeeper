@@ -75,6 +75,7 @@ func TestStewardBackupAdapterStillRequiresDrillEvidence(t *testing.T) {
 	for _, invalid := range []bool{false, true} {
 		b, runner, c, s := backendFixture(t)
 		fencedFake(runner)
+		seedPublication(t, c, s)
 		provider := &backupAdapterFake{now: b.Now(), invalid: invalid}
 		b.CoordinatorBackup = provider
 		err := b.Execute(context.Background(), c, "backup", s)

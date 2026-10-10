@@ -33,7 +33,7 @@ func (r *diagnosticRunner) Run(_ context.Context, _, _, name string, args ...str
 }
 func diagnosticFixture(now time.Time) map[string]any {
 	return map[string]any{"version": "backlog.admin/v1", "kind": "workers", "workers": []any{map[string]any{
-		"requirement": map[string]any{"workerId": "agent-b"}, "health": "ready", "state": "observed", "stale": false,
+		"requirement": map[string]any{"workerId": "agent-b", "workerEpoch": "process"}, "health": "ready", "state": "observed", "stale": false,
 		"snapshot": map[string]any{"workerId": "agent-b", "workerEpoch": "process", "coordinatorEpoch": 280, "connected": true, "observedAt": now.Add(-time.Second), "validUntil": now.Add(time.Minute),
 			"inventory":   map[string]any{"id": "agent-b", "health": "ready", "capabilities": []string{"turn-end-commands-v1"}, "telemetry": map[string]any{"running_attempts": 0}, "providers": []any{map[string]any{"instanceId": "claudeAgent", "available": true, "models": []string{"claude-haiku-5-5"}}}},
 			"assignments": []any{}}}}}
@@ -104,6 +104,112 @@ func TestDiagnosticProducerJSONRefusesContradictoryEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosticRequiredEpochIndependentOfDraining(t *testing.T) {
+	now := time.Now().UTC()
+	for _, kind := range []string{"activity", "haiku"} {
+		for _, defect := range []string{"valid", "mismatch", "missing-required", "empty-required", "missing-snapshot", "missing-id", "missing-coordinator", "duplicate", "capability"} {
+			t.Run(kind+"/"+defect, func(t *testing.T) {
+				d := diagnosticFixture(now)
+				w := d["workers"].([]any)[0].(map[string]any)
+				w["state"] = "draining"
+				req := w["requirement"].(map[string]any)
+				s := w["snapshot"].(map[string]any)
+				switch defect {
+				case "mismatch":
+					req["workerEpoch"] = "new"
+					s["workerEpoch"] = "old"
+				case "missing-required":
+					delete(req, "workerEpoch")
+				case "empty-required":
+					req["workerEpoch"] = ""
+				case "missing-snapshot":
+					delete(s, "workerEpoch")
+				case "missing-id":
+					delete(s, "workerId")
+				case "missing-coordinator":
+					delete(s, "coordinatorEpoch")
+				case "duplicate":
+					d["workers"] = []any{w, w}
+				case "capability":
+					s["inventory"].(map[string]any)["capabilities"] = []string{"older"}
+				}
+				raw := &diagnosticRunner{workers: jsonBytes(d), identity: []byte(`{"version":"backlog.admin/v1","kind":"coordinator-identity","coordinatorId":"homelab","health":"healthy","epoch":280}`)}
+				b := NewProductionBackend()
+				b.Runner = raw
+				b.Now = func() time.Time { return now }
+				got, err := b.Diagnostic(context.Background(), Config{Targets: map[string]string{"agent-b": "remote"}, DrainedHosts: []string{"agent-b"}}, kind, "agent-b", 280)
+				if (err == nil) != (defect == "valid") || (err != nil && got != nil) {
+					t.Fatalf("got=%v err=%v", got, err)
+				}
+				for _, call := range raw.calls {
+					if call != "t3-steward worker list --json" && call != "t3-steward coordinator identity --json" {
+						t.Fatalf("unexpected effect %s", call)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDiagnosticFinalReadFreshness(t *testing.T) {
+	for _, kind := range []string{"activity", "haiku"} {
+		for _, fault := range []string{"valid-boundary", "age", "lease", "age-and-lease", "clock-regression", "stale-assignment", "future-assignment", "future-journal", "final-producer-failure"} {
+			t.Run(kind+"/"+fault, func(t *testing.T) {
+				initial := time.Now().UTC()
+				now := initial
+				d := diagnosticFixture(initial)
+				s := d["workers"].([]any)[0].(map[string]any)["snapshot"].(map[string]any)
+				advance := 2 * time.Second
+				switch fault {
+				case "valid-boundary":
+					s["observedAt"] = initial.Add(-58 * time.Second)
+				case "age":
+					s["observedAt"] = initial.Add(-59 * time.Second)
+				case "lease":
+					s["validUntil"] = initial.Add(2 * time.Second)
+				case "age-and-lease":
+					s["observedAt"] = initial.Add(-59 * time.Second)
+					s["validUntil"] = initial.Add(time.Second)
+				case "clock-regression":
+					advance = -time.Nanosecond
+				case "stale-assignment", "future-assignment", "future-journal":
+					observed := initial.Add(-59 * time.Second)
+					updated := initial.Add(-time.Hour)
+					if fault == "future-assignment" {
+						observed = initial.Add(time.Minute)
+					}
+					if fault == "future-journal" {
+						updated = initial.Add(time.Minute)
+					}
+					s["assignments"] = []any{map[string]any{"assignmentId": "done", "state": "completed", "observedAt": observed, "journal": map[string]any{"phase": "completed", "updatedAt": updated}}}
+				}
+				raw := &diagnosticRunner{workers: jsonBytes(d), identity: []byte(`{"version":"backlog.admin/v1","kind":"coordinator-identity","coordinatorId":"homelab","health":"healthy","epoch":280}`)}
+				b := NewProductionBackend()
+				b.Now = func() time.Time { return now }
+				reads := 0
+				b.Runner = commandFunc(func(ctx context.Context, dir, stdin, name string, args ...string) ([]byte, error) {
+					p, e := raw.Run(ctx, dir, stdin, name, args...)
+					if strings.Join(args, " ") == "coordinator identity --json" {
+						reads++
+						if reads == 2 {
+							now = now.Add(advance)
+							if fault == "final-producer-failure" {
+								return p, errors.New("exit status 42")
+							}
+						}
+					}
+					return p, e
+				})
+				got, err := b.Diagnostic(context.Background(), Config{Targets: map[string]string{"agent-b": "remote"}}, kind, "agent-b", 280)
+				if (err == nil) != (fault == "valid-boundary") || (err != nil && got != nil) {
+					t.Fatalf("got=%v err=%v", got, err)
+				}
+			})
+		}
+	}
+}
+
 func TestProductionDiagnosticAdapters(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {
@@ -118,7 +224,7 @@ func TestProductionDiagnosticAdapters(t *testing.T) {
 			// worker inventory catalog drift; outer health still reflects ready inventory.
 			w["state"] = "draining"
 			w["enrolled"] = false
-			w["requirement"] = map[string]any{"workerId": "agent-b", "catalogRevision": "new-catalog"}
+			w["requirement"] = map[string]any{"workerId": "agent-b", "workerEpoch": "process", "catalogRevision": "new-catalog"}
 			w["enrollment"] = map[string]any{"request": map[string]any{"catalogRevision": "old-catalog"}}
 			s["inventory"].(map[string]any)["catalogRevision"] = "old-catalog"
 		}, "", "", true},

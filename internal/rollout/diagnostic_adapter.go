@@ -21,7 +21,8 @@ type diagnosticWorkers struct {
 }
 type diagnosticWorker struct {
 	Requirement *struct {
-		WorkerID string `json:"workerId"`
+		WorkerID    string `json:"workerId"`
+		WorkerEpoch string `json:"workerEpoch"`
 	} `json:"requirement"`
 	Health   string `json:"health"`
 	State    string `json:"state"`
@@ -156,7 +157,7 @@ func selectDiagnosticWorker(p []byte, host string, epoch int64, now time.Time) (
 		return nil, errors.New("worker missing")
 	}
 	s := &selected.Snapshot
-	if selected.Stale == nil || *selected.Stale || selected.Health != "ready" || (selected.State != "observed" && selected.State != "draining") || !s.Connected || s.WorkerID != host || s.WorkerEpoch == "" || s.CoordinatorEpoch != epoch || s.Inventory.ID != host || s.Inventory.Health != "ready" || !diagnosticFresh(s.ObservedAt, now) || !s.ValidUntil.After(now) || s.ValidUntil.Before(s.ObservedAt) || s.ValidUntil.Sub(s.ObservedAt) > 5*time.Minute {
+	if selected.Stale == nil || *selected.Stale || selected.Health != "ready" || (selected.State != "observed" && selected.State != "draining") || !s.Connected || s.WorkerID != host || selected.Requirement.WorkerEpoch == "" || s.WorkerEpoch == "" || s.WorkerEpoch != selected.Requirement.WorkerEpoch || s.CoordinatorEpoch != epoch || s.Inventory.ID != host || s.Inventory.Health != "ready" || !diagnosticFresh(s.ObservedAt, now) || !s.ValidUntil.After(now) || s.ValidUntil.Before(s.ObservedAt) || s.ValidUntil.Sub(s.ObservedAt) > 5*time.Minute {
 		return nil, errors.New("worker identity, readiness or freshness refused")
 	}
 	return selected, nil
@@ -200,6 +201,24 @@ func (b *ProductionBackend) Diagnostic(ctx context.Context, c Config, kind, host
 	if final != id {
 		return nil, errors.New("coordinator changed during diagnostic")
 	}
+	// The row state can collapse recovery-required into draining. Identity and
+	// reporting evidence must remain independently checked for both diagnostics.
+	if !contains(w.Snapshot.Inventory.Capabilities, "turn-end-commands-v1") {
+		return nil, errors.New("unsupported worker reporting capability")
+	}
+	finalNow := b.Now()
+	if finalNow.Before(now) {
+		return nil, errors.New("clock regressed during diagnostic")
+	}
+	if !diagnosticFresh(w.Snapshot.ObservedAt, finalNow) || !w.Snapshot.ValidUntil.After(finalNow) {
+		return nil, errors.New("worker snapshot expired during diagnostic")
+	}
+	for _, a := range w.Snapshot.Assignments {
+		if !diagnosticFresh(a.ObservedAt, finalNow) || a.Journal == nil || a.Journal.UpdatedAt.IsZero() || a.Journal.UpdatedAt.After(finalNow) {
+			return nil, errors.New("assignment freshness refused")
+		}
+	}
+	now = finalNow
 	if kind == "haiku" {
 		matches := 0
 		available := false

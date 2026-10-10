@@ -336,9 +336,7 @@ func TestReviewFinalVerifyOmitsConfigurationStatus(t *testing.T) {
 		s.Extra["observation:"+h] = jsonBytes(ObservationReceipt{Host: h, ConfigDigest: c.Digest(), ReleaseCommit: s.ReleaseCommit, Started: r.Now().Add(-time.Hour), Finished: r.Now(), Samples: 361, Identity: jsonBytes(map[string]string{"epoch": "2"})})
 	}
 	for _, h := range c.ActiveWorkers {
-		s.Completed["enroll-worker:"+h] = true
-		reviewAcknowledged(t, c, "enroll:"+h, h, r.Now())
-		reviewAcknowledged(t, c, "phase:enroll-worker:"+h, "", r.Now())
+		seedD5(t, c, s, h, r.Now())
 	}
 	if err := s.Save(); err != nil {
 		t.Fatal(err)

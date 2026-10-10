@@ -756,11 +756,7 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 		return err
 	}
 	// Review must explicitly bind this stable canonical package digest and both fences.
-	pkg := struct {
-		Head, Release, ConfigDigest string
-		TimerPrior                  map[string]string
-		Evidence                    map[string]json.RawMessage
-	}{s.ExpectHead, s.ReleaseSHA256, s.ConfigDigest, s.TimerPrior, s.Extra}
+	pkg := reviewedPackage{s.ExpectHead, s.ReleaseSHA256, s.ConfigDigest, s.TimerPrior, s.Extra}
 	raw, err := json.Marshal(pkg)
 	if err != nil {
 		return err
@@ -793,24 +789,8 @@ func (b *ProductionBackend) publish(ctx context.Context, c Config, s *State) err
 	if lines[0] != "VERDICT: ACCEPT" || !strings.Contains(string(p), s.ExpectHead) || !strings.Contains(string(p), s.ReleaseSHA256) || !contains(lines, "PACKAGE "+s.PackageDigest) {
 		return errors.New("review does not accept exact package and fences")
 	}
-	pkg := struct {
-		Head, Release, ConfigDigest string
-		TimerPrior                  map[string]string
-		Evidence                    map[string]json.RawMessage
-	}{s.ExpectHead, s.ReleaseSHA256, s.ConfigDigest, s.TimerPrior, s.Extra}
-	raw, err := json.Marshal(pkg)
-	if err != nil {
+	if _, err := acceptedPackage(c, s); err != nil {
 		return err
-	}
-	if digest(raw) != s.PackageDigest {
-		return errors.New("review package changed")
-	}
-	packageFile, err := os.ReadFile(c.StatePath + ".review-package.json")
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(packageFile, raw) {
-		return errors.New("review package file changed")
 	}
 	if err = b.timers(ctx, c, true); err != nil {
 		return err
@@ -1070,7 +1050,7 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	}
 	post := keyValues(raw)
 	var assets assetEvidence
-	if err = evidence(s, "assets", &assets); err != nil {
+	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
 	if err = snapshotGate(pre, post, c.Version, assets.Binaries); err != nil {
@@ -1449,6 +1429,12 @@ func (b *ProductionBackend) enroll(ctx context.Context, c Config, s *State) erro
 	return nil
 }
 func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) error {
+	if _, err := acceptedPackage(c, s); err != nil {
+		return err
+	}
+	if err := requiredD5(c, s, c.ActiveWorkers, b.Now()); err != nil {
+		return err
+	}
 	if err := b.timers(ctx, c, true); err != nil {
 		return err
 	}
@@ -1486,7 +1472,7 @@ func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) erro
 		}
 	}
 	var assets assetEvidence
-	if err = evidence(s, "assets", &assets); err != nil {
+	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
 	for _, h := range append([]string{c.Canary}, c.FleetOrder...) {
@@ -1523,6 +1509,9 @@ func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) erro
 	return b.finalConfiguration(ctx, c, s)
 }
 func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) error {
+	if _, err := acceptedPackage(c, s); err != nil {
+		return err
+	}
 	if err := b.timers(ctx, c, true); err != nil {
 		return err
 	}
@@ -1552,7 +1541,7 @@ func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) err
 		return err
 	}
 	var assets assetEvidence
-	if err = evidence(s, "assets", &assets); err != nil {
+	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
 	p, err := b.on(ctx, c, c.Canary, snapshotScript)
@@ -1562,6 +1551,11 @@ func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) err
 	return snapshotGate(pre, keyValues(p), c.Version, assets.Binaries)
 }
 func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string, s *State) error {
+	if action != "fence" && action != "prepare" {
+		if _, err := acceptedPackage(c, s); err != nil {
+			return err
+		}
+	}
 	switch action {
 	case "fence":
 		return b.fence(ctx, c, s)
@@ -1599,10 +1593,25 @@ func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string
 		return b.dropinRestore(ctx, c, host, s, id.Epoch.String())
 	}
 	if strings.HasPrefix(action, "dropin:") {
-		return b.dropinRepair(ctx, c, strings.TrimPrefix(action, "dropin:"), s)
+		host := strings.TrimPrefix(action, "dropin:")
+		if c.Canary == "agent-b" && c.CoordinatorHost == "normandy" {
+			if err := priorD5(c, s, host, b.Now()); err != nil {
+				return err
+			}
+			if !s.Completed["enroll-worker:"+host] {
+				return errors.New("drop-in dispatch requires completed named enrollment phase")
+			}
+			if err := requireAttempt(c, "phase:enroll-worker:"+host, b.Now()); err != nil {
+				return err
+			}
+		}
+		return b.dropinRepair(ctx, c, host, s)
 	}
 	if strings.HasPrefix(action, "enroll-worker:") {
 		worker := strings.TrimPrefix(action, "enroll-worker:")
+		if err := priorD5(c, s, worker, b.Now()); err != nil {
+			return err
+		}
 		if !contains(c.ActiveWorkers, worker) {
 			return errors.New("enrollment outside active worker scope")
 		}

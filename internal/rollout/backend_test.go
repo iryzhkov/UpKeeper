@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +71,7 @@ func backendFixture(t *testing.T) (*ProductionBackend, *backendFake, Config, *St
 		}
 		return nil
 	}
-	s := &State{ReleaseCommit: f.head, Extra: map[string]json.RawMessage{}, Completed: map[string]bool{}, Save: func() error { f.saved = true; return nil }}
+	s := &State{ConfigDigest: c.Digest(), ReleaseCommit: f.head, Extra: map[string]json.RawMessage{}, Completed: map[string]bool{}, Save: func() error { f.saved = true; return nil }}
 	return b, f, c, s
 }
 func testArchive(t *testing.T, p []byte) []byte {
@@ -134,6 +133,12 @@ func (f *backendFake) manifest(after bool) []byte {
 		version = f.c.Version
 	}
 	m := map[string]any{"components": map[string]any{"t3-steward": map[string]any{"version": version}, "t3": map[string]any{"compatibility": map[string]any{"steward_version": version}}, "omarchy-setup": map[string]any{"commit": "pinned"}}}
+	components := m["components"].(map[string]any)
+	for _, name := range reviewedComponentNames {
+		if components[name] == nil {
+			components[name] = map[string]any{}
+		}
+	}
 	if after && f.manifestDrift {
 		m["catalog"] = "changed"
 	}
@@ -153,10 +158,21 @@ func (f *backendFake) preview(full bool) []byte {
 		if full || f.scopeFault == "extra" {
 			components = append(components, map[string]any{"name": "agent-tooling", "state": "converged", "actions": []string{"mise upgrade --yes --no-prune"}})
 		}
+		if full {
+			for _, name := range reviewedComponentNames {
+				if name != "t3-steward" && name != "agent-tooling" {
+					components = append(components, map[string]any{"name": name, "state": "converged", "actions": []string{}})
+				}
+			}
+		}
 		hosts = append(hosts, map[string]any{"host": h, "components": components})
 	}
 	if full {
-		hosts = append(hosts, map[string]any{"host": f.c.LaptopHost, "components": []any{map[string]any{"name": "t3-steward", "state": "converged", "actions": []string{}}}})
+		components := []any{}
+		for _, name := range reviewedComponentNames {
+			components = append(components, map[string]any{"name": name, "state": "converged", "actions": []string{}})
+		}
+		hosts = append(hosts, map[string]any{"host": f.c.LaptopHost, "components": components})
 	}
 	return jsonBytes(map[string]any{"hosts": hosts})
 }
@@ -413,7 +429,9 @@ func TestCriterion2AssetsFourPlatformsAndChecksums(t *testing.T) {
 }
 func writeReview(t *testing.T, c *Config, s *State) {
 	t.Helper()
-	c.ReviewFile = filepath.Join(t.TempDir(), "review.md")
+	if c.ReviewFile == "" {
+		t.Fatal("review path must be pinned before preparation")
+	}
 	p := "VERDICT: ACCEPT\n" + s.ExpectHead + "\n" + s.ReleaseSHA256 + "\nPACKAGE " + s.PackageDigest + "\n"
 	if err := os.WriteFile(c.ReviewFile, []byte(p), 0600); err != nil {
 		t.Fatal(err)
@@ -423,7 +441,9 @@ func TestCriterion3ReviewedFencesAndPackage(t *testing.T) {
 	for _, fault := range []string{"none", "head", "release", "package", "verdict"} {
 		t.Run(fault, func(t *testing.T) {
 			b, f, c, s := backendFixture(t)
-			fencedFake(f)
+			if err := b.fence(context.Background(), c, s); err != nil {
+				t.Fatal(err)
+			}
 			if err := b.prepare(context.Background(), c, s); err != nil {
 				t.Fatal(err)
 			}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 )
@@ -15,19 +14,8 @@ func (b *ProductionBackend) checkoutFence(ctx context.Context, c Config, s *Stat
 	if s.ReleaseCommit == "" || s.ReleaseSHA256 == "" || s.PackageDigest == "" {
 		return errors.New("missing immutable publication binding")
 	}
-	raw, err := os.ReadFile(c.StatePath + ".review-package.json")
-	if err != nil {
+	if _, err := acceptedPackage(c, s); err != nil {
 		return err
-	}
-	if digest(raw) != s.PackageDigest {
-		return errors.New("accepted package bytes changed")
-	}
-	var pkg struct{ Head, Release, ConfigDigest string }
-	if err = decodeDiagnostic(raw, &pkg); err != nil {
-		return err
-	}
-	if pkg.Head != s.ExpectHead || pkg.Release != s.ReleaseSHA256 || pkg.ConfigDigest != c.Digest() {
-		return errors.New("accepted package binding mismatch")
 	}
 	p, err := b.command(ctx, c, "", "git", "rev-parse", "HEAD")
 	if err != nil {
@@ -135,16 +123,33 @@ func (b *ProductionBackend) finalConfiguration(ctx context.Context, c Config, s 
 	if report.Schema != 1 || report.Command != "status" || report.Commit != s.ReleaseCommit || report.Digest != s.ReleaseSHA256 || report.Exit == nil || *report.Exit != 0 || report.Result != "converged" || len(report.Hosts) == 0 {
 		return errors.New("final full status candidate/schema/result mismatch")
 	}
+	pkg, err := acceptedPackage(c, s)
+	if err != nil {
+		return err
+	}
+	expected, err := packageComponents(c, pkg)
+	if err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, h := range report.Hosts {
 		if seen[h.Host] || h.Host == "" || h.Reachable == nil || !*h.Reachable || h.Observe == nil || !*h.Observe || h.Result != "converged" || h.Error != "" || len(h.Components) == 0 {
 			return fmt.Errorf("unresolved full status host %s", h.Host)
 		}
 		seen[h.Host] = true
+		inventory, ok := expected[h.Host]
+		if !ok {
+			return fmt.Errorf("full status unknown host %s", h.Host)
+		}
+		components := map[string]bool{}
 		for _, component := range h.Components {
-			if component.Name == "" || component.Error != "" || (component.State != "converged" && component.State != "ahead") {
+			if !inventory[component.Name] || components[component.Name] || component.Error != "" || component.State != "converged" {
 				return fmt.Errorf("unresolved configuration/drift %s/%s", h.Host, component.Name)
 			}
+			components[component.Name] = true
+		}
+		if len(components) != len(inventory) {
+			return fmt.Errorf("full status incomplete component inventory %s", h.Host)
 		}
 	}
 	for h := range c.Targets {

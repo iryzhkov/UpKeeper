@@ -114,7 +114,9 @@ func TestProductionInterruptedPrepareAndReachableFenceResume(t *testing.T) {
 }
 func TestProductionPartialPublicationReceiptSurvives(t *testing.T) {
 	b, f, c, s := backendFixture(t)
-	fencedFake(f)
+	if err := b.fence(context.Background(), c, s); err != nil {
+		t.Fatal(err)
+	}
 	if err := b.prepare(context.Background(), c, s); err != nil {
 		t.Fatal(err)
 	}

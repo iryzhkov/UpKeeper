@@ -12,6 +12,7 @@ func TestSupportedDrainingCatalogDriftReconcilesNamedWorkerBeforeDropin(t *testi
 	b, f, _, s := backendFixture(t)
 	c := rc122Fixture(t)
 	f.c = c
+	seedPublication(t, c, s)
 	for _, h := range rc122Order {
 		f.upgraded[h] = true
 	}

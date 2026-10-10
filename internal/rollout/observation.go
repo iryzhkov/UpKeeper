@@ -18,6 +18,9 @@ type ActivityReceipt struct {
 // ActivityCommand is a reviewed adapter for the coordinator's activity and
 // collection predicate. Missing, failed, partial or stale evidence refuses.
 func (b *ProductionBackend) observeTarget(ctx context.Context, c Config, host string, s *State) error {
+	if _, err := acceptedPackage(c, s); err != nil {
+		return err
+	}
 	if !contains(rc122Order, host) || len(c.ActivityCommand) == 0 {
 		return errors.New("host observation requires reviewed activity adapter")
 	}
@@ -82,7 +85,7 @@ func (b *ProductionBackend) observeTarget(ctx context.Context, c Config, host st
 		return err
 	}
 	var assets assetEvidence
-	if err = evidence(s, "assets", &assets); err != nil {
+	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
 	raw, err = b.on(ctx, c, host, snapshotScript)
