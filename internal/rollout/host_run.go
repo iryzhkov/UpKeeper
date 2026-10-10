@@ -478,7 +478,7 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 		if err != nil {
 			return err
 		}
-		if (authority.Operation == "dropin:"+host || authority.Operation == "enroll-worker:"+host) && (s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0) || authority.EnclosingAttempt == "enroll:"+host) {
+		if (host == "agent-a" || host == "agent-b") && (authority.Operation == "dropin:"+host || authority.Operation == "enroll-worker:"+host) && (s.InFlight == "dropin:"+host || s.InFlight == "dropin-restore:"+host || (s.Failed != "" && len(s.Extra["dropin:"+host]) > 0) || authority.EnclosingAttempt == "enroll:"+host) {
 			intent, done, err := readAttempt(c, attemptPath(c, "enroll:"+host), runtimeFor(b).Now())
 			if err != nil || intent.Action != "enroll:"+host || done {
 				return errors.New("D5 recovery requires unfinished matching enrollment intent")
@@ -535,10 +535,25 @@ func RecoverHost(ctx context.Context, c Config, b Backend, host string, yes bool
 		if err != nil {
 			return fmt.Errorf("recovery requires valid saved invocation intent: %w", err)
 		}
-		if complete && s.Failed == "" && s.InFlight == "" {
+		// A completed non-drop-in enrollment whose final append was lost has
+		// exact enclosing authority. Its named binary recovery still requires
+		// the acknowledged host run/observation and original snapshot; ordinary
+		// enrollment uncertainty cannot borrow a historical host's receipts.
+		finalEnrollment := host != "agent-a" && host != "agent-b" &&
+			contains(c.ActiveWorkers, host) && authority.Operation == "enroll-worker:"+host &&
+			authority.EnclosingAttempt == "enroll:"+host
+		if finalEnrollment {
+			if err := priorObservation(c, s, host, runtimeFor(b)); err != nil {
+				return err
+			}
+			if err := checkedOriginalHostSnapshot(s, host); err != nil {
+				return err
+			}
+		}
+		if complete && s.Failed == "" && s.InFlight == "" && !finalEnrollment {
 			return errors.New("completed host does not authorize uncertain-effect recovery")
 		}
-		if len(s.Extra["host-pre:"+host]) > 0 && (authority.Operation == "host:"+host || authority.Operation == "observe:"+host) {
+		if len(s.Extra["host-pre:"+host]) > 0 && (authority.Operation == "host:"+host || authority.Operation == "observe:"+host || finalEnrollment) {
 			return recoverHost(ctx, c, b, s, host, errors.New("operator requested host rollback recovery"))
 		}
 		if host == c.CoordinatorHost && authority.Operation == "config-patch" && len(s.Extra["config-intent"]) > 0 {

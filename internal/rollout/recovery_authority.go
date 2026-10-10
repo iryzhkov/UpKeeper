@@ -112,20 +112,8 @@ func unfinishedEnclosingAuthority(c Config, s *State, a *InvocationAuthority, ch
 		if err := decodeDiagnostic(s.Extra["observation:"+host], &receipt); err != nil {
 			return false, err
 		}
-		var pre map[string]string
-		if err := decodeDiagnostic(s.Extra["host-pre:"+host], &pre); err != nil {
+		if err := checkedOriginalHostSnapshot(s, host); err != nil {
 			return false, err
-		}
-		if !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(pre["binary_sha256"]) ||
-			strings.TrimSpace(pre["version"]) == "" || !(pre["arch"] == "x86_64" || pre["arch"] == "aarch64") ||
-			pre["t3code.service.MainPID"] == "" || pre["t3code.service.ExecMainStartTimestamp"] == "" {
-			return false, errors.New("unfinished enclosing run lacks original binary and process snapshot")
-		}
-		for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
-			if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" ||
-				pre[unit+".MainPID"] == "0" || pre[unit+".ExecMainStartTimestamp"] == "" {
-				return false, errors.New("unfinished enclosing run lacks original service generation")
-			}
 		}
 		var observed, post identity
 		if err := decodeDiagnostic(receipt.Identity, &observed); err != nil {
@@ -177,6 +165,25 @@ func unfinishedEnclosingAuthority(c Config, s *State, a *InvocationAuthority, ch
 		return false, errors.New("unfinished enclosing enrollment lacks original drop-in metadata")
 	}
 	return true, nil
+}
+
+func checkedOriginalHostSnapshot(s *State, host string) error {
+	var pre map[string]string
+	if err := decodeDiagnostic(s.Extra["host-pre:"+host], &pre); err != nil {
+		return err
+	}
+	if !regexp.MustCompile("^[0-9a-f]{64}$").MatchString(pre["binary_sha256"]) ||
+		strings.TrimSpace(pre["version"]) == "" || !(pre["arch"] == "x86_64" || pre["arch"] == "aarch64") ||
+		pre["t3code.service.MainPID"] == "" || pre["t3code.service.ExecMainStartTimestamp"] == "" {
+		return errors.New("named recovery lacks original binary and process snapshot")
+	}
+	for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
+		if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" ||
+			pre[unit+".MainPID"] == "0" || pre[unit+".ExecMainStartTimestamp"] == "" {
+			return errors.New("named recovery lacks original service generation")
+		}
+	}
+	return nil
 }
 
 func operationHost(c Config, action string) string {
