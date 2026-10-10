@@ -2297,11 +2297,7 @@
       "source": "https://github.com/iryzhkov/omarchy-setup.git"
     },
     "steward-fleet-configuration": {
-      "clients": {
-        "laptop": {
-          "admin_credential_ref": "secretref:f03-admin/laptop"
-        }
-      },
+      "clients": {},
       "coordinator": {
         "client_endpoint": {
           "address": "normandy-steward-admin",
@@ -2342,6 +2338,28 @@
           "profile": "standard",
           "transport": "ssh",
           "worker_id": "homelab"
+        },
+        "laptop": {
+          "admin_credential_ref": "secretref:f03-admin/laptop",
+          "credential_ref": "secretref:f02-protocol/laptop",
+          "exceptions": {
+            "executor_slots": 3,
+            "models": {
+              "claudeAgent": [
+                "*"
+              ],
+              "codex": [
+                "*"
+              ]
+            },
+            "provider_instances": [
+              "claudeAgent",
+              "codex"
+            ]
+          },
+          "profile": "standard",
+          "transport": "ssh",
+          "worker_id": "laptop"
         },
         "normandy": {
           "admin_credential_ref": "secretref:f03-admin/normandy",
@@ -2494,6 +2512,7 @@
             "agent-a",
             "agent-b",
             "homelab",
+            "laptop",
             "omarchy-pc"
           ],
           "repository": "git@github.com:iryzhkov/homelab-cli.git",
@@ -2522,6 +2541,7 @@
             "agent-a",
             "agent-b",
             "homelab",
+            "laptop",
             "omarchy-pc"
           ],
           "repository": "git@github.com:iryzhkov/omarchy-setup.git",
@@ -2588,6 +2608,7 @@
             "agent-a",
             "agent-b",
             "homelab",
+            "laptop",
             "omarchy-pc"
           ],
           "repository": "git@github.com:iryzhkov/t3-steward.git",
@@ -2599,6 +2620,7 @@
             "agent-a",
             "agent-b",
             "homelab",
+            "laptop",
             "omarchy-pc"
           ],
           "repository": "git@github.com:iryzhkov/UpKeeper.git",
@@ -2819,6 +2841,21 @@
           "schema_version": 1,
           "transport": "ssh",
           "worker_id": "homelab"
+        },
+        "laptop": {
+          "capabilities": [
+            "git",
+            "huyang"
+          ],
+          "coordinator_id": "normandy-coordinator",
+          "credential_ref": "secretref:f02-protocol/laptop",
+          "provider_routes": [
+            "claudeAgent",
+            "codex"
+          ],
+          "schema_version": 1,
+          "transport": "ssh",
+          "worker_id": "laptop"
         },
         "omarchy-pc": {
           "capabilities": [
