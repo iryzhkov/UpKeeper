@@ -41,6 +41,11 @@ func (b *ProductionBackend) fence(ctx context.Context, c Config, s *State) error
 	return b.setTimerFence(ctx, c, s)
 }
 func (b *ProductionBackend) createBackup(ctx context.Context, c Config, s *State) error {
+	if c.CoordinatorConfig != nil {
+		if err := b.configBefore(ctx, c); err != nil {
+			return err
+		}
+	}
 	if b.CoordinatorBackup == nil {
 		return b.backup(ctx, c, s)
 	}

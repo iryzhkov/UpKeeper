@@ -104,7 +104,7 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
-	policy, err := fleetPlanPolicy(c, document.RoutePolicyBytes())
+	policy, err := fleetPlanPolicy(c, document.RoutePolicyBytes(), client)
 	if err != nil {
 		return nil, err
 	}

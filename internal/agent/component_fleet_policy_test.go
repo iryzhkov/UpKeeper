@@ -14,12 +14,49 @@ import (
 	"github.com/iryzhkov/UpKeeper/internal/procx"
 )
 
+// The isolated catalog fixture uses a local socket. Production's intended SSH
+// endpoint is replaced only at this transport boundary, after checking that the
+// complete staged client was supplied. The real CLI still authorizes the policy.
+func policyFixtureRunner(t *testing.T) procx.Runner {
+	t.Helper()
+	return func(cmd procx.Command) procx.Result {
+		argv := append([]string(nil), cmd.Argv...)
+		for i := 0; i < len(argv); i++ {
+			if argv[i] != "--config" {
+				continue
+			}
+			if i+1 >= len(argv) {
+				t.Fatal("missing staged client configuration")
+			}
+			body, err := os.ReadFile(argv[i+1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				V2 struct {
+					Client map[string]any `json:"coordinator_client"`
+				} `json:"backlog_v2"`
+			}
+			if err := json.Unmarshal(body, &config); err != nil {
+				t.Fatal(err)
+			}
+			if config.V2.Client["credential"] == nil || config.V2.Client["coordinator_id"] == nil {
+				t.Fatal("staged client lost identity or secret reference")
+			}
+			argv = append(argv[:i], argv[i+2:]...)
+			break
+		}
+		cmd.Argv = argv
+		return procx.Run(cmd)
+	}
+}
+
 func policyContext(t *testing.T) (*Context, map[string]any) {
 	t.Helper()
 	policytest.RequireCLI(t)
 	policytest.Catalog(t, []string{"gpt-6.1-sol"})
 	c := fleetTestPrepare(t)
-	c.Runner, c.Env = procx.Run, os.Environ()
+	c.Runner, c.Env = policyFixtureRunner(t), os.Environ()
 	component := fleetTestComponent(t)
 	var policy map[string]any
 	if err := json.Unmarshal([]byte(policytest.Policy), &policy); err != nil {
@@ -158,7 +195,7 @@ func TestFleetPolicyStagedFailureRollsBackEveryProjection(t *testing.T) {
 				return procx.Result{Code: 1, Stderr: "staged candidate no longer catalog-authorized"}
 			}
 		}
-		return procx.Run(cmd)
+		return policyFixtureRunner(t)(cmd)
 	}
 	_, err := fleetProjection(c, component, fleetTestHost, "policy-stage-failure", false)
 	var rollback *RolledBack
@@ -253,7 +290,7 @@ func TestFleetPolicyCoordinatorActivationFailureRestoresLastGood(t *testing.T) {
 			}
 			c.Runner = func(cmd procx.Command) procx.Result {
 				if len(cmd.Argv) > 0 && cmd.Argv[0] == "t3-steward" {
-					return procx.Run(cmd)
+					return policyFixtureRunner(t)(cmd)
 				}
 				if outcome == "signal" && adapterTestMatches(cmd.Argv, "kill", "HUP") {
 					return procx.Result{Code: 1, Stderr: "fixture signal failed"}

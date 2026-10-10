@@ -7,4 +7,5 @@ toolchain go1.26.8
 require (
 	github.com/klauspost/compress v1.18.4
 	github.com/pelletier/go-toml/v2 v2.4.3
+	gopkg.in/yaml.v3 v3.0.1
 )

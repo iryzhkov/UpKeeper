@@ -52,12 +52,16 @@ func TestRolloutArgumentContract(t *testing.T) {
 		}
 	}
 	for _, action := range []string{"check", "plan", "run"} {
-		p, err := parse([]string{"rollout", action, "--config", "config.json"}, nil)
+		args := []string{"rollout", action, "--config", "config.json"}
+		if action == "run" {
+			args = append(args, "--host", "agent-b")
+		}
+		p, err := parse(args, nil)
 		if err != nil || p.rolloutAction != action {
 			t.Fatalf("%s: %v", action, err)
 		}
 	}
-	p, err := parse([]string{"rollout", "run", "--config", "config.json", "--yes"}, nil)
+	p, err := parse([]string{"rollout", "run", "--config", "config.json", "--yes", "--host", "agent-b"}, nil)
 	if err != nil || !p.rolloutYes {
 		t.Fatal(err)
 	}

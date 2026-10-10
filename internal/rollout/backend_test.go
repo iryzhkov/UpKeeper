@@ -160,7 +160,7 @@ func (f *backendFake) Run(ctx context.Context, dir, stdin, name string, args ...
 	if name == "bash" || name == "ssh" {
 		h := f.host(args)
 		switch {
-		case strings.Contains(stdin, "is-enabled t3-steward-worker"):
+		case strings.Contains(stdin, "show t3-steward-worker.service -p UnitFileState"):
 			return []byte(f.mask), nil
 		case stdin == timerScript:
 			active := "active"
@@ -526,7 +526,7 @@ func TestCriterion7StoppedBackupDrillAndFreshness(t *testing.T) {
 			}
 		})
 	}
-	for _, required := range []string{"stop t3-steward.service t3-steward-worker.service", "fuser", "wal_checkpoint(TRUNCATE)", "backlog backup verify", "backlog backup restore", "foreign_key_check", "integrity_check", "prod_inode", "T3_STEWARD_*", "trap '"} {
+	for _, required := range []string{"stop t3-steward.service t3-steward-worker.service", "cannot inspect live process", "st.st_dev, st.st_ino", "wal_checkpoint(TRUNCATE)", "backlog backup verify", "backlog backup restore", "foreign_key_check", "integrity_check", "prod_inode", "T3_STEWARD_*", "trap '"} {
 		if !strings.Contains(legacyBackupScript, required) {
 			t.Fatalf("missing stopped drill guard %s", required)
 		}

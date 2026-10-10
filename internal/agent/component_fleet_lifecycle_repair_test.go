@@ -26,7 +26,7 @@ func TestFleetPolicyValidatorDestinationDriftPreserved(t *testing.T) {
 			adapterTestWrite(t, outsidePolicy, string(external))
 			calls := 0
 			c.Runner = func(cmd procx.Command) procx.Result {
-				result := procx.Run(cmd)
+				result := policyFixtureRunner(t)(cmd)
 				if strings.Contains(strings.Join(cmd.Argv, " "), "policy validate") {
 					calls++
 					if calls == 2 {

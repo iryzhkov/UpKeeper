@@ -31,6 +31,7 @@ type arguments struct {
 	rolloutAction string
 	rolloutConfig string
 	rolloutYes    bool
+	rolloutHost   string
 	catalog       toolcatalog.Options
 	asJSON        bool
 

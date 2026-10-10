@@ -118,7 +118,53 @@ func fleetPolicyRunner(c *Context) procx.Runner {
 	}
 }
 
-func fleetPlanPolicy(c *Context, payload []byte) (*fleetDocument, error) {
+// fleetPolicyClientRunner validates using the declared client before that client
+// is installed. The private temporary file contains only the authored projection
+// and secret references; normal HOME/secret resolution and coordinator catalog
+// authorization remain in force. Each validation gets fresh immutable bytes.
+func fleetPolicyClientRunner(c *Context, client []byte) procx.Runner {
+	runner := fleetPolicyRunner(c)
+	if client == nil {
+		return runner
+	}
+	return func(command procx.Command) procx.Result {
+		if err := fleetCheckExplicitPolicyClient(c, client); err != nil {
+			return procx.Result{Code: -1, Err: err}
+		}
+		dir, err := os.MkdirTemp(c.Home, ".upkeeper-policy-client-")
+		if err != nil {
+			return procx.Result{Code: -1, Err: err}
+		}
+		defer os.RemoveAll(dir)
+		projection, err := canonjson.DecodeObject(client)
+		if err != nil {
+			return procx.Result{Code: -1, Err: err}
+		}
+		delete(projection, "schema_version")
+		projection["credential"] = projection["credential_ref"]
+		delete(projection, "credential_ref")
+		config, err := canonjson.MarshalFile(map[string]any{
+			"backlog_v2": map[string]any{"coordinator_client": projection},
+		})
+		if err != nil {
+			return procx.Result{Code: -1, Err: err}
+		}
+		path := filepath.Join(dir, "config.yaml")
+		if err := fsatomic.WritePrivateFile(path, config); err != nil {
+			return procx.Result{Code: -1, Err: err}
+		}
+		command.Argv = append(append([]string(nil), command.Argv...), "--config", path)
+		result := runner(command)
+		if result.OK() {
+			if err := fleetCheckExplicitPolicyClient(c, client); err != nil {
+				return procx.Result{Code: -1, Err: err}
+			}
+		}
+		return result
+	}
+}
+
+func fleetPlanPolicy(c *Context, payload []byte, intendedClient ...[]byte) (*fleetDocument, error) {
 	receipt, err := fleetReadPolicyReceipt(c)
 	if err != nil {
 		return nil, err
@@ -149,11 +195,16 @@ func fleetPlanPolicy(c *Context, payload []byte) (*fleetDocument, error) {
 		planned.restorePolicy = true
 	} else {
 		// Preflight configured authorization before retention, ownership or live writes.
-		if err := fleet.CheckRoutePolicy(payload, fleetPolicyRunner(c), true); err != nil {
+		var client []byte
+		if len(intendedClient) > 0 {
+			client = intendedClient[0]
+		}
+		runner := fleetPolicyClientRunner(c, client)
+		if err := fleet.CheckRoutePolicy(payload, runner, true); err != nil {
 			return nil, err
 		}
 		planned.validatePolicy = func(path string) error {
-			return fleet.CheckRoutePolicyFile(path, fleetPolicyRunner(c), true)
+			return fleet.CheckRoutePolicyFile(path, runner, true)
 		}
 	}
 	planned.changed = !bytes.Equal(current, planned.payload) || (current == nil) != (planned.payload == nil)

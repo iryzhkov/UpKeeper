@@ -332,16 +332,18 @@ func archiveBinary(p []byte) ([]byte, error) {
 	return binary, nil
 }
 
-const timerScript = `systemctl --user show upkeeper-self.timer -p ActiveState -p UnitFileState
-printf 'SelfServiceActive=%s\n' "$(systemctl --user is-active upkeeper-self.service || true)"
-printf 'ControllerTimer=%s\n' "$(systemctl --user is-active upkeeper-pull.timer || true)"
+const timerScript = `set -euo pipefail
+props=$(systemctl --user show upkeeper-self.timer -p ActiveState -p UnitFileState)
+self=$(systemctl --user show upkeeper-self.service -p ActiveState --value)
+controller=$(systemctl --user show upkeeper-pull.timer -p ActiveState --value)
+printf '%s\nSelfServiceActive=%s\nControllerTimer=%s\n' "$props" "$self" "$controller"
 `
 
 func (b *ProductionBackend) laptop(ctx context.Context, c Config) (bool, error) {
 	if c.LaptopHost == "" {
 		return false, nil
 	}
-	p, err := b.on(ctx, c, c.LaptopHost, "systemctl --user is-enabled t3-steward-worker.service 2>&1 || true")
+	p, err := b.on(ctx, c, c.LaptopHost, "set -eu; state=$(systemctl --user show t3-steward-worker.service -p UnitFileState --value); printf '%s\\n' \"$state\"")
 	if err != nil {
 		// Only a transport exit 255 proves this optional host is unreachable.
 		var exit *exec.ExitError
@@ -380,8 +382,15 @@ func (b *ProductionBackend) timerCheck(ctx context.Context, c Config, fenced boo
 		if kv["ControllerTimer"] == "active" {
 			return fmt.Errorf("%s has controller pull timer", h)
 		}
-		if kv["ActiveState"] == "" {
-			return fmt.Errorf("%s timer state unavailable", h)
+		if (kv["ActiveState"] != "active" && kv["ActiveState"] != "inactive") ||
+			(kv["SelfServiceActive"] != "inactive" && kv["SelfServiceActive"] != "failed") ||
+			(kv["ControllerTimer"] != "inactive" && kv["ControllerTimer"] != "failed") {
+			return fmt.Errorf("%s timer or service state unsafe or unavailable", h)
+		}
+		switch kv["UnitFileState"] {
+		case "enabled", "enabled-runtime", "disabled", "masked", "masked-runtime", "static":
+		default:
+			return fmt.Errorf("%s timer unit-file state unavailable", h)
 		}
 		if fenced && kv["ActiveState"] != "inactive" {
 			return fmt.Errorf("%s timer rearmed", h)
@@ -690,18 +699,20 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 		return err
 	}
 	full, fullErr := b.command(ctx, c, "", "upkeeper", "pull", "--all", "--skip-unreachable", "--dry-run", "--json")
+	if fullErr != nil {
+		return fullErr
+	}
 	var fp preview
 	if err = json.Unmarshal(full, &fp); err != nil || len(fp.Hosts) == 0 {
 		return errors.New("full preview unavailable")
 	}
-	if fullErr != nil {
-		var exit *exec.ExitError
-		if !errors.As(fullErr, &exit) || exit.ExitCode() != 40 {
-			return fullErr
-		}
-	}
 	if err = record(s, "preview-full", json.RawMessage(full)); err != nil {
 		return err
+	}
+	if c.CoordinatorConfig != nil {
+		if err = fullPreviewDisposition(fp, c); err != nil {
+			return err
+		}
 	}
 	scopedArgs := append([]string{"pull", "--hosts", c.Canary}, c.FleetOrder...)
 	scopedArgs = append(scopedArgs, "--components", "t3-steward", "--dry-run", "--json")
@@ -737,7 +748,7 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 		return err
 	}
 	if err = record(s, "rc118-findings", map[string]string{
-		"B1": "avoided by t3-steward-only pull; full steward-fleet-configuration refusal remains open",
+		"B1": "rc122 refuses any full-preview configuration failure; no historical exception",
 		"B2": "binary replacement gated; mise and catalog effects excluded by scoped pull and fences; live campaign continuity remains open",
 		"B3": "laptop excluded, worker mask enforced, reachable laptop self timer fenced; exception unchanged",
 		"B4": "self timers stopped with recorded prior state; release remains disabled pending separate full-effect review",
@@ -852,17 +863,26 @@ func (b *ProductionBackend) publish(ctx context.Context, c Config, s *State) err
 	return nil
 }
 
-const snapshotScript = `set -eu
+const snapshotScript = `set -euo pipefail
 b="$HOME/.local/bin/t3-steward"
-printf 'arch=%s\n' "$(uname -m)"
-printf 'version=%s\n' "$("$b" version)"
-printf 'binary_sha256=%s\n' "$(sha256sum "$(readlink -f "$b")" | cut -d" " -f1)"
+arch=$(uname -m)
+version=$("$b" version)
+real=$(readlink -f "$b")
+sum=$(sha256sum "$real")
+printf 'arch=%s\nversion=%s\nbinary_sha256=%s\n' "$arch" "$version" "${sum%% *}"
 for u in t3-steward.service t3-steward-worker.service t3code.service; do
  for p in ActiveState MainPID ExecMainStartTimestamp NRestarts; do
-  printf '%s.%s=%s\n' "$u" "$p" "$(systemctl --user show "$u" -p "$p" --value)"
+  value=$(systemctl --user show "$u" -p "$p" --value)
+  [ -n "$value" ] || { echo "missing $u $p" >&2; exit 1; }
+  printf '%s.%s=%s\n' "$u" "$p" "$value"
  done
  pid=$(systemctl --user show "$u" -p MainPID --value)
- if [ -n "$pid" ] && [ "$pid" != 0 ]; then printf '%s.exe=%s\n' "$u" "$(readlink "/proc/$pid/exe")"; fi
+ case "$pid" in "" | *[!0-9]*) echo "invalid $u MainPID" >&2; exit 1 ;; esac
+ if [ "$pid" != 0 ]; then
+  exe=$(readlink "/proc/$pid/exe")
+  [ -n "$exe" ] || exit 1
+  printf '%s.exe=%s\n' "$u" "$exe"
+ fi
 done
 `
 
@@ -1120,6 +1140,54 @@ func (b *ProductionBackend) releaseCI(ctx context.Context, c Config, s *State) e
 	return b.green(ctx, c, c.UpKeeperRepo, s.ReleaseCommit)
 }
 
+const databaseHolderScript = `python3 - "$db" <<'PY'
+import os, sys
+uid, holders = os.getuid(), []
+targets = set()
+for path in (sys.argv[1], sys.argv[1] + "-wal", sys.argv[1] + "-shm"):
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        if path == sys.argv[1]:
+            sys.exit("no database identity available")
+        continue  # Only an absent sidecar is optional.
+    if st.st_uid != uid:
+        sys.exit(f"database ownership outside user-service boundary: {path}")
+    targets.add((st.st_dev, st.st_ino))
+if not targets:
+    sys.exit("no database identity available")
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    proc = f"/proc/{pid}"
+    try:
+        if int(pid) == os.getpid():
+            continue
+        # /proc directory ownership can change for non-dumpable processes. Use the
+        # kernel credential record, including real/effective/saved/filesystem uid.
+        with open(proc + "/status") as status:
+            rows = [line.split()[1:] for line in status if line.startswith("Uid:")]
+        if len(rows) != 1 or len(rows[0]) != 4:
+            sys.exit(f"cannot establish ownership of process {pid}")
+        if uid not in map(int, rows[0]):
+            continue
+        # Follow each fd to its inode: hard links and unlinked open files count too.
+        # A vanished unrelated fd must never discard the rest of a live PID's evidence.
+        for fd in os.listdir(proc + "/fd"):
+            st = os.stat(proc + "/fd/" + fd)
+            if (st.st_dev, st.st_ino) in targets:
+                holders.append(pid)
+    except FileNotFoundError:
+        try:
+            os.stat(proc)
+        except FileNotFoundError:
+            continue  # Only a confirmed exited process is absent.
+        sys.exit(f"cannot inspect live process {pid}: descriptor disappeared")
+    except OSError as exc:
+        sys.exit(f"cannot inspect process {pid}: {exc}")
+if holders:
+    sys.exit(f"state.db held by {holders}")
+PY
+`
+
 const legacyBackupScript = `set -euo pipefail
 cd "$HOME"
 snap="$HOME/$1" scratch="$HOME/$2"
@@ -1129,10 +1197,17 @@ mkdir -p "$(dirname "$snap")"
 chmod 700 "$(dirname "$snap")"
 trap 'systemctl --user start t3-steward.service t3-steward-worker.service' EXIT
 systemctl --user stop t3-steward.service t3-steward-worker.service
-for _ in $(seq 1 60); do systemctl --user is-active --quiet t3-steward.service || break; sleep 1; done
-if systemctl --user is-active --quiet t3-steward.service; then echo "coordinator did not stop"; exit 1; fi
+stopped=0
+for _ in {1..60}; do
+ c=$(systemctl --user show t3-steward.service -p ActiveState --value)
+ w=$(systemctl --user show t3-steward-worker.service -p ActiveState --value)
+ case "$c:$w" in inactive:inactive | inactive:failed | failed:inactive | failed:failed) stopped=1; break ;; esac
+ case "$c:$w" in *unknown* | *not-found* | :* | *:) echo "unit state unavailable" >&2; exit 1 ;; esac
+ sleep 1
+done
+[ "$stopped" = 1 ] || { echo "coordinator or worker did not stop" >&2; exit 1; }
 db="$HOME/.local/state/t3-steward/state.db"
-if fuser "$db" >/dev/null 2>&1; then echo "state.db still open after stop"; systemctl --user start t3-steward.service t3-steward-worker.service; exit 1; fi
+` + databaseHolderScript + `
 python3 - "$db" <<'PY' || { systemctl --user start t3-steward.service t3-steward-worker.service; echo "WAL checkpoint failed"; exit 1; }
 import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
@@ -1147,7 +1222,8 @@ rc=0
 { "$b" backlog backup create "$snap" >"$snap.create.json" && "$b" backlog backup verify "$snap" >"$snap.verify.json"; } || rc=$?
 systemctl --user start t3-steward.service t3-steward-worker.service
 [ "$rc" -eq 0 ] || { echo "backup create/verify failed with $rc"; exit "$rc"; }
-echo "snapshot ok: $(sha256sum "$snap.create.json" | cut -d' ' -f1) manifest"
+sum=$(sha256sum "$snap.create.json")
+printf 'snapshot ok: %s manifest\n' "${sum%% *}"
 # Scratch restore drill. The configuration loader always applies the UpKeeper-owned fleet
 # projection in $HOME/.config/t3-steward/coordinator-fleet.json, whatever --config names, and
 # refuses one whose coordinator id differs from the file's ("coordinator fleet projection
@@ -1469,12 +1545,42 @@ func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string
 		return b.releaseCI(ctx, c, s)
 	case "backup":
 		return b.createBackup(ctx, c, s)
+	case "config-patch":
+		return b.configPatch(ctx, c, s)
+	case "config-restore":
+		return b.configRestore(ctx, c, s)
 	case "enroll":
 		return b.enroll(ctx, c, s)
 	case "verify":
 		return b.verify(ctx, c, s)
 	case "canary-observe":
 		return b.observe(ctx, c, s)
+	}
+	if strings.HasPrefix(action, "observe:") {
+		return b.observeTarget(ctx, c, strings.TrimPrefix(action, "observe:"), s)
+	}
+	if strings.HasPrefix(action, "dropin:") {
+		return b.dropinRepair(ctx, c, strings.TrimPrefix(action, "dropin:"), s)
+	}
+	if strings.HasPrefix(action, "enroll-worker:") {
+		worker := strings.TrimPrefix(action, "enroll-worker:")
+		if !contains(c.ActiveWorkers, worker) {
+			return errors.New("enrollment outside active worker scope")
+		}
+		if worker == "agent-a" || worker == "agent-b" {
+			id, err := b.identity(ctx, c)
+			if err != nil {
+				return err
+			}
+			if id.Health != "healthy" {
+				return errors.New("coordinator unhealthy before advertisement")
+			}
+			if err := b.haikuAdvertisement(ctx, c, worker, id.Epoch.String()); err != nil {
+				return err
+			}
+		}
+		c.ActiveWorkers = []string{worker}
+		return b.enroll(ctx, c, s)
 	}
 	if strings.HasPrefix(action, "host:") {
 		return b.host(ctx, c, strings.TrimPrefix(action, "host:"), s)
@@ -1483,6 +1589,11 @@ func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string
 		host := strings.TrimPrefix(action, "rollback:")
 		if !contains(append([]string{c.Canary}, c.FleetOrder...), host) {
 			return errors.New("rollback outside rollout scope")
+		}
+		if host == c.CoordinatorHost && c.CoordinatorConfig != nil {
+			if err := b.configRestore(ctx, c, s); err != nil {
+				return fmt.Errorf("restore configuration before binary rollback: %w", err)
+			}
 		}
 		p, err := b.command(ctx, c, "", "upkeeper", "rollback", "--to", c.PreviousRelease, "--hosts", host, "--components", "t3-steward", "--json")
 		if err != nil {
