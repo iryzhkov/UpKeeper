@@ -8,6 +8,10 @@ release tags (`v0.1.x`).
 
 ### Added
 
+- Optional worker host `route_policy: false` omits the Steward route-policy
+  projection and catalog validation, releasing existing policy ownership safely.
+  Agent-a and agent-b opt out; coordinator and client policy behavior is unchanged.
+
 - Operator holds. `upkeeper hold set --hosts HOST... --reason TEXT [--until TIME]`
   fences hosts before a release, and `hold clear --hosts HOST... --reason TEXT`
   releases them. A hold is recorded in

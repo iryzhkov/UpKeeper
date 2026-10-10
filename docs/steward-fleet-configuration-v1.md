@@ -262,8 +262,16 @@ duplicate names/routes/keys, missing effort, max effort, contradictory constrain
 and policies exceeding 1 MiB refuse. The release JSON loader rejects duplicate
 keys before conversion to maps can discard evidence of them.
 
-Every declared worker, client-only host and coordinator receives a standalone
-`~/.config/t3-steward/route-policy.yaml`, mode 0644. UpKeeper does not merge
+By default, every declared worker, client-only host and coordinator receives a
+standalone `~/.config/t3-steward/route-policy.yaml`, mode 0644. A worker host may
+set the optional boolean `hosts.HOST.route_policy` to `false` to omit this
+projection and its configured-catalog validation. Omission or `true` preserves
+the default. Coordinators cannot opt out; client entries do not accept this host
+field. Workers receive concrete routes and do not read the policy. An opt-out
+releases any existing policy ownership receipt through the normal retirement
+path, restoring the pre-ownership bytes or removing the owned file. Without a
+receipt, it leaves any unmanaged file untouched. Observe and apply use the same
+decision. UpKeeper does not merge
 policy into steward's config or client JSON. Rendering is canonical JSON
 (a YAML subset), with sorted object keys, two-space indentation and a final
 newline; list order, exact route pins, effort, tiers and constraints are preserved.

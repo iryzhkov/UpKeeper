@@ -104,7 +104,12 @@ func fleetProjection(
 	if err != nil {
 		return nil, err
 	}
-	policy, err := fleetPlanPolicy(c, document.RoutePolicyBytes(), client)
+	policyPayload := document.RoutePolicyBytes()
+	if workerDeclared && !document.Hosts[host].RoutePolicy {
+		// A nil desired policy uses the existing ownership-release path.
+		policyPayload = nil
+	}
+	policy, err := fleetPlanPolicy(c, policyPayload, client)
 	if err != nil {
 		return nil, err
 	}

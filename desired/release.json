@@ -2320,6 +2320,7 @@
             "executor_slots": 6
           },
           "profile": "standard",
+          "route_policy": false,
           "transport": "ssh",
           "worker_id": "agent-a"
         },
@@ -2331,6 +2332,7 @@
             "executor_slots": 1
           },
           "profile": "standard",
+          "route_policy": false,
           "transport": "ssh",
           "worker_id": "agent-b"
         },

@@ -219,6 +219,8 @@ type Host struct {
 	Transport          string
 	CredentialRef      string
 	AdminCredentialRef string
+	// RoutePolicy defaults to true; worker-only hosts may opt out.
+	RoutePolicy bool
 	// Exceptions override profile keys for this host alone. They are explicit
 	// on purpose: an exception that has to be written down is an exception
 	// somebody reviewed.
@@ -631,7 +633,7 @@ func (d *Document) parseHosts(value any) error {
 		if !namePattern.MatchString(name) || !isObject {
 			return failure.Value("invalid fleet host")
 		}
-		missing, unknown := checkKeys(entry, HostFields, []string{"exceptions"})
+		missing, unknown := checkKeys(entry, HostFields, []string{"exceptions", "route_policy"})
 		if missing != "" || unknown != "" {
 			return fieldError("fleet host "+name, missing, unknown)
 		}
@@ -698,6 +700,17 @@ func (d *Document) parseHostBody(name string, entry map[string]any) (Host, error
 		return Host{}, failure.Value(
 			"fleet worker needs its own opaque f03-admin secret reference")
 	}
+	routePolicy := true
+	if value, present := entry["route_policy"]; present {
+		var ok bool
+		routePolicy, ok = value.(bool)
+		if !ok {
+			return Host{}, failure.Value("fleet host %s route_policy must be a boolean", name)
+		}
+		if !routePolicy && name == d.Coordinator.Host {
+			return Host{}, failure.Value("fleet coordinator host %s cannot set route_policy to false", name)
+		}
+	}
 	exceptions, err := d.parseExceptions(name, profile, entry["exceptions"])
 	if err != nil {
 		return Host{}, err
@@ -709,6 +722,7 @@ func (d *Document) parseHostBody(name string, entry map[string]any) (Host, error
 		Transport:          "ssh",
 		CredentialRef:      WorkerSecretPrefix + name,
 		AdminCredentialRef: AdminSecretPrefix + name,
+		RoutePolicy:        routePolicy,
 		Exceptions:         exceptions,
 	}, nil
 }
