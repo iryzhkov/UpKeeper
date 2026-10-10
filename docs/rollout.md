@@ -55,8 +55,28 @@ Targets, Remotes, TimerHosts, DrainedHosts, ActiveWorkers, QuietCommand, backup
 age (1..3600 seconds), readiness (60..180 seconds), SoakSeconds (>=1800),
 ReviewFile and FleetApproval fields. The fixed rollout order is agent-b,
 normandy, homelab, agent-a, omarchy-pc, with normandy coordinator and omarchy-pc
-last. The laptop is excluded from this Steward walk and enrollment, but is
-required in full parent release preview/disposition and must remain masked.
+last. The laptop stays outside this Steward walk and enrollment. For a standard
+worker, set `LaptopHost: ""`, retain `laptop` in Targets and TimerHosts, and keep
+it out of FleetOrder and ActiveWorkers. Converge and enroll it separately before
+verify. Check and verify then require its reachable fenced timer, and the full
+preview/disposition and final status still require its applicable components.
+A nonempty LaptopHost retains the excluded-host mask requirement.
+
+`InactiveServices` is an optional reviewed map, for example
+`{"homelab":["t3-steward.service"]}`. Only the two Steward units on walk hosts
+may be listed. Each listed unit must be inactive with MainPID zero before the
+pull. The installer may start it during the binary update; rollout explicitly
+stops it after the pull and requires an inactive post snapshot, while verifying
+the installed binary version and digest. All unlisted units retain active and
+new-generation checks. This disposition is bound by the configuration digest.
+
+Preview inventories use the pull/status planner selection, including the
+release-declared T3 compatibility pair. The scoped preview requires Steward
+updated and its selected compatibility component converged with no actions.
+The full preview requires every planner-selected component on each host;
+host-specific adapters retain skipped rows for inapplicable components. The
+UpKeeper binary pin is outside that planner inventory and is handled by
+self-pull, so it is not a required preview row.
 
 Additional required rc122 inputs:
 
@@ -170,7 +190,8 @@ refuse. This conservative implementation requires converged full status; legitim
 nonconfiguration drift requires a separately reviewed disposition before this gate can
 be widened, never a host-level failure expectation or laptop exclusion.
 
-Timers, schedules, operational holds and laptop mask retain their fences.
+Timers, schedules and operational holds retain their fences. A configured
+excluded LaptopHost retains its mask fence.
 Timer release requires a separate full parent release disposition. Tests use
 temporary HOME/state, injected clock and transport; they prove no deployment,
 backup freshness on the real coordinator, or real elapsed soak.

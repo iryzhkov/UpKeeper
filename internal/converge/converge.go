@@ -385,6 +385,13 @@ func dispatchWithLock(
 // The T3 pair is selected together: installing a steward without the T3 it was
 // tested against, or the reverse, is exactly the transition the pair exists to
 // prevent.
+// SelectComponents is the planner inventory used by pull and status for each host.
+// Host-specific adapters report inapplicable components as skipped rather than
+// removing them. The UpKeeper program pin is outside this inventory.
+func SelectComponents(value release.Release, requested []string) ([]string, error) {
+	return selectComponents(value, requested)
+}
+
 func selectComponents(value release.Release, requested []string) ([]string, error) {
 	components := value.Components()
 	wanted := map[string]bool{}

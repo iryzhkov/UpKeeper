@@ -155,6 +155,9 @@ func (f *backendFake) preview(full bool) []byte {
 			state = "failed"
 		}
 		components := []any{map[string]any{"name": "t3-steward", "state": state, "actions": []string{"install " + f.c.Version}}}
+		if !full {
+			components = append(components, map[string]any{"name": "t3", "state": "converged", "actions": []string{}})
+		}
 		if full || f.scopeFault == "extra" {
 			components = append(components, map[string]any{"name": "agent-tooling", "state": "converged", "actions": []string{"mise upgrade --yes --no-prune"}})
 		}

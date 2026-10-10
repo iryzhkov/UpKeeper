@@ -49,6 +49,7 @@ type Config struct {
 	ActivityCommand     []string
 	HaikuCheckCommand   []string
 	AcceptedEffects     []AcceptedEffect
+	InactiveServices    map[string][]string
 }
 
 type State struct {
@@ -139,6 +140,18 @@ func (c Config) Validate() error {
 	}
 	if !contains(c.ActiveWorkers, c.Canary) {
 		return errors.New("canary must be an active worker")
+	}
+	for host, units := range c.InactiveServices {
+		if !seen[host] || len(units) == 0 {
+			return fmt.Errorf("inactive services host %q outside walk or empty", host)
+		}
+		unique := map[string]bool{}
+		for _, unit := range units {
+			if (unit != "t3-steward.service" && unit != "t3-steward-worker.service") || unique[unit] {
+				return fmt.Errorf("invalid/duplicate inactive service %s/%s", host, unit)
+			}
+			unique[unit] = true
+		}
 	}
 	if len(c.QuietCommand) == 0 {
 		return errors.New("a coordinator quiet predicate is required")

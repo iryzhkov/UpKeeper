@@ -8,6 +8,9 @@ import (
 	"os"
 	"reflect"
 	"strings"
+
+	"github.com/iryzhkov/UpKeeper/internal/converge"
+	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
 // reviewedPackage contains only preparation evidence. Runtime receipts never
@@ -133,15 +136,23 @@ func fullPreviewBinding(p preview, head, release string) error {
 	return nil
 }
 
-// The release declares the component universe; the reviewed full preview binds
-// that complete universe to each intended host, including self-managed laptop.
+// Use the same planner as pull/status for each host. Adapters retain skipped
+// rows for components that do not apply; the program pin is not agent-managed.
 func packageComponents(c Config, pkg *reviewedPackage) (map[string]map[string]bool, error) {
-	var release struct{ Components map[string]json.RawMessage }
-	if err := decodeDiagnostic(pkg.Evidence["release-after"], &release); err != nil {
+	var value release.Release
+	if err := decodeDiagnostic(pkg.Evidence["release-after"], &value.Manifest); err != nil {
 		return nil, err
 	}
-	if len(release.Components) == 0 {
+	selected, err := converge.SelectComponents(value, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(selected) == 0 {
 		return nil, errors.New("reviewed release component inventory absent")
+	}
+	applicable := map[string]bool{}
+	for _, name := range selected {
+		applicable[name] = true
 	}
 	var fp preview
 	if err := decodeDiagnostic(pkg.Evidence["preview-full"], &fp); err != nil {
@@ -167,12 +178,12 @@ func packageComponents(c Config, pkg *reviewedPackage) (map[string]map[string]bo
 		}
 		names := map[string]bool{}
 		for _, component := range h.Components {
-			if _, ok := release.Components[component.Name]; !ok || component.Name == "" || names[component.Name] {
+			if !applicable[component.Name] || component.Name == "" || names[component.Name] {
 				return nil, fmt.Errorf("reviewed full preview unknown/duplicate component %s/%s", host, component.Name)
 			}
 			names[component.Name] = true
 		}
-		if len(names) != len(release.Components) {
+		if len(names) != len(applicable) {
 			return nil, fmt.Errorf("reviewed full preview incomplete components %s", host)
 		}
 		expected[host] = names

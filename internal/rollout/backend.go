@@ -19,6 +19,9 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/iryzhkov/UpKeeper/internal/converge"
+	"github.com/iryzhkov/UpKeeper/internal/release"
 )
 
 // CommandRunner keeps all host, GitHub, git and Steward effects fakeable.
@@ -564,7 +567,22 @@ type preview struct {
 	}
 }
 
-func scopedPreview(p []byte, c Config) error {
+func scopedPreview(p []byte, c Config, manifest []byte) error {
+	var value release.Release
+	if err := json.Unmarshal(manifest, &value.Manifest); err != nil {
+		return err
+	}
+	selected, err := converge.SelectComponents(value, []string{"t3-steward"})
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{}
+	for _, name := range selected {
+		allowed[name] = true
+	}
+	if !allowed["t3-steward"] {
+		return errors.New("scoped release missing t3-steward")
+	}
 	var v preview
 	if err := json.Unmarshal(p, &v); err != nil {
 		return err
@@ -576,16 +594,26 @@ func scopedPreview(p []byte, c Config) error {
 		if name == "" {
 			name = h.Name
 		}
-		if !contains(targets, name) || seen[name] {
+		if (h.Host != "" && h.Name != "" && h.Host != h.Name) || !contains(targets, name) || seen[name] {
 			return errors.New("scoped preview host scope differs")
 		}
 		seen[name] = true
-		if len(h.Components) != 1 {
-			return errors.New("scoped preview changed component scope")
+		components := map[string]bool{}
+		for _, x := range h.Components {
+			if !allowed[x.Name] || components[x.Name] {
+				return errors.New("scoped preview changed component scope")
+			}
+			components[x.Name] = true
+			want := "converged"
+			if x.Name == "t3-steward" {
+				want = "updated"
+			}
+			if x.State != want || x.ErrorClass != "" || (x.Name == "t3-steward" && !strings.Contains(strings.Join(x.Actions, " "), c.Version)) || (x.Name != "t3-steward" && len(x.Actions) != 0) {
+				return fmt.Errorf("%s scoped preview failed", name)
+			}
 		}
-		x := h.Components[0]
-		if x.Name != "t3-steward" || x.State != "updated" || x.ErrorClass != "" || !strings.Contains(strings.Join(x.Actions, " "), c.Version) {
-			return fmt.Errorf("%s scoped preview failed", name)
+		if len(components) != len(allowed) {
+			return errors.New("scoped preview missing component")
 		}
 	}
 	if len(seen) != len(targets) {
@@ -732,7 +760,7 @@ func (b *ProductionBackend) prepare(ctx context.Context, c Config, s *State) err
 	if err != nil {
 		return err
 	}
-	if err = scopedPreview(p, c); err != nil {
+	if err = scopedPreview(p, c, after); err != nil {
 		return err
 	}
 	if err = record(s, "preview-scoped", json.RawMessage(p)); err != nil {
@@ -881,13 +909,39 @@ for u in t3-steward.service t3-steward-worker.service t3code.service; do
 done
 `
 
-func snapshotGate(pre, post map[string]string, version string, assets map[string]string) error {
+func servicePreflight(pre map[string]string, inactive []string) error {
+	for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
+		if contains(inactive, unit) {
+			if pre[unit+".ActiveState"] != "inactive" || pre[unit+".MainPID"] != "0" {
+				return fmt.Errorf("%s must be inactive before convergence", unit)
+			}
+		} else if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" || pre[unit+".MainPID"] == "0" {
+			return fmt.Errorf("%s must be active before convergence", unit)
+		}
+	}
+	return nil
+}
+
+func snapshotGate(pre, post map[string]string, version string, assets map[string]string, inactiveLists ...[]string) error {
+	var inactive []string
+	if len(inactiveLists) > 0 {
+		inactive = inactiveLists[0]
+	}
+	if err := servicePreflight(pre, inactive); err != nil {
+		return err
+	}
 	platform := map[string]string{"x86_64": "linux_amd64", "aarch64": "linux_arm64"}[post["arch"]]
 	want := assets[platform]
 	if want == "" || post["binary_sha256"] != want || !strings.Contains(post["version"], version) {
 		return errors.New("installed binary version/digest mismatch")
 	}
 	for _, u := range []string{"t3-steward.service", "t3-steward-worker.service"} {
+		if contains(inactive, u) {
+			if post[u+".ActiveState"] != "inactive" || post[u+".MainPID"] != "0" {
+				return fmt.Errorf("%s must remain inactive after convergence", u)
+			}
+			continue
+		}
 		if post[u+".ActiveState"] != "active" || post[u+".MainPID"] == "" || post[u+".MainPID"] == "0" || pre[u+".MainPID"] == post[u+".MainPID"] || post[u+".exe"] == "" || strings.Contains(post[u+".exe"], "deleted") {
 			return fmt.Errorf("%s not a new active binary generation", u)
 		}
@@ -1029,10 +1083,8 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 		return err
 	}
 	pre := keyValues(raw)
-	for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
-		if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" || pre[unit+".MainPID"] == "0" {
-			return fmt.Errorf("%s must be active before convergence", unit)
-		}
+	if err = servicePreflight(pre, c.InactiveServices[host]); err != nil {
+		return err
 	}
 	if pre["t3code.service.MainPID"] == "" {
 		return errors.New("missing pre-convergence t3code generation")
@@ -1059,6 +1111,13 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = record(s, "pull:"+host, json.RawMessage(p)); err != nil {
 		return err
 	}
+	// The binary adapter restarts installed units. Restore the reviewed stopped
+	// disposition before taking the post snapshot; no unlisted unit is stopped.
+	if units := c.InactiveServices[host]; len(units) > 0 {
+		if _, err = b.on(ctx, c, host, "set -euo pipefail\nsystemctl --user stop "+strings.Join(quoted(units), " ")+"\n"); err != nil {
+			return err
+		}
+	}
 	raw, err = b.on(ctx, c, host, snapshotScript)
 	if err != nil {
 		return err
@@ -1068,7 +1127,7 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
-	if err = snapshotGate(pre, post, c.Version, assets.Binaries); err != nil {
+	if err = snapshotGate(pre, post, c.Version, assets.Binaries, c.InactiveServices[host]); err != nil {
 		return err
 	}
 	if err = record(s, "host-post:"+host, post); err != nil {
@@ -1499,7 +1558,7 @@ func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) erro
 		if err != nil {
 			return err
 		}
-		if err = snapshotGate(pre, keyValues(p), c.Version, assets.Binaries); err != nil {
+		if err = snapshotGate(pre, keyValues(p), c.Version, assets.Binaries, c.InactiveServices[h]); err != nil {
 			return err
 		}
 	}
@@ -1563,7 +1622,7 @@ func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) err
 	if err != nil {
 		return err
 	}
-	return snapshotGate(pre, keyValues(p), c.Version, assets.Binaries)
+	return snapshotGate(pre, keyValues(p), c.Version, assets.Binaries, c.InactiveServices[c.Canary])
 }
 func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string, s *State) error {
 	if action != "fence" && action != "prepare" {
