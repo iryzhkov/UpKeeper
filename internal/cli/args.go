@@ -27,9 +27,12 @@ func usagef(format string, arguments ...any) *usageError {
 
 // arguments is the parsed command line.
 type arguments struct {
-	command string
-	catalog toolcatalog.Options
-	asJSON  bool
+	command       string
+	rolloutAction string
+	rolloutConfig string
+	rolloutYes    bool
+	catalog       toolcatalog.Options
+	asJSON        bool
 
 	// doctor and status
 	limit        *string
@@ -129,7 +132,7 @@ type arguments struct {
 var Commands = []string{
 	"doctor", "status", "push", "pull", "rollback", "fleet-plan", "project", "provider",
 	"author", "self-pull", "scheduled-pull", "install-self-timer", "install-pull-timer",
-	"hold", "self", "version", "environment",
+	"hold", "self", "version", "environment", "rollout",
 }
 
 const agentCommand = "__agent"
@@ -208,6 +211,8 @@ func parse(argv []string, componentChoices []string) (*arguments, error) {
 		return parsed, parseAuthor(parsed, rest)
 	case "self-pull", "scheduled-pull":
 		return parsed, parseScheduled(parsed, rest)
+	case "rollout":
+		return parsed, parseRollout(parsed, rest)
 	case "hold":
 		return parsed, parseHold(parsed, rest)
 	case "self":

@@ -29,6 +29,14 @@ release tags (`v0.1.x`).
 - `docs/authored-release.md`: the authored release procedure for a binary-only Steward
   bump (hold, author, review package, push, canary, fleet, rollback), linked from the
   README.
+- `upkeeper rollout check`, `plan` and `run --yes` implement the reviewed
+  binary-only Steward maintenance walk with frozen release review evidence,
+  timer fences, coordinator backup and restore drill, canary soak, ordered
+  fleet verification and immutable rollback. A durable journal resumes
+  interrupted work and records explicit fleet approval after the canary.
+  Hard interruptions before a host's prior snapshot retry preflight without
+  rollback; interrupted effects retain immutable rollback recovery.
+  Check and plan are read-only. See [the rollout guide](docs/rollout.md).
 
 - A failed controlled T3 activation now journals its original cause and every
   failed installed, served, health, native and unit predicate sample before
