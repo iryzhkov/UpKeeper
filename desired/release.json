@@ -2648,13 +2648,13 @@
           {
             "candidates": [
               {
-                "effort": "medium",
-                "route": "claudeAgent/claude-opus-5-5",
+                "effort": "high",
+                "route": "codex/gpt-6.1-sol",
                 "tier": "standard"
               },
               {
                 "effort": "medium",
-                "route": "codex/gpt-6.1-sol",
+                "route": "claudeAgent/claude-opus-5-5",
                 "tier": "standard"
               }
             ],
@@ -2664,13 +2664,13 @@
           {
             "candidates": [
               {
-                "effort": "medium",
-                "route": "claudeAgent/claude-opus-5-5",
+                "effort": "high",
+                "route": "codex/gpt-6.1-sol",
                 "tier": "standard"
               },
               {
                 "effort": "medium",
-                "route": "codex/gpt-6.1-sol",
+                "route": "claudeAgent/claude-opus-5-5",
                 "tier": "standard"
               }
             ],
@@ -2701,12 +2701,12 @@
             "candidates": [
               {
                 "effort": "high",
-                "route": "codex/gpt-6-luna",
+                "route": "claudeAgent/claude-haiku-5-5",
                 "tier": "economy"
               },
               {
-                "effort": "high",
-                "route": "claudeAgent/claude-haiku-5-5",
+                "effort": "low",
+                "route": "claudeAgent/claude-sonnet-5-5",
                 "tier": "economy"
               }
             ],
