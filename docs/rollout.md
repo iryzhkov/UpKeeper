@@ -62,14 +62,6 @@ verify. Check and verify then require its reachable fenced timer, and the full
 preview/disposition and final status still require its applicable components.
 A nonempty LaptopHost retains the excluded-host mask requirement.
 
-`InactiveServices` is an optional reviewed map, for example
-`{"homelab":["t3-steward.service"]}`. Only the two Steward units on walk hosts
-may be listed. Each listed unit must be inactive with MainPID zero before the
-pull. The installer may start it during the binary update; rollout explicitly
-stops it after the pull and requires an inactive post snapshot, while verifying
-the installed binary version and digest. All unlisted units retain active and
-new-generation checks. This disposition is bound by the configuration digest.
-
 Preview inventories use the pull/status planner selection, including the
 release-declared T3 compatibility pair. The scoped preview requires Steward
 updated and its selected compatibility component converged with no actions.

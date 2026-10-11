@@ -909,39 +909,13 @@ for u in t3-steward.service t3-steward-worker.service t3code.service; do
 done
 `
 
-func servicePreflight(pre map[string]string, inactive []string) error {
-	for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
-		if contains(inactive, unit) {
-			if pre[unit+".ActiveState"] != "inactive" || pre[unit+".MainPID"] != "0" {
-				return fmt.Errorf("%s must be inactive before convergence", unit)
-			}
-		} else if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" || pre[unit+".MainPID"] == "0" {
-			return fmt.Errorf("%s must be active before convergence", unit)
-		}
-	}
-	return nil
-}
-
-func snapshotGate(pre, post map[string]string, version string, assets map[string]string, inactiveLists ...[]string) error {
-	var inactive []string
-	if len(inactiveLists) > 0 {
-		inactive = inactiveLists[0]
-	}
-	if err := servicePreflight(pre, inactive); err != nil {
-		return err
-	}
+func snapshotGate(pre, post map[string]string, version string, assets map[string]string) error {
 	platform := map[string]string{"x86_64": "linux_amd64", "aarch64": "linux_arm64"}[post["arch"]]
 	want := assets[platform]
 	if want == "" || post["binary_sha256"] != want || !strings.Contains(post["version"], version) {
 		return errors.New("installed binary version/digest mismatch")
 	}
 	for _, u := range []string{"t3-steward.service", "t3-steward-worker.service"} {
-		if contains(inactive, u) {
-			if post[u+".ActiveState"] != "inactive" || post[u+".MainPID"] != "0" {
-				return fmt.Errorf("%s must remain inactive after convergence", u)
-			}
-			continue
-		}
 		if post[u+".ActiveState"] != "active" || post[u+".MainPID"] == "" || post[u+".MainPID"] == "0" || pre[u+".MainPID"] == post[u+".MainPID"] || post[u+".exe"] == "" || strings.Contains(post[u+".exe"], "deleted") {
 			return fmt.Errorf("%s not a new active binary generation", u)
 		}
@@ -1083,8 +1057,10 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 		return err
 	}
 	pre := keyValues(raw)
-	if err = servicePreflight(pre, c.InactiveServices[host]); err != nil {
-		return err
+	for _, unit := range []string{"t3-steward.service", "t3-steward-worker.service"} {
+		if pre[unit+".ActiveState"] != "active" || pre[unit+".MainPID"] == "" || pre[unit+".MainPID"] == "0" {
+			return fmt.Errorf("%s must be active before convergence", unit)
+		}
 	}
 	if pre["t3code.service.MainPID"] == "" {
 		return errors.New("missing pre-convergence t3code generation")
@@ -1111,13 +1087,6 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = record(s, "pull:"+host, json.RawMessage(p)); err != nil {
 		return err
 	}
-	// The binary adapter restarts installed units. Restore the reviewed stopped
-	// disposition before taking the post snapshot; no unlisted unit is stopped.
-	if units := c.InactiveServices[host]; len(units) > 0 {
-		if _, err = b.on(ctx, c, host, "set -euo pipefail\nsystemctl --user stop "+strings.Join(quoted(units), " ")+"\n"); err != nil {
-			return err
-		}
-	}
 	raw, err = b.on(ctx, c, host, snapshotScript)
 	if err != nil {
 		return err
@@ -1127,7 +1096,7 @@ func (b *ProductionBackend) host(ctx context.Context, c Config, host string, s *
 	if err = acceptedAssets(c, s, &assets); err != nil {
 		return err
 	}
-	if err = snapshotGate(pre, post, c.Version, assets.Binaries, c.InactiveServices[host]); err != nil {
+	if err = snapshotGate(pre, post, c.Version, assets.Binaries); err != nil {
 		return err
 	}
 	if err = record(s, "host-post:"+host, post); err != nil {
@@ -1558,7 +1527,7 @@ func (b *ProductionBackend) verify(ctx context.Context, c Config, s *State) erro
 		if err != nil {
 			return err
 		}
-		if err = snapshotGate(pre, keyValues(p), c.Version, assets.Binaries, c.InactiveServices[h]); err != nil {
+		if err = snapshotGate(pre, keyValues(p), c.Version, assets.Binaries); err != nil {
 			return err
 		}
 	}
@@ -1622,7 +1591,7 @@ func (b *ProductionBackend) observe(ctx context.Context, c Config, s *State) err
 	if err != nil {
 		return err
 	}
-	return snapshotGate(pre, keyValues(p), c.Version, assets.Binaries, c.InactiveServices[c.Canary])
+	return snapshotGate(pre, keyValues(p), c.Version, assets.Binaries)
 }
 func (b *ProductionBackend) Execute(ctx context.Context, c Config, action string, s *State) error {
 	if action != "fence" && action != "prepare" {

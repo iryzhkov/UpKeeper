@@ -92,7 +92,7 @@ func (b *ProductionBackend) observeTarget(ctx context.Context, c Config, host st
 	if err != nil {
 		return err
 	}
-	if err = snapshotGate(pre, keyValues(raw), c.Version, assets.Binaries, c.InactiveServices[host]); err != nil {
+	if err = snapshotGate(pre, keyValues(raw), c.Version, assets.Binaries); err != nil {
 		return err
 	}
 	final, err := b.identity(ctx, c)
