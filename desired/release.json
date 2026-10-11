@@ -2700,13 +2700,13 @@
           {
             "candidates": [
               {
-                "effort": "medium",
-                "route": "claudeAgent/claude-sonnet-5-5",
+                "effort": "high",
+                "route": "codex/gpt-6-luna",
                 "tier": "economy"
               },
               {
-                "effort": "medium",
-                "route": "codex/gpt-6-luna",
+                "effort": "high",
+                "route": "claudeAgent/claude-haiku-5-5",
                 "tier": "economy"
               }
             ],
