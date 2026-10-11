@@ -2777,19 +2777,19 @@
       "assets": {
         "linux-amd64": {
           "asset": "upkeeper-linux-amd64",
-          "sha256": "bfd92a90e3441a1ea60e8b31dd10523d64c759c399bd39d22c79ae3d9fcbc900",
-          "size": 14372871
+          "sha256": "50bb7c3994ae2d0ab2a10708d222353f18025ddc8fd3b8191190d4bba222288d",
+          "size": 15927043
         },
         "linux-arm64": {
           "asset": "upkeeper-linux-arm64",
-          "sha256": "85d4f356281da945628741c13ccd475a9f53f437af3fc30024bb327925006667",
-          "size": 13196588
+          "sha256": "1495369ab4262c4c286c2ff935b97bb41633be0f0ddf722c185378860b8c8fbf",
+          "size": 14620870
         }
       },
       "kind": "upkeeper-binary",
       "repository": "iryzhkov/UpKeeper",
-      "source_commit": "e786fe70474c0579979ae9d4d1e77a2c6dbbbd47",
-      "tag": "v0.1.34",
+      "source_commit": "717259397e28bfe01422f5b9ff97cb1b64dc6fe6",
+      "tag": "v0.1.37",
       "toolchain": "go1.26.8"
     },
     "worker-configuration": {
