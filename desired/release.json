@@ -2324,8 +2324,8 @@
           "admin_credential_ref": "secretref:f03-admin/agent-b",
           "credential_ref": "secretref:f02-protocol/agent-b",
           "exceptions": {
-            "cpu_class": "low",
-            "executor_slots": 1
+            "cpu_class": "medium",
+            "executor_slots": 2
           },
           "profile": "standard",
           "route_policy": false,
