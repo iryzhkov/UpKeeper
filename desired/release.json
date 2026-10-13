@@ -2343,7 +2343,7 @@
           "admin_credential_ref": "secretref:f03-admin/laptop",
           "credential_ref": "secretref:f02-protocol/laptop",
           "exceptions": {
-            "executor_slots": 3,
+            "executor_slots": 4,
             "models": {
               "claudeAgent": [
                 "*"
@@ -2462,6 +2462,19 @@
         }
       },
       "projects": {
+        "chaldea-fleet-config": {
+          "default_ref": "main",
+          "eligible_workers": [
+            "agent-a",
+            "agent-b",
+            "homelab",
+            "laptop",
+            "omarchy-pc"
+          ],
+          "repository": "git@github.com:iryzhkov/chaldea-fleet-config.git",
+          "setup_profile": "git-status",
+          "type": "git"
+        },
         "citadel": {
           "default_ref": "main",
           "eligible_workers": [
@@ -2762,7 +2775,7 @@
       "compatibility": {
         "max": "0.0.45",
         "min": "0.0.38",
-        "steward_version": "0.11.0-rc.125"
+        "steward_version": "0.11.0-rc.126"
       },
       "kind": "npm-package",
       "package": "t3",
@@ -2776,7 +2789,7 @@
       "repository": "iryzhkov/t3-steward",
       "service": "t3-steward.service",
       "session_hook_sha256": "16665039a1fa3623f9ce51f9637e65184ac4a446c0780e61d065ed5e8d067843",
-      "version": "0.11.0-rc.125"
+      "version": "0.11.0-rc.126"
     },
     "upkeeper": {
       "assets": {
