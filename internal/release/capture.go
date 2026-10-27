@@ -57,6 +57,9 @@ func Capture(
 	root, controller, home string, runner procx.Runner, now time.Time, only []string,
 	resident ResidentPolicy,
 ) (Release, error) {
+	if _, err := safety.ValidateHostName(controller, nil); err != nil {
+		return Release{}, err
+	}
 	if runner == nil {
 		runner = procx.Run
 	}
@@ -198,11 +201,22 @@ func Capture(
 	}
 	components["agent-environment"] = environment
 	if components[JocastaComponent] != nil && (selected == nil || selected[JocastaComponent]) {
-		jocasta, err := CaptureJocasta(home, runner, components[JocastaComponent].(map[string]any))
+		raw := components[JocastaComponent].(map[string]any)
+		spec, err := DecodeJocasta(raw)
 		if err != nil {
 			return Release{}, failure.Capture("jocasta: %s", err)
 		}
-		components[JocastaComponent] = jocasta
+		// A default capture on a nonconsumer keeps the validated published pin.
+		// Do not inspect its local CLI or infer fleet intent from its absence.
+		if _, consumer := spec.Hosts[controller]; consumer {
+			jocasta, err := CaptureJocasta(home, runner, raw)
+			if err != nil {
+				return Release{}, failure.Capture("jocasta: %s", err)
+			}
+			components[JocastaComponent] = jocasta
+		} else if selected[JocastaComponent] {
+			return Release{}, failure.Capture("jocasta: controller %s is not an intended host; capture on an intended host or omit jocasta from the component selection", controller)
+		}
 	}
 	if components[ControlledCodexComponent] != nil && (selected == nil || selected[ControlledCodexComponent]) {
 		controlled, err := CaptureControlledCodex(home, runner, components[ControlledCodexComponent].(map[string]any))
@@ -257,9 +271,6 @@ func Capture(
 		now = time.Now()
 	}
 	manifest["captured_at"] = pytime.ISO8601Z(now)
-	if _, err := safety.ValidateHostName(controller, nil); err != nil {
-		return Release{}, err
-	}
 	manifest["captured_from"] = controller
 	return Validate(manifest)
 }
