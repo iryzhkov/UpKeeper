@@ -13,11 +13,12 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Jobs run on GitHub-hosted Ubuntu 24.04 runners, pinned rather than
-# ubuntu-latest so that the image changes only by an edit here. The agent-a
-# self-hosted runners (labels self-hosted, upkeeper) used from 2026-10-06 are no
-# longer registered, and runs queued for them never started; hosted minutes for
-# this private repository were approved on 2026-10-27.
+# Jobs run on GitHub-hosted Ubuntu 24.04 runners. Naming the release rather than
+# ubuntu-latest stops an automatic move to a newer Ubuntu; GitHub still updates
+# the software on that image weekly. The agent-a self-hosted runners (labels
+# self-hosted, upkeeper) used from 2026-10-06 are no longer registered, and runs
+# queued for them never started; hosted minutes for this private repository
+# were approved on 2026-10-27.
 jobs:
   # Validate the published manifest before dependent production Go checks.
   manifest-gate:
