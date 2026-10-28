@@ -13,13 +13,16 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# Jobs run on the self-hosted runners on agent-a (labels self-hosted, upkeeper;
-# three instances under /srv/agent/actions-runner-upkeeper-N), added 2026-10-06
-# because this private repository's CI was using up the hosted Actions minutes.
+# Jobs run on GitHub-hosted Ubuntu 24.04 runners. Naming the release rather than
+# ubuntu-latest stops an automatic move to a newer Ubuntu; GitHub still updates
+# the software on that image weekly. The agent-a self-hosted runners (labels
+# self-hosted, upkeeper) used from 2026-10-06 are no longer registered, and runs
+# queued for them never started; hosted minutes for this private repository
+# were approved on 2026-10-27.
 jobs:
   # Validate the published manifest before dependent production Go checks.
   manifest-gate:
-    runs-on: [self-hosted, upkeeper]
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +44,7 @@ jobs:
   go-race:
     needs: manifest-gate
     name: go-race (${{ matrix.group }})
-    runs-on: [self-hosted, upkeeper]
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +65,7 @@ jobs:
 
   go-checks:
     needs: manifest-gate
-    runs-on: [self-hosted, upkeeper]
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +84,7 @@ jobs:
   go-gate:
     needs: [manifest-gate, go-checks, go-race]
     if: ${{ always() }}
-    runs-on: [self-hosted, upkeeper]
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,12 +96,12 @@ jobs:
         run: make ci-go-gate
 
   gate:
-    runs-on: [self-hosted, upkeeper]
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # No setup-python: it has no Python builds for the runner's Debian 13. The
-      # host python3 only bootstraps uv, and `uv sync --python 3.11` (make
-      # ci-python) provides the pinned interpreter itself.
+      # No setup-python: the image's python3 only bootstraps the pinned uv in a
+      # venv, and `uv sync --python 3.11` (make ci-python) provides the pinned
+      # interpreter itself, the same way on hosted runners and locally.
       - name: Python and Ansible checks
         run: make ci-python

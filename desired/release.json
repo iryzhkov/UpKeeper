@@ -2277,9 +2277,7 @@
       "commit": "dbabdfcf941276038f58a45e1b6ddc4b6f995320",
       "hosts": {
         "homelab": "secretref:jocasta/homelab",
-        "laptop": "secretref:jocasta/laptop",
-        "normandy": "secretref:jocasta/normandy",
-        "omarchy-pc": "secretref:jocasta/omarchy-pc"
+        "normandy": "secretref:jocasta/normandy"
       },
       "kind": "github-release",
       "repository": "iryzhkov/jocasta",
